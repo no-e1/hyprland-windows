@@ -204,12 +204,46 @@ hl.layer_rule({ name = "no-anim-winshell", match = { namespace = "^winshell-.*$"
 -- Minimized windows live in the hidden "special:minimized" workspace;
 -- activating one (e.g. from the taskbar) brings it back.
 ---------------------------------------------------------------------
+-- Bring a hidden window back to a desktop. Chromium-based apps (Brave)
+-- come back with their input shifted a few pixels unless they are made to
+-- reconfigure, so nudge the size by one pixel and back.
+function RestoreWindow(w, ws_id)
+    local sel = "address:" .. w.address
+    hl.dispatch(hl.dsp.window.move({ workspace = ws_id, follow = false, window = sel }))
+    hl.dispatch(hl.dsp.window.resize({ x = w.size.x + 1, y = w.size.y, window = sel }))
+    hl.dispatch(hl.dsp.window.resize({ x = w.size.x, y = w.size.y, window = sel }))
+    hl.dispatch(hl.dsp.window.move({ x = w.at.x, y = w.at.y, window = sel }))
+end
+
+-- Hide (minimize) a window. While we hide windows, Hyprland may hand focus
+-- to an already hidden one; the restore hook below must ignore that.
+local restore_blocked_until = 0
+function HideWindow(addr)
+    if not addr then
+        local w = hl.get_active_window()
+        addr = w and w.address
+    end
+    if not addr then return end
+    restore_blocked_until = os.time() + 1
+    hl.dispatch(hl.dsp.window.move({ workspace = "special:minimized", follow = false,
+                                     window = "address:" .. addr }))
+end
+
 hl.on("window.active", function()
     local w = hl.get_active_window()
     if w and w.workspace and w.workspace.name == "special:minimized" then
+        if os.time() <= restore_blocked_until then
+            -- focus fell onto a hidden window as a side effect of hiding: drop it
+            local sp = hl.get_active_special_workspace()
+            if sp and sp.name == "special:minimized" then
+                hl.dispatch(hl.dsp.workspace.toggle_special("minimized"))
+            end
+            return
+        end
         local ws = hl.get_active_workspace()
         if ws and not ws.special then
-            hl.dispatch(hl.dsp.window.move({ workspace = ws.id, window = "address:" .. w.address }))
+            RestoreWindow(w, ws.id)
+            hl.dispatch(hl.dsp.focus({ window = "address:" .. w.address }))
         end
         local sp = hl.get_active_special_workspace()
         if sp and sp.name == "special:minimized" then
@@ -332,8 +366,7 @@ end)
 hl.on("window.minimize", function(ev)
     local w = (type(ev) == "table" and ev.address and ev) or hl.get_active_window()
     if w and w.workspace and w.workspace.name ~= "special:minimized" then
-        hl.dispatch(hl.dsp.window.move({ workspace = "special:minimized", follow = false,
-                                         window = "address:" .. w.address }))
+        HideWindow(w.address)
     end
 end)
 
@@ -460,46 +493,65 @@ hl.bind("ALT + Tab",         function() winshell_send("switch next") end, { repe
 hl.bind("ALT + SHIFT + Tab", function() winshell_send("switch prev") end, { repeating = true })
 
 -- Show desktop (Win + D): hide every window of this desktop, press again to
--- bring them back. Win + M minimizes all, Win + Shift + M restores them.
-local desktop_hidden = nil
+-- bring them back exactly as they were. Win + M minimizes all,
+-- Win + Shift + M restores them.
+local desktop_hidden = nil      -- { windows = {addresses, bottom to top}, active = address }
 local function windows_here()
     local ws = hl.get_active_workspace()
     local list = {}
     for _, w in ipairs(hl.get_windows() or {}) do
         if w.mapped and w.workspace and ws and w.workspace.id == ws.id then
-            table.insert(list, w.address)
+            table.insert(list, w)
         end
     end
-    return list, ws
-end
-local function hide_all()
-    local list = windows_here()
-    for _, a in ipairs(list) do
-        hl.dispatch(hl.dsp.window.move({ workspace = "special:minimized", follow = false, window = "address:" .. a }))
-    end
+    -- least recently focused first, so restoring rebuilds the stacking order
+    table.sort(list, function(a, b) return (a.focus_history_id or 0) > (b.focus_history_id or 0) end)
     return list
 end
+local function hide_all()
+    local active = hl.get_active_window()
+    local saved = { windows = {}, active = active and active.address }
+    for _, w in ipairs(windows_here()) do
+        table.insert(saved.windows, w.address)
+        HideWindow(w.address)
+    end
+    return #saved.windows > 0 and saved or nil
+end
 local function restore_hidden()
+    local saved = desktop_hidden
+    desktop_hidden = nil
+    if not saved then return end
     local ws = hl.get_active_workspace()
-    for _, a in ipairs(desktop_hidden or {}) do
-        if hl.get_window("address:" .. a) then
-            hl.dispatch(hl.dsp.window.move({ workspace = ws.id, follow = false, window = "address:" .. a }))
+    local by_addr = {}
+    for _, w in ipairs(hl.get_windows() or {}) do by_addr[w.address] = w end
+    for _, a in ipairs(saved.windows) do
+        local w = by_addr[a]
+        if w and w.workspace and w.workspace.name == "special:minimized" then
+            RestoreWindow(w, ws.id)
+            hl.dispatch(hl.dsp.window.alter_zorder({ mode = "top", window = "address:" .. a }))
         end
     end
-    desktop_hidden = nil
+    if saved.active and by_addr[saved.active] then
+        hl.dispatch(hl.dsp.focus({ window = "address:" .. saved.active }))
+    end
 end
-hl.bind(win .. " + D", function()
-    if desktop_hidden and #windows_here() == 0 then restore_hidden() else desktop_hidden = hide_all() end
-end)
+function ShowDesktop()
+    if desktop_hidden and #windows_here() == 0 then
+        restore_hidden()
+    else
+        desktop_hidden = hide_all()
+    end
+end
+hl.bind(win .. " + D",         ShowDesktop)
 hl.bind(win .. " + M",         function() desktop_hidden = hide_all() end)
-hl.bind(win .. " + SHIFT + M", function() restore_hidden() end)
+hl.bind(win .. " + SHIFT + M", restore_hidden)
 
 -- Win + Home: minimize everything except the active window
 hl.bind(win .. " + Home", function()
     local active = hl.get_active_window()
-    for _, a in ipairs((windows_here())) do
-        if not active or a ~= active.address then
-            hl.dispatch(hl.dsp.window.move({ workspace = "special:minimized", follow = false, window = "address:" .. a }))
+    for _, w in ipairs(windows_here()) do
+        if not active or w.address ~= active.address then
+            HideWindow(w.address)
         end
     end
 end)
@@ -525,7 +577,7 @@ hl.bind(win .. " + Down",  function()
     if saved_geometry[w.address] then
         WinMax("restore", w)
     else
-        hl.dispatch(hl.dsp.window.move({ workspace = "special:minimized", follow = false }))
+        HideWindow()
     end
 end)
 hl.bind(win .. " + SHIFT + Up", hl.dsp.window.fullscreen({ mode = "fullscreen", action = "toggle" }))

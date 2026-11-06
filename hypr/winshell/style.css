@@ -312,42 +312,16 @@ button.menu-item:hover { background: rgba(255, 255, 255, 0.06); }
     font-weight: 600;
     border-bottom: 1px solid rgba(255, 255, 255, 0.06);
 }
-calendar {
-    padding: 10px 14px 14px 14px;
-    background: transparent;
-    border: none;
-    color: #ffffff;
-}
-calendar > header { border: none; background: transparent; padding-bottom: 6px; }
-calendar > header > button {
-    background: transparent;
-    border: none;
-    box-shadow: none;
-    border-radius: 4px;
-    min-height: 28px;
-    color: #ffffff;
-}
-calendar > header > button:hover { background: rgba(255, 255, 255, 0.06); }
-calendar > header > label { font-size: 13px; font-weight: 600; }
-calendar > grid > label.day-name { color: rgba(255, 255, 255, 0.85); font-size: 12px; padding: 4px 0; }
-calendar > header > button image { color: #ffffff; -gtk-icon-size: 12px; }
-calendar > header > button { min-width: 28px; padding: 0; }
-calendar > grid > label.day-number {
-    min-width: 34px;
-    min-height: 34px;
-    padding: 0;
-    margin: 2px 4px;
+.cal-grid { padding: 6px 16px 16px 16px; }
+.cal-dayname { font-size: 12px; color: rgba(255, 255, 255, 0.85); padding: 6px 0; }
+.cal-day {
+    min-width: 40px;
+    min-height: 40px;
     border-radius: 999px;
     font-size: 13px;
 }
-calendar > grid > label.day-number:hover { background: rgba(255, 255, 255, 0.06); }
-calendar > grid > label.day-number.other-month { color: rgba(255, 255, 255, 0.35); }
-calendar > grid > label.day-number:selected,
-calendar > grid > label.day-number.today:selected {
-    background: #4cc2ff;
-    color: #000000;
-}
-calendar > grid > label.today { box-shadow: none; }
-
+.cal-day:hover { background: rgba(255, 255, 255, 0.06); }
+.cal-day.other { color: rgba(255, 255, 255, 0.38); }
+.cal-day.today { background: #4cc2ff; color: #000000; font-weight: 600; }
 .cal-nav { padding: 12px 12px 0 22px; }
 .cal-month { font-size: 13px; font-weight: 600; }

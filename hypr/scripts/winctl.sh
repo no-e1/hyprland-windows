@@ -12,7 +12,7 @@ case "$1" in
     maximize)   max toggle ;;
     unmaximize) max restore ;;
     drag-start) hyprctl eval "WinDragStart()" >/dev/null ;;
-    minimize)   d 'hl.dsp.window.move({ workspace = "special:minimized", follow = false })' ;;
+    minimize)   hyprctl eval "HideWindow()" >/dev/null ;;
     snap)
         case "$2" in
             top)        max max ;;

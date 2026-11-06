@@ -1067,9 +1067,12 @@ class QuickSettings:
 
 # ── Calendar flyout (click on the clock, like Windows 11) ──────────────────
 class CalendarFlyout:
+    """Own month grid (GTK's calendar scrolls on the mouse wheel and redraws badly)."""
+
     def __init__(self, app, shell):
         self.shell = shell
         self.visible = False
+        self.year = self.month = 0
         self.win = layer_window(app, "winshell-calendar", LS.Layer.OVERLAY,
                                 anchors=(LS.Edge.BOTTOM, LS.Edge.RIGHT),
                                 margins={LS.Edge.BOTTOM: 12, LS.Edge.RIGHT: 12},
@@ -1077,6 +1080,7 @@ class CalendarFlyout:
         keys = Gtk.EventControllerKey()
         keys.connect("key-pressed", lambda _c, k, *_: (self.hide(), True)[1] if k == Gdk.KEY_Escape else False)
         self.win.add_controller(keys)
+
         panel = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         panel.add_css_class("cal")
         panel.add_css_class("flyout")
@@ -1084,8 +1088,7 @@ class CalendarFlyout:
         self.panel = panel
         self.head = label("", "cal-head")
         panel.append(self.head)
-        self.cal = Gtk.Calendar(show_week_numbers=False)
-        self.cal.get_first_child().set_visible(False)      # GTK's own header
+
         nav = Gtk.Box()
         nav.add_css_class("cal-nav")
         self.month_lbl = label("", "cal-month")
@@ -1094,20 +1097,43 @@ class CalendarFlyout:
         nav.append(button(icon("win11-chevron-up", 12), "flat-btn", on_click=lambda: self.shift(-1)))
         nav.append(button(icon("win11-chevron-down", 12), "flat-btn", on_click=lambda: self.shift(1)))
         panel.append(nav)
-        panel.append(self.cal)
-        self.cal.connect("notify::month", lambda *_: self.update_month())
-        self.cal.connect("notify::year", lambda *_: self.update_month())
+
+        self.grid = Gtk.Grid(column_homogeneous=True, row_homogeneous=True, column_spacing=2, row_spacing=2)
+        self.grid.add_css_class("cal-grid")
+        for i, d in enumerate(("Mo", "Tu", "We", "Th", "Fr", "Sa", "Su")):
+            self.grid.attach(label(d, "cal-dayname", xalign=0.5, ellipsize=False), i, 0, 1, 1)
+        self.cells = []
+        for r in range(6):
+            for c in range(7):
+                cell = label("", "cal-day", xalign=0.5, ellipsize=False)
+                cell.set_size_request(40, 40)
+                cell.set_valign(Gtk.Align.CENTER)
+                cell.set_halign(Gtk.Align.CENTER)
+                self.grid.attach(cell, c, r + 1, 1, 1)
+                self.cells.append(cell)
+        panel.append(self.grid)
         self.win.set_child(panel)
 
     def shift(self, months):
-        m, y = self.cal.get_month() + months, self.cal.get_year()
-        y, m = y + m // 12, m % 12
-        self.cal.set_year(y)
-        self.cal.set_month(m)
+        m = self.month - 1 + months
+        self.year, self.month = self.year + m // 12, m % 12 + 1
+        self.render()
 
-    def update_month(self):
-        d = GLib.DateTime.new_local(self.cal.get_year(), self.cal.get_month() + 1, 1, 0, 0, 0)
-        self.month_lbl.set_text(d.format("%B %Y"))
+    def render(self):
+        today = GLib.DateTime.new_now_local()
+        first = GLib.DateTime.new_local(self.year, self.month, 1, 0, 0, 0)
+        self.month_lbl.set_text(first.format("%B %Y"))
+        start = first.add_days(-(first.get_day_of_week() - 1))     # back to Monday
+        for i, cell in enumerate(self.cells):
+            day = start.add_days(i)
+            cell.set_text(str(day.get_day_of_month()))
+            for cls in ("other", "today"):
+                cell.remove_css_class(cls)
+            if day.get_month() != self.month:
+                cell.add_css_class("other")
+            if (day.get_year(), day.get_month(), day.get_day_of_month()) == \
+                    (today.get_year(), today.get_month(), today.get_day_of_month()):
+                cell.add_css_class("today")
 
     def toggle(self):
         self.hide() if self.visible else self.show()
@@ -1118,8 +1144,8 @@ class CalendarFlyout:
                 other.hide()
         now = GLib.DateTime.new_now_local()
         self.head.set_text(now.format("%A, %B %-d"))
-        self.cal.set_date(now) if hasattr(self.cal, "set_date") else self.cal.select_day(now)
-        self.update_month()
+        self.year, self.month = now.get_year(), now.get_month()
+        self.render()
         self.visible = True
         self.shell.qs.catcher_for("calendar")
         slide_in(self.panel)
