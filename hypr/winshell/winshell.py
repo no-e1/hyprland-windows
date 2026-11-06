@@ -468,6 +468,10 @@ class QuickSettings:
         self.state = {}
         self.pending = {}
         self.last_slide = 0.0
+        # tiles the user just clicked: key -> (wanted state, until). The
+        # background refresh may read the old state while the change is
+        # still being applied; it must not flip the tile back meanwhile.
+        self.wanted = {}
 
         # transparent full-screen layer that closes the flyout on outside clicks
         self.backdrop = layer_window(app, "winshell-catcher", LS.Layer.TOP,
@@ -747,6 +751,12 @@ class QuickSettings:
         return st
 
     def apply_state(self, st):
+        now = time.monotonic()
+        for key, (value, until) in list(self.wanted.items()):
+            if st.get(key) == value or now > until:
+                del self.wanted[key]
+            else:
+                st[key] = value
         self.state = st
         self.updating = True
         try:
@@ -778,6 +788,12 @@ class QuickSettings:
         finally:
             self.updating = False
 
+    def want(self, key, on):
+        """Show a clicked tile's new state right away (before it is applied)."""
+        self.wanted[key] = (on, time.monotonic() + 4)
+        self.state[key] = on
+        self.set_tile(key, on)
+
     def set_tile(self, key, on, text=None):
         row, lbl, _ = self.tiles[key]
         (row.add_css_class if on else row.remove_css_class)("on")
@@ -798,7 +814,7 @@ class QuickSettings:
         self.set_wifi(not self.state.get("wifi"))
 
     def set_wifi(self, on):
-        self.set_tile("wifi", on)
+        self.want("wifi", on)
         bg(lambda: ok(f"nmcli radio wifi {'on' if on else 'off'}"),
            lambda _r: (self.refresh(), self.later(lambda: self.load_wifi(True), 1500)
                        if self.stack.get_visible_child_name() == "wifi" else None))
@@ -807,7 +823,7 @@ class QuickSettings:
         self.set_bt(not self.state.get("bt"))
 
     def set_bt(self, on):
-        self.set_tile("bt", on)
+        self.want("bt", on)
 
         def run():
             if on:
@@ -818,11 +834,13 @@ class QuickSettings:
 
     def toggle_airplane(self):
         on = not self.state.get("airplane")
-        self.set_tile("airplane", on)
+        self.want("airplane", on)
         bg(lambda: ok(f"rfkill {'block' if on else 'unblock'} all"), lambda _r: self.later(self.refresh))
 
     def toggle_dnd(self):
-        bg(lambda: ok("swaync-client -d"), lambda _r: self.refresh())
+        on = not self.state.get("dnd")
+        self.want("dnd", on)
+        bg(lambda: ok(f"swaync-client {'-dn' if on else '-df'}"), lambda _r: self.refresh())
 
     def snip(self):
         self.hide()
@@ -1115,7 +1133,7 @@ class CalendarFlyout:
 
         nav = Gtk.Box()
         nav.add_css_class("cal-nav")
-        self.month_lbl = label("", "cal-month")
+        self.month_lbl = label("", "cal-month", ellipsize=False)
         self.month_lbl.set_hexpand(True)
         nav.append(self.month_lbl)
         nav.append(button(icon("win11-chevron-up", 12), "flat-btn", on_click=lambda: self.shift(-1)))
@@ -1150,6 +1168,29 @@ class CalendarFlyout:
         scroll.connect("scroll", self.on_scroll)
         panel.add_controller(scroll)
 
+        # The notification center above the calendar can have the keyboard
+        # (it opens a moment later); when it closes – Escape, a click
+        # outside – the calendar closes with it.
+        self.nc_open = False
+        threading.Thread(target=self.watch_notification_center, daemon=True).start()
+
+    def watch_notification_center(self):
+        while True:
+            try:
+                proc = subprocess.Popen(["swaync-client", "-s"], stdout=subprocess.PIPE,
+                                        stderr=subprocess.DEVNULL, text=True)
+                for line in proc.stdout:
+                    try:
+                        visible = bool(json.loads(line).get("visible"))
+                    except ValueError:
+                        continue
+                    if self.nc_open and not visible:
+                        GLib.idle_add(lambda: self.hide() and False)
+                    self.nc_open = visible
+            except OSError:
+                pass
+            time.sleep(2)            # swaync restarted or not running yet
+
     def on_scroll(self, _c, _dx, dy):
         if dy:
             self.shift(1 if dy > 0 else -1)
@@ -1161,6 +1202,12 @@ class CalendarFlyout:
         self.render()
 
     def render(self):
+        # GTK only repaints the area of the changed text, which leaves bits of
+        # the previous month name behind when it was longer (e.g. after fast
+        # scrolling). Flipping between two invisibly different backgrounds
+        # makes it repaint the whole flyout instead.
+        flip = not self.panel.has_css_class("repaint")
+        (self.panel.add_css_class if flip else self.panel.remove_css_class)("repaint")
         today = GLib.DateTime.new_now_local()
         first = GLib.DateTime.new_local(self.year, self.month, 1, 0, 0, 0)
         self.month_lbl.set_text(first.format("%B %Y"))

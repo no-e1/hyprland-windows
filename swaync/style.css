@@ -74,7 +74,12 @@
 .widget-dnd > switch:checked slider { background: #000000; }
 
 /* ── Notifications ────────────────────────────────────────────── */
-.control-center .notification-row { margin: 0 12px; }
+/* cards use the full width of the panel (swaync itself keeps ~12 px at the
+   sides); the more specific selectors beat swaync's built-in spacing */
+.control-center .notification-row,
+.control-center .notification-group { margin: 0; padding: 0; }
+.control-center .notification-row .notification-background { margin: 0; padding: 0; }
+.control-center .notification-row .notification-background .notification { margin: 6px 0; }
 .notification-row,
 .notification-group,
 .notification-row:focus,
