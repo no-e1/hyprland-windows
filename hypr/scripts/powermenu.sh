@@ -17,7 +17,13 @@ entries=(
     "Herunterfahren|system-shutdown"
 )
 # Dual-Boot: direkt in Windows neu starten (nur wenn ein Windows-Booteintrag existiert)
-if command -v efibootmgr >/dev/null && efibootmgr 2>/dev/null | grep -qi "Windows Boot Manager"; then
+# efibootmgr ist langsam (~0.6 s) -> Ergebnis einmalig zwischenspeichern
+cache="${XDG_CACHE_HOME:-$HOME/.cache}/hypr-has-windows"
+if [ ! -f "$cache" ]; then
+    if command -v efibootmgr >/dev/null && efibootmgr 2>/dev/null | grep -qi "Windows Boot Manager"
+    then echo 1 > "$cache"; else echo 0 > "$cache"; fi
+fi
+if [ "$(cat "$cache")" = 1 ]; then
     entries+=("In Windows neu starten|computer")
 fi
 

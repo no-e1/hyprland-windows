@@ -129,6 +129,79 @@ hl.animation({ leaf = "fadeLayersOut", enabled = true, speed = 1.8, bezier = "li
 hl.animation({ leaf = "workspaces",    enabled = true, speed = 4,   bezier = "winOut", style = "slide" })
 
 ---------------------------------------------------------------------
+-- Aktives Fenster immer nach vorne holen (Taskleiste, Klick, Alt+Tab)
+---------------------------------------------------------------------
+-- Minimierte Fenster liegen im versteckten Workspace "special:minimized".
+-- Wird so ein Fenster aktiviert (Klick in der Taskleiste), kommt es zurück.
+hl.on("window.active", function()
+    local w = hl.get_active_window()
+    if w and w.workspace and w.workspace.name == "special:minimized" then
+        local ws = hl.get_active_workspace()
+        if ws and not ws.special then
+            hl.dispatch(hl.dsp.window.move({ workspace = ws.id, window = "address:" .. w.address }))
+        end
+        local sp = hl.get_active_special_workspace()
+        if sp and sp.name == "special:minimized" then
+            hl.dispatch(hl.dsp.workspace.toggle_special("minimized"))
+        end
+    end
+    hl.dispatch(hl.dsp.window.alter_zorder({ mode = "top" }))
+end)
+
+---------------------------------------------------------------------
+-- Titelleisten wie Windows 11 (Plugin hyprbars, gebaut mit
+-- tools/build-hyprbars.sh). Ohne Plugin wird dieser Teil übersprungen.
+---------------------------------------------------------------------
+local hyprbars = home .. "/.local/share/hypr-plugins/hyprbars.so"
+local f = io.open(hyprbars, "r")
+if f then
+    f:close()
+    local ok, err = pcall(hl.plugin.load, hyprbars)
+    if ok and hl.plugin.hyprbars then
+        hl.config({
+            plugin = {
+                hyprbars = {
+                    bar_height                 = 32,
+                    bar_color                  = "rgb(202020)",
+                    ["col.text"]               = "rgb(ffffff)",
+                    bar_text_font              = "Inter",
+                    bar_text_size              = 10,
+                    bar_text_align             = "left",
+                    bar_padding                = 12,
+                    bar_button_padding         = 14,
+                    bar_part_of_window         = true,
+                    bar_precedence_over_border = true,
+                    inactive_button_color      = "rgb(202020)",
+                    on_double_click            = scripts .. "/winctl.sh maximize",
+                },
+            },
+        })
+        -- Knöpfe von rechts nach links: Schliessen, Maximieren, Minimieren
+        local function btn(icon, action)
+            hl.plugin.hyprbars.add_button({
+                bg_color = "rgb(202020)",
+                fg_color = "rgb(ffffff)",
+                size     = 16,
+                icon     = icon,
+                action   = scripts .. "/winctl.sh " .. action,
+            })
+        end
+        btn("󰖭", "close")
+        btn("󰖯", "maximize")
+        btn("󰖰", "minimize")
+
+        -- Apps mit eigener Titelleiste (zeichnen selbst – X/□/–) bekommen keine zweite
+        hl.window_rule({
+            name  = "own-titlebar",
+            match = { class = "^(brave-browser|code|code-oss|discord|org\\.gnome\\..*|org\\.kde\\..*|nm-connection-editor)$" },
+            ["hyprbars:no_bar"] = true,
+        })
+    elseif not ok then
+        hl.notification.create({ text = "hyprbars: " .. tostring(err), timeout = 8000, icon = "error" })
+    end
+end
+
+---------------------------------------------------------------------
 -- Eingabe
 ---------------------------------------------------------------------
 hl.config({
@@ -136,7 +209,10 @@ hl.config({
         kb_layout  = "ch",   -- wird in user.lua mit deinem Layout überschrieben
         kb_variant = "",
         numlock_by_default = true,
-        follow_mouse = 1,
+        -- Wie Windows: Fokus wechselt per Klick, nicht beim Drüberfahren.
+        -- Scrollen geht trotzdem im Fenster unter der Maus.
+        follow_mouse = 2,
+        float_switch_override_focus = 0,
         sensitivity  = 0,
         touchpad = {
             natural_scroll = true,   -- wie Windows-Standard bei Touchpads

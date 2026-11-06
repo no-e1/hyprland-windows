@@ -1,6 +1,6 @@
 /* Gemeinsame Farben – Windows 11 dunkel */
 * {
-    bg:         #202020e0;
+    bg:         #202020f5;
     bg-solid:   #202020;
     bg-footer:  #1a1a1af0;
     surface:    #2d2d2d;

@@ -7,7 +7,7 @@
     "reload_style_on_change": true,
 
     "modules-left":   ["custom/weather"],
-    "modules-center": ["custom/start", "custom/search", "custom/pin-explorer", "custom/pin-browser", "custom/pin-terminal", "wlr/taskbar"],
+    "modules-center": ["custom/start", "custom/pin-explorer", "custom/pin-browser", "custom/pin-terminal", "wlr/taskbar"],
     "modules-right":  ["tray", "group/quick", "clock", "custom/peek"],
 
     "custom/weather": {
@@ -24,11 +24,6 @@
         "on-click": "~/.config/hypr/scripts/startmenu.sh"
     },
 
-    "custom/search": {
-        "format": "󰍉  Suche",
-        "tooltip-format": "Suche",
-        "on-click": "~/.config/hypr/scripts/startmenu.sh"
-    },
 
     "custom/pin-explorer": {
         "exec": "~/.config/hypr/scripts/pinned.sh status '^nemo$' 'Explorer' '󰉋'",

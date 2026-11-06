@@ -32,7 +32,6 @@ tooltip label { color: @fg; padding: 2px 4px; }
 /* ── Mitte: Start, Suche, angeheftete und laufende Apps ─────────── */
 
 #custom-start,
-#custom-search,
 #custom-pin-explorer,
 #custom-pin-browser,
 #custom-pin-terminal,
@@ -51,22 +50,11 @@ tooltip label { color: @fg; padding: 2px 4px; }
     padding: 0 12px;
 }
 
-#custom-search {
-    font-size: 13px;
-    color: @fg-dim;
-    background-color: rgba(255, 255, 255, 0.06);
-    border: 1px solid rgba(255, 255, 255, 0.06);
-    border-radius: 18px;
-    margin: 7px 6px;
-    padding: 0 26px 0 14px;
-}
-
 #custom-pin-explorer { font-size: 24px; color: #f6c94a; }
 #custom-pin-browser  { font-size: 24px; color: #ff8a3d; }
 #custom-pin-terminal { font-size: 22px; color: #d6d6d6; }
 
 #custom-start:hover,
-#custom-search:hover,
 #custom-pin-explorer:hover,
 #custom-pin-browser:hover,
 #custom-pin-terminal:hover,

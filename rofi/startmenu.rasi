@@ -2,27 +2,31 @@
 @import "colors.rasi"
 
 configuration {
-    show-icons:            true;
-    icon-theme:            "Win11-dark";
-    display-drun:          "󰀻  Alle Apps";
-    drun-display-format:   "{name}";
-    hover-select:          true;
-    me-select-entry:       "";
-    me-accept-entry:       "MousePrimary";
-    display-power:         "⏻  Ein/Aus";
-    sort:                  true;
-    sorting-method:        "fzf";
+    show-icons:             true;
+    icon-theme:             "Win11-dark";
+    drun-display-format:    "{name}";
+    drun-use-desktop-cache: true;
+    hover-select:           true;
+    me-select-entry:        "";
+    me-accept-entry:        "MousePrimary";
+    display-drun:           "󰀻";
+    display-power:          "󰐥";
+    sort:                   true;
+    sorting-method:         "fzf";
+}
+
+* {
+    font: "Inter 10";
 }
 
 window {
     location:         south;
     anchor:           south;
-    y-offset:         -60px;
-    width:            660px;
-    height:           640px;
+    y-offset:         -58px;
+    width:            640px;
     border:           1px;
     border-color:     @border;
-    border-radius:    10px;
+    border-radius:    8px;
     background-color: @bg;
 }
 
@@ -31,101 +35,112 @@ mainbox {
     children: [ "searchbox", "header", "listview", "footer" ];
 }
 
-/* Suchfeld oben */
+/* ── Suchfeld: schmal, Pille, dezenter Rand ─────────────────────── */
 searchbox {
     orientation:      horizontal;
-    margin:           26px 32px 18px 32px;
-    padding:          10px 16px;
-    spacing:          12px;
-    border:           0 0 2px 0;
-    border-color:     @accent;
-    border-radius:    20px;
+    margin:           24px 32px 0 32px;
+    padding:          0 14px;
+    spacing:          10px;
+    border:           1px;
+    border-color:     @border;
+    border-radius:    16px;
     background-color: @surface;
+    expand:           false;
     children:         [ "textbox-search-icon", "entry" ];
 }
 textbox-search-icon {
-    expand:     false;
-    str:        "󰍉";
-    text-color: @fg-dim;
-    font:       "Symbols Nerd Font 13";
+    expand:         false;
+    str:            "󰍉";
+    text-color:     @fg-dim;
+    font:           "Symbols Nerd Font 11";
     vertical-align: 0.5;
+    padding:        7px 0;
 }
 entry {
-    placeholder:       "Apps, Einstellungen und Dokumente durchsuchen";
+    placeholder:       "Nach Apps, Einstellungen und Dokumenten suchen";
     placeholder-color: @fg-dim;
     cursor:            text;
     vertical-align:    0.5;
+    padding:           7px 0;
+    font:              "Inter 9.5";
 }
 
-/* Überschrift */
+/* ── Überschrift ────────────────────────────────────────────────── */
 header {
     orientation: horizontal;
-    margin:      4px 44px 10px 44px;
+    margin:      22px 56px 12px 56px;
+    expand:      false;
     children:    [ "textbox-title" ];
 }
 textbox-title {
-    str:  "Angeheftet & Alle Apps";
-    font: "Segoe UI Variable Text Semibold 10.5, Inter SemiBold 10.5, Noto Sans Bold 10.5";
+    str:  "Alle Apps";
+    font: "Inter SemiBold 10";
 }
 
-/* App-Raster */
+/* ── App-Raster ─────────────────────────────────────────────────── */
 listview {
-    columns:      6;
-    lines:        4;
-    fixed-height: true;
+    columns:       6;
+    lines:         4;
+    fixed-height:  true;
     fixed-columns: true;
-    spacing:      4px;
-    margin:       0 32px 16px 32px;
-    scrollbar:    false;
-    cycle:        false;
-    dynamic:      false;
+    spacing:       0;
+    margin:        0 32px 20px 32px;
+    scrollbar:     false;
+    cycle:         false;
+    dynamic:       false;
+    flow:          horizontal;
 }
 element {
     orientation:   vertical;
-    padding:       12px 4px 10px 4px;
-    spacing:       8px;
-    border-radius: 6px;
+    padding:       10px 4px 8px 4px;
+    spacing:       6px;
+    border-radius: 4px;
     cursor:        pointer;
 }
 element normal.normal, element alternate.normal { background-color: transparent; }
 element selected.normal { background-color: @selected; }
 element-icon {
-    size:             38px;
+    size:             32px;
     horizontal-align: 0.5;
     cursor:           inherit;
 }
 element-text {
     horizontal-align: 0.5;
     vertical-align:   0.5;
-    font:             "Segoe UI Variable Text 9, Inter 9, Noto Sans 9";
+    font:             "Inter 9";
     cursor:           inherit;
 }
 
-/* Fusszeile mit Ein/Aus-Knopf (unten rechts, wie Windows) */
+/* ── Fusszeile: Benutzer links, Alle Apps / Ein/Aus rechts ─────── */
 footer {
     orientation:      horizontal;
-    padding:          10px 32px;
+    padding:          10px 48px;
     background-color: @bg-footer;
     border:           1px 0 0 0;
     border-color:     @border;
+    border-radius:    0 0 8px 8px;
+    expand:           false;
     children:         [ "textbox-user", "mode-switcher" ];
 }
 textbox-user {
     str:            "󰀄   noel";
     vertical-align: 0.5;
-    font:           "Segoe UI Variable Text 10, Inter 10, Noto Sans 10";
+    font:           "Inter 9.5";
 }
 mode-switcher {
     expand:  false;
-    spacing: 4px;
+    spacing: 2px;
 }
 button {
-    padding:       8px 14px;
-    border-radius: 6px;
+    padding:       6px 10px;
+    border-radius: 4px;
     text-color:    @fg-dim;
+    font:          "Symbols Nerd Font 13";
+    vertical-align: 0.5;
+    horizontal-align: 0.5;
     cursor:        pointer;
 }
-button selected { background-color: @selected; text-color: @fg; }
+button selected { text-color: @fg; background-color: @hover; }
 
 message { margin: 0 32px; }
 textbox { text-color: @fg; }
