@@ -102,6 +102,9 @@ hl.config({
     },
 
     misc = {
+        -- hyprland-guiutils (ANR/permission dialogs) is not packaged for
+        -- Fedora; don't warn about it on every login
+        disable_hyprland_guiutils_check = true,
         force_default_wallpaper = 0,
         disable_hyprland_logo   = true,
         focus_on_activate       = true,
@@ -410,14 +413,17 @@ function WinForget()
 end
 
 -- Called when a dragged window is dropped somewhere other than a screen
--- edge: like on Windows it may not stick out past the top (its title bar
--- stays reachable) or past the left edge.
+-- edge: it may not stick out past the top (its title bar stays reachable),
+-- past the left edge, or below the screen / under the taskbar. A window
+-- taller than the free space keeps its title bar at the top.
 function WinClamp()
     local w = hl.get_active_window()
     if not w or not w.floating or saved_geometry[w.address] then return end
-    local x, y = work_area(w.monitor or hl.get_active_monitor())
+    local x, y, _, hh = work_area(w.monitor or hl.get_active_monitor())
     local top = y + (has_bar(w) and BAR_HEIGHT or 0)
-    local nx, ny = math.max(w.at.x, x), math.max(w.at.y, top)
+    local bottom = y + hh                       -- top of the taskbar
+    local nx = math.max(w.at.x, x)
+    local ny = math.max(math.min(w.at.y, bottom - w.size.y), top)
     if nx ~= w.at.x or ny ~= w.at.y then
         hl.dispatch(hl.dsp.window.move({ x = nx, y = ny, window = "address:" .. w.address }))
     end
