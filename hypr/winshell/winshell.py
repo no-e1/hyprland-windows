@@ -422,6 +422,7 @@ class Switcher:
 # ── Quick settings ───────────────────────────────────────────────────────
 class QuickSettings:
     def __init__(self, app):
+        self.shell = app
         self.visible = False
         self.updating = False
         self.state = {}
@@ -598,6 +599,8 @@ class QuickSettings:
         self.stack.set_transition_type(Gtk.StackTransitionType.SLIDE_LEFT_RIGHT)
         if not self.visible:
             spawn("pkill -x rofi")          # only one flyout at a time, like Windows
+            if self.shell.start.visible:
+                self.shell.start.hide()
             self.visible = True
             self.backdrop_for = "qs"
             self.backdrop.present()
@@ -629,10 +632,21 @@ class QuickSettings:
             self.backdrop_for = None
             self.backdrop.set_visible(False)
 
+    def catcher_for(self, who):
+        """Show the click catcher for another flyout (start menu), or hide it."""
+        if who:
+            self.backdrop_for = who
+            self.backdrop.present()
+        elif self.backdrop_for not in (None, "qs"):
+            self.backdrop_for = None
+            self.backdrop.set_visible(False)
+
     def outside_click(self):
         if self.backdrop_for == "rofi":
             spawn("pkill -x rofi")
             self.backdrop_rofi(False)
+        elif self.backdrop_for == "start":
+            self.shell.start.hide()
         else:
             self.hide()
 
@@ -1028,6 +1042,201 @@ class QuickSettings:
         return box
 
 
+# ── Start menu (Windows 11 layout) ─────────────────────────────────────────
+class StartMenu:
+    COLS = 6
+
+    def __init__(self, app, shell):
+        self.shell = shell
+        self.visible = False
+        self.apps = []
+        self.win = layer_window(app, "winshell-start", LS.Layer.OVERLAY,
+                                anchors=(LS.Edge.BOTTOM,), margins={LS.Edge.BOTTOM: 12})
+        keys = Gtk.EventControllerKey()
+        keys.connect("key-pressed", self.on_key)
+        self.win.add_controller(keys)
+
+        panel = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        panel.add_css_class("start")
+        panel.set_overflow(Gtk.Overflow.HIDDEN)
+
+        body = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        body.add_css_class("start-body")
+        self.search = Gtk.SearchEntry(placeholder_text="Search for apps, settings, and documents")
+        self.search.add_css_class("start-search")
+        self.search.connect("search-changed", lambda *_: self.filter())
+        self.search.connect("activate", lambda *_: self.launch_first())
+        body.append(self.search)
+
+        head = Gtk.Box()
+        head.add_css_class("start-head")
+        self.title = label("All apps", "start-title")
+        self.title.set_hexpand(True)
+        head.append(self.title)
+        body.append(head)
+
+        self.flow = Gtk.FlowBox(selection_mode=Gtk.SelectionMode.NONE, homogeneous=True,
+                                min_children_per_line=self.COLS, max_children_per_line=self.COLS,
+                                row_spacing=4, column_spacing=4, valign=Gtk.Align.START)
+        self.flow.set_filter_func(self.match)
+        self.flow.connect("child-activated", lambda _f, child: self.launch(child.app))
+        scroll = Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.NEVER,
+                                    min_content_height=420, max_content_height=420)
+        scroll.set_child(self.flow)
+        body.append(scroll)
+        panel.append(body)
+        panel.append(self.build_footer())
+        self.win.set_child(panel)
+
+        self.load_apps()
+        self.monitor = Gio.AppInfoMonitor.get()
+        self.monitor.connect("changed", lambda *_: self.load_apps())
+
+    def build_footer(self):
+        foot = Gtk.Box()
+        foot.add_css_class("start-footer")
+        user = Gtk.Box(spacing=12)
+        avatar = icon("win11-user", 18)
+        avatar.add_css_class("avatar")
+        user.append(avatar)
+        user.append(label(os.environ.get("USER", "User"), "start-user"))
+        ub = Gtk.MenuButton(child=user, direction=Gtk.ArrowType.UP)
+        ub.add_css_class("start-btn")
+        ub.set_popover(self.menu([("win11-lock", "Lock", "Lock"),
+                                  ("win11-signout", "Sign out", "Sign out")]))
+        foot.append(ub)
+        sp = Gtk.Box()
+        sp.set_hexpand(True)
+        foot.append(sp)
+        items = [("win11-sleep", "Sleep", "Sleep"),
+                 ("win11-power", "Shut down", "Shut down"),
+                 ("win11-restart", "Restart", "Restart")]
+        cache = os.path.expanduser("~/.cache/hypr-has-windows")
+        if os.path.exists(cache) and open(cache).read().strip() == "1":
+            items.append(("win11-restart", "Restart to Windows", "Restart to Windows"))
+        pb = Gtk.MenuButton(child=icon("win11-power", 16), direction=Gtk.ArrowType.UP)
+        pb.add_css_class("start-btn")
+        pb.set_tooltip_text("Power")
+        pb.set_popover(self.menu(items))
+        foot.append(pb)
+        return foot
+
+    def menu(self, items):
+        pop = Gtk.Popover(has_arrow=False)
+        pop.add_css_class("start-menu")
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        for ic, text, action in items:
+            row = Gtk.Box(spacing=12)
+            row.append(icon(ic, 16))
+            row.append(label(text, "menu-text"))
+            b = button(row, "menu-item")
+            b.connect("clicked", lambda _b, a=action, p=pop: (p.popdown(), self.power(a)))
+            box.append(b)
+        pop.set_child(box)
+        return pop
+
+    def power(self, action):
+        self.hide()
+        spawn(f"sleep 0.2; {SCRIPTS}/powermenu.sh '{action}'")
+
+    # apps -----------------------------------------------------------------
+    def load_apps(self):
+        apps = [a for a in Gio.AppInfo.get_all() if a.should_show()]
+        apps.sort(key=lambda a: a.get_display_name().lower())
+        self.apps = apps
+        clear(self.flow)
+        for a in apps:
+            tile = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+            tile.add_css_class("app")
+            img = Gtk.Image.new_from_gicon(a.get_icon() or Gio.ThemedIcon.new("application-x-executable"))
+            img.set_pixel_size(32)
+            tile.append(img)
+            name = label(a.get_display_name(), "app-name", xalign=0.5)
+            name.set_max_width_chars(10)
+            name.set_width_chars(10)
+            tile.append(name)
+            child = Gtk.FlowBoxChild(child=tile)
+            child.app = a
+            child.key = " ".join(filter(None, [a.get_display_name(), a.get_name(),
+                                               a.get_executable() or "", a.get_description() or "",
+                                               " ".join(a.get_keywords() if hasattr(a, "get_keywords") else [])])).lower()
+            click = Gtk.GestureClick()
+            click.connect("released", lambda *_x, app=a: self.launch(app))
+            child.add_controller(click)
+            self.flow.append(child)
+
+    def match(self, child):
+        q = self.search.get_text().strip().lower()
+        return not q or all(part in child.key for part in q.split())
+
+    def filter(self):
+        self.flow.invalidate_filter()
+        q = self.search.get_text().strip()
+        self.title.set_text("Best matches" if q else "All apps")
+
+    def first_visible(self):
+        c = self.flow.get_first_child()
+        while c:
+            if c.get_child_visible() and self.match(c):
+                return c
+            c = c.get_next_sibling()
+        return None
+
+    def launch_first(self):
+        c = self.first_visible()
+        if c:
+            self.launch(c.app)
+
+    def launch(self, app):
+        self.hide()
+        try:
+            ctx = Gdk.Display.get_default().get_app_launch_context()
+            app.launch([], ctx)
+        except Exception as e:
+            print("winshell: launch failed:", e, file=sys.stderr)
+
+    # show / hide ------------------------------------------------------------
+    def toggle(self):
+        self.hide() if self.visible else self.show()
+
+    def show(self):
+        if self.shell.qs.visible:
+            self.shell.qs.hide()
+        spawn("pkill -x rofi")
+        self.search.set_text("")
+        self.filter()
+        self.visible = True
+        LS.set_keyboard_mode(self.win, LS.KeyboardMode.EXCLUSIVE)
+        self.shell.qs.catcher_for("start")
+        self.win.present()
+        self.search.grab_focus()
+        adj = self.flow.get_parent().get_parent().get_vadjustment() if self.flow.get_parent() else None
+        if adj:
+            adj.set_value(0)
+
+    def hide(self):
+        if not self.visible:
+            return
+        self.visible = False
+        self.win.set_visible(False)
+        LS.set_keyboard_mode(self.win, LS.KeyboardMode.NONE)
+        self.shell.qs.catcher_for(None)
+
+    def on_key(self, _c, keyval, _code, _state):
+        if keyval == Gdk.KEY_Escape:
+            if self.search.get_text():
+                self.search.set_text("")
+            else:
+                self.hide()
+            return True
+        if keyval in (Gdk.KEY_Down, Gdk.KEY_Tab) and self.search.has_focus():
+            c = self.first_visible()
+            if c:
+                c.grab_focus()
+                return True
+        return False
+
+
 # ── Volume / brightness flyout (bottom center, like Windows 11) ───────────
 class OSD:
     def __init__(self, app):
@@ -1097,6 +1306,7 @@ class WinShell(Gtk.Application):
         self.switcher = Switcher(self, icons)
         self.qs = QuickSettings(self)
         self.osd = OSD(self)
+        self.start = StartMenu(self, self)
 
         if os.path.exists(FIFO) and not os.path.isfile(FIFO):
             os.unlink(FIFO)
@@ -1130,6 +1340,8 @@ class WinShell(Gtk.Application):
         if what == "switch":
             if self.qs.visible:
                 self.qs.hide()
+            if self.start.visible:
+                self.start.hide()
             {"next": lambda: self.switcher.step(1), "prev": lambda: self.switcher.step(-1),
              "commit": self.switcher.commit,
              "cancel": lambda: self.switcher.visible and self.switcher.hide()}.get(arg, lambda: None)()
@@ -1144,6 +1356,8 @@ class WinShell(Gtk.Application):
             self.osd.show("brightness" if arg == "brightness" else "volume")
             if self.qs.visible:
                 self.qs.refresh()
+        elif what == "menu":
+            self.start.hide() if arg == "hide" else self.start.toggle()
         elif what == "backdrop":
             self.qs.backdrop_rofi(arg == "rofi")
         elif what == "debug":

@@ -99,12 +99,12 @@ tooltip label { color: @fg; padding: 2px 4px; }
 #quick:hover { background-color: @hover; }
 
 #custom-net, #custom-vol, #custom-bat {
-    min-width: 32px;
+    min-width: 30px;
     padding: 0;
     background-repeat: no-repeat;
     background-position: center;
 }
-#custom-bat { min-width: 36px; }
+#custom-bat { min-width: 34px; }
 
 #clock {
     margin: 4px 2px;

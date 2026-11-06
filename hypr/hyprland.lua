@@ -193,7 +193,7 @@ hl.window_rule({
 -- Mica/Acrylic blur for taskbar, start menu, flyouts and Alt+Tab
 hl.layer_rule({ name = "blur-startmenu", match = { namespace = "^rofi$" },                      blur = true, ignore_alpha = 0.2 })
 hl.layer_rule({ name = "blur-swaync",    match = { namespace = "^swaync-.*$" },                 blur = true, ignore_alpha = 0.2 })
-hl.layer_rule({ name = "blur-winshell",  match = { namespace = "^winshell-(qs|switcher)$" },    blur = true, ignore_alpha = 0.2 })
+hl.layer_rule({ name = "blur-winshell",  match = { namespace = "^winshell-(qs|switcher|start)$" }, blur = true, ignore_alpha = 0.2 })
 hl.layer_rule({ name = "blur-osd",        match = { namespace = "^winshell-osd$" },             blur = true, ignore_alpha = 0.2 })
 hl.layer_rule({ name = "no-anim-switcher", match = { namespace = "^winshell-(switcher|catcher)$" }, no_anim = true })
 
@@ -360,8 +360,8 @@ if f then
                     bar_text_font              = "Inter",
                     bar_text_size              = 10,
                     bar_text_align             = "left",
-                    bar_padding                = 14,
-                    bar_button_padding         = 20,
+                    bar_padding                = 12,
+                    bar_button_padding         = 0,
                     bar_part_of_window         = true,
                     bar_precedence_over_border = true,
                     inactive_button_color      = "rgb(202020)",
@@ -369,19 +369,21 @@ if f then
                 },
             },
         })
-        -- buttons from right to left: close, maximize, minimize
+        -- Windows 11 caption buttons, right to left: close, maximize, minimize.
+        -- Patched hyprbars draws them as 46 px wide full-height rectangles with
+        -- a hover background (close turns red), like on Windows.
         local function btn(icon, action)
             hl.plugin.hyprbars.add_button({
-                bg_color = "rgb(202020)",
+                bg_color = "rgba(00000000)",
                 fg_color = "rgb(ffffff)",
-                size     = 14,
+                size     = 46,
                 icon     = icon,
                 action   = scripts .. "/winctl.sh " .. action,
             })
         end
-        btn("󰅖", "close")
-        btn("󰖯", "maximize")
-        btn("󰖰", "minimize")
+        btn("", "close")
+        btn("", "maximize")
+        btn("", "minimize")
 
         -- apps that draw their own title bar (with X/□/–) don't get a second one
         hl.window_rule({

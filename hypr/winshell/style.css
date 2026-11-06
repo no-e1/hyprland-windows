@@ -216,3 +216,74 @@ scrollbar slider { min-width: 3px; background: rgba(255, 255, 255, 0.35); border
 /* click catcher behind flyouts: must not be 100% transparent, or GTK
    never hands the compositor a buffer and the surface never appears */
 window.catcher { background: rgba(0, 0, 0, 0.004); }
+
+/* ── Start menu ──────────────────────────────────────────────────── */
+.start {
+    min-width: 640px;
+    background: rgba(36, 36, 36, 0.94);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 8px;
+}
+.start-body { padding: 28px 32px 8px 32px; }
+.start-search {
+    min-height: 32px;
+    padding: 0 12px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    font-size: 13px;
+}
+.start-search:focus-within { border-bottom: 2px solid #4cc2ff; }
+.start-search text placeholder { color: rgba(255, 255, 255, 0.6); }
+.start-head { padding: 22px 24px 10px 24px; }
+.start-title { font-size: 14px; font-weight: 600; }
+
+.start flowboxchild {
+    padding: 0;
+    border-radius: 4px;
+    outline: none;
+}
+.start flowboxchild:hover { background: rgba(255, 255, 255, 0.05); }
+.start flowboxchild:focus-visible, .start flowboxchild:focus { background: rgba(255, 255, 255, 0.08); }
+.app { padding: 14px 4px 12px 4px; }
+.app-name { font-size: 12px; }
+
+.start-footer {
+    padding: 14px 52px 14px 52px;
+    background: rgba(28, 28, 28, 0.96);
+    border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+menubutton.start-btn > button {
+    min-height: 0;
+    padding: 8px 12px;
+    background: transparent;
+    border: none;
+    box-shadow: none;
+    border-radius: 4px;
+    color: #ffffff;
+}
+menubutton.start-btn > button:hover,
+menubutton.start-btn > button:checked { background: rgba(255, 255, 255, 0.06); }
+menubutton.start-btn arrow { -gtk-icon-source: none; min-width: 0; min-height: 0; }
+.start-user { font-size: 12px; }
+
+popover.start-menu > contents {
+    padding: 4px;
+    background: rgba(44, 44, 44, 0.98);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 8px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+button.menu-item {
+    min-width: 170px;
+    min-height: 0;
+    padding: 8px 12px;
+    background: transparent;
+    border: none;
+    box-shadow: none;
+    border-radius: 4px;
+    color: #ffffff;
+}
+button.menu-item:hover { background: rgba(255, 255, 255, 0.06); }
+.menu-text { font-size: 13px; }
