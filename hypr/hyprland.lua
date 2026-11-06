@@ -44,7 +44,8 @@ hl.on("hyprland.start", function()
     hl.exec_cmd(scripts .. "/theme.sh")        -- GTK theme, icons, cursor, font
     hl.exec_cmd(scripts .. "/polkit.sh")       -- password prompts for admin actions
     hl.exec_cmd(scripts .. "/wallpaper.sh restore")
-    hl.exec_cmd("waybar")                      -- taskbar
+    -- taskbar; restarts itself if it ever crashes (like explorer.exe)
+    hl.exec_cmd("sh -c 'while :; do waybar; sleep 1; done'")
     hl.exec_cmd("swaync")                      -- notifications
     hl.exec_cmd(winshell .. " start")          -- Alt+Tab and quick settings
     hl.exec_cmd("hypridle")                    -- lock / screen off when idle
@@ -193,9 +194,10 @@ hl.window_rule({
 -- Mica/Acrylic blur for taskbar, start menu, flyouts and Alt+Tab
 hl.layer_rule({ name = "blur-startmenu", match = { namespace = "^rofi$" },                      blur = true, ignore_alpha = 0.2 })
 hl.layer_rule({ name = "blur-swaync",    match = { namespace = "^swaync-.*$" },                 blur = true, ignore_alpha = 0.2 })
-hl.layer_rule({ name = "blur-winshell",  match = { namespace = "^winshell-(qs|switcher|start)$" }, blur = true, ignore_alpha = 0.2 })
+hl.layer_rule({ name = "blur-winshell",  match = { namespace = "^winshell-(qs|switcher|start|calendar)$" }, blur = true, ignore_alpha = 0.2 })
 hl.layer_rule({ name = "blur-osd",        match = { namespace = "^winshell-osd$" },             blur = true, ignore_alpha = 0.2 })
-hl.layer_rule({ name = "no-anim-switcher", match = { namespace = "^winshell-(switcher|catcher)$" }, no_anim = true })
+-- winshell animates its flyouts itself (they glide out of the taskbar)
+hl.layer_rule({ name = "no-anim-winshell", match = { namespace = "^winshell-.*$" }, no_anim = true })
 
 ---------------------------------------------------------------------
 -- Active window always comes to the front (taskbar, click, Alt+Tab).
@@ -282,6 +284,15 @@ function WinMax(action, w)
         saved_geometry[a] = nil
         client_maximized(a, false)
         set_geometry(a, g[1], g[2], g[3], g[4])
+    end
+end
+
+-- Forget the "maximized" state without resizing (used before snapping)
+function WinForget()
+    local w = hl.get_active_window()
+    if w and saved_geometry[w.address] then
+        saved_geometry[w.address] = nil
+        client_maximized(w.address, false)
     end
 end
 
@@ -448,11 +459,75 @@ end
 hl.bind("ALT + Tab",         function() winshell_send("switch next") end, { repeating = true })
 hl.bind("ALT + SHIFT + Tab", function() winshell_send("switch prev") end, { repeating = true })
 
+-- Show desktop (Win + D): hide every window of this desktop, press again to
+-- bring them back. Win + M minimizes all, Win + Shift + M restores them.
+local desktop_hidden = nil
+local function windows_here()
+    local ws = hl.get_active_workspace()
+    local list = {}
+    for _, w in ipairs(hl.get_windows() or {}) do
+        if w.mapped and w.workspace and ws and w.workspace.id == ws.id then
+            table.insert(list, w.address)
+        end
+    end
+    return list, ws
+end
+local function hide_all()
+    local list = windows_here()
+    for _, a in ipairs(list) do
+        hl.dispatch(hl.dsp.window.move({ workspace = "special:minimized", follow = false, window = "address:" .. a }))
+    end
+    return list
+end
+local function restore_hidden()
+    local ws = hl.get_active_workspace()
+    for _, a in ipairs(desktop_hidden or {}) do
+        if hl.get_window("address:" .. a) then
+            hl.dispatch(hl.dsp.window.move({ workspace = ws.id, follow = false, window = "address:" .. a }))
+        end
+    end
+    desktop_hidden = nil
+end
+hl.bind(win .. " + D", function()
+    if desktop_hidden and #windows_here() == 0 then restore_hidden() else desktop_hidden = hide_all() end
+end)
+hl.bind(win .. " + M",         function() desktop_hidden = hide_all() end)
+hl.bind(win .. " + SHIFT + M", function() restore_hidden() end)
+
+-- Win + Home: minimize everything except the active window
+hl.bind(win .. " + Home", function()
+    local active = hl.get_active_window()
+    for _, a in ipairs((windows_here())) do
+        if not active or a ~= active.address then
+            hl.dispatch(hl.dsp.window.move({ workspace = "special:minimized", follow = false, window = "address:" .. a }))
+        end
+    end
+end)
+
+-- Win + 1/2/3: open or switch to the pinned taskbar apps
+hl.bind(win .. " + 1", hl.dsp.exec_cmd(scripts .. "/pinned.sh open '^nemo$' nemo"))
+hl.bind(win .. " + 2", hl.dsp.exec_cmd(scripts .. "/pinned.sh open '^(brave-browser)$' brave-browser"))
+hl.bind(win .. " + 3", hl.dsp.exec_cmd(scripts .. "/pinned.sh open '^kitty$' kitty"))
+
+-- Win + Tab: task view (the switcher stays open until you pick a window)
+hl.bind(win .. " + Tab", function() winshell_send("switch view") end)
+
+-- Win + Print: save a screenshot of the whole screen
+hl.bind(win .. " + Print", hl.dsp.exec_cmd(scripts .. "/screenshot.sh full"))
+
 -- Snap: Win + arrow keys
-hl.bind(win .. " + Left",  hl.dsp.exec_cmd(scripts .. "/snap.sh left"))
-hl.bind(win .. " + Right", hl.dsp.exec_cmd(scripts .. "/snap.sh right"))
+hl.bind(win .. " + Left",  hl.dsp.exec_cmd(scripts .. "/winctl.sh snap left"))
+hl.bind(win .. " + Right", hl.dsp.exec_cmd(scripts .. "/winctl.sh snap right"))
 hl.bind(win .. " + Up",    function() WinMax("max") end)
-hl.bind(win .. " + Down",  hl.dsp.exec_cmd(scripts .. "/snap.sh restore"))
+hl.bind(win .. " + Down",  function()
+    local w = hl.get_active_window()
+    if not w then return end
+    if saved_geometry[w.address] then
+        WinMax("restore", w)
+    else
+        hl.dispatch(hl.dsp.window.move({ workspace = "special:minimized", follow = false }))
+    end
+end)
 hl.bind(win .. " + SHIFT + Up", hl.dsp.window.fullscreen({ mode = "fullscreen", action = "toggle" }))
 
 -- Move / resize windows with Win + mouse (in addition to the title bar)

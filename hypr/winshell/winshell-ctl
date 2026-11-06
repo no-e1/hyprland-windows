@@ -2,26 +2,33 @@
 # Sends a command to the winshell daemon and starts the daemon if needed.
 #   winshell-ctl switch next|prev|commit|cancel
 #   winshell-ctl qs [toggle|wifi|bluetooth|hide]
+#   winshell-ctl menu [hide] | calendar [hide] | osd volume|brightness
 #   winshell-ctl start | restart
 RUN="${XDG_RUNTIME_DIR:-/tmp}"
 FIFO="$RUN/winshell.fifo"
+READY="$RUN/winshell.ready"
 DIR="$(dirname "$(realpath "$0")")"
 
+pid() { cat "$READY" 2>/dev/null; }
+running() {
+    local p; p=$(pid)
+    [ -n "$p" ] && grep -q "winshell.py" "/proc/$p/cmdline" 2>/dev/null && [ -p "$FIFO" ]
+}
+
 start() {
-    LD_PRELOAD=/usr/lib64/libgtk4-layer-shell.so.0 setsid -f python3 "$DIR/winshell.py" \
-        >"$RUN/winshell.log" 2>&1
+    rm -f "$READY"
+    LC_TIME=en_GB.UTF-8 LD_PRELOAD=/usr/lib64/libgtk4-layer-shell.so.0 \
+        setsid -f python3 "$DIR/winshell.py" >"$RUN/winshell.log" 2>&1
     for _ in $(seq 1 100); do
-        [ -f "$RUN/winshell.ready" ] && pgrep -f "python3 .*/winshell/winshell.py" >/dev/null && return
+        running && return
         sleep 0.03
     done
 }
 
-running() { pgrep -f "python3 .*/winshell/winshell.py" >/dev/null && [ -p "$FIFO" ]; }
-
 case "$1" in
     start)   running || start; exit ;;
-    restart) pkill -f "python3 .*/winshell/winshell.py"; rm -f "$RUN/winshell.ready"; sleep 0.2; start; exit ;;
+    restart) running && kill "$(pid)"; sleep 0.3; start; exit ;;
 esac
 
-running || { rm -f "$RUN/winshell.ready"; start; }
+running || start
 printf '%s\n' "$*" 1<>"$FIFO"

@@ -129,6 +129,12 @@ def button(child, *classes, on_click=None, tooltip=None):
     return b
 
 
+def slide_in(widget):
+    """Windows 11 flyout entrance: glide up out of the taskbar and fade in."""
+    widget.remove_css_class("shown")
+    GLib.timeout_add(16, lambda: widget.add_css_class("shown") and False)
+
+
 def clear(box):
     while child := box.get_first_child():
         box.remove(child)
@@ -189,6 +195,7 @@ class Switcher:
         self.thumbs = {}            # address -> Gdk.Texture
         self.items, self.cards = [], []
         self.sel, self.visible = 0, False
+        self.task_view = False
         self.paused_until = 0.0
         self.win = layer_window(app, "winshell-switcher", LS.Layer.OVERLAY)
         self.flow = Gtk.FlowBox(selection_mode=Gtk.SelectionMode.NONE, homogeneous=True,
@@ -237,7 +244,7 @@ class Switcher:
         return True
 
     def on_key_released(self, _c, keyval, _code, _state):
-        if keyval in (Gdk.KEY_Alt_L, Gdk.KEY_Alt_R, Gdk.KEY_Meta_L, Gdk.KEY_Meta_R):
+        if not self.task_view and keyval in (Gdk.KEY_Alt_L, Gdk.KEY_Alt_R):
             self.commit()
 
     # windows of the current desktop (plus minimized ones), most recent first
@@ -248,6 +255,14 @@ class Switcher:
                 (c["workspace"]["id"] == ws or c["workspace"]["name"] == "special:minimized")]
         wins.sort(key=lambda c: c.get("focusHistoryID", 99))
         return wins
+
+    def view(self):
+        """Win + Tab: like Alt+Tab, but stays open until a window is picked."""
+        if self.visible:
+            self.hide()
+            return
+        self.task_view = True
+        self.step(1)
 
     def step(self, delta):
         if not self.visible:
@@ -260,7 +275,7 @@ class Switcher:
             self.update_selection()
             LS.set_keyboard_mode(self.win, LS.KeyboardMode.EXCLUSIVE)
             self.win.present()
-            if not self.poll:
+            if not self.poll and not self.task_view:
                 self.poll = GLib.timeout_add(100, self.start_poll)
             for c in self.items:
                 self.capture(c)
@@ -352,6 +367,7 @@ class Switcher:
 
     def hide(self):
         self.visible = False
+        self.task_view = False
         self.win.set_visible(False)
         LS.set_keyboard_mode(self.win, LS.KeyboardMode.NONE)
 
@@ -450,7 +466,9 @@ class QuickSettings:
 
         panel = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         panel.add_css_class("qs")
+        panel.add_css_class("flyout")
         panel.set_overflow(Gtk.Overflow.HIDDEN)
+        self.panel = panel
         self.stack = Gtk.Stack(transition_type=Gtk.StackTransitionType.SLIDE_LEFT_RIGHT,
                                transition_duration=160, vhomogeneous=False, interpolate_size=True)
         self.stack.add_named(self.build_main(), "main")
@@ -601,9 +619,12 @@ class QuickSettings:
             spawn("pkill -x rofi")          # only one flyout at a time, like Windows
             if self.shell.start.visible:
                 self.shell.start.hide()
+            if self.shell.calendar.visible:
+                self.shell.calendar.hide()
             self.visible = True
             self.backdrop_for = "qs"
             self.backdrop.present()
+            slide_in(self.panel)
             self.win.present()
             GLib.timeout_add(1500, self.live_refresh)
         self.refresh()
@@ -647,6 +668,8 @@ class QuickSettings:
             self.backdrop_rofi(False)
         elif self.backdrop_for == "start":
             self.shell.start.hide()
+        elif self.backdrop_for == "calendar":
+            self.shell.calendar.hide()
         else:
             self.hide()
 
@@ -1042,6 +1065,76 @@ class QuickSettings:
         return box
 
 
+# ── Calendar flyout (click on the clock, like Windows 11) ──────────────────
+class CalendarFlyout:
+    def __init__(self, app, shell):
+        self.shell = shell
+        self.visible = False
+        self.win = layer_window(app, "winshell-calendar", LS.Layer.OVERLAY,
+                                anchors=(LS.Edge.BOTTOM, LS.Edge.RIGHT),
+                                margins={LS.Edge.BOTTOM: 12, LS.Edge.RIGHT: 12},
+                                keyboard=LS.KeyboardMode.ON_DEMAND)
+        keys = Gtk.EventControllerKey()
+        keys.connect("key-pressed", lambda _c, k, *_: (self.hide(), True)[1] if k == Gdk.KEY_Escape else False)
+        self.win.add_controller(keys)
+        panel = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        panel.add_css_class("cal")
+        panel.add_css_class("flyout")
+        panel.set_overflow(Gtk.Overflow.HIDDEN)
+        self.panel = panel
+        self.head = label("", "cal-head")
+        panel.append(self.head)
+        self.cal = Gtk.Calendar(show_week_numbers=False)
+        self.cal.get_first_child().set_visible(False)      # GTK's own header
+        nav = Gtk.Box()
+        nav.add_css_class("cal-nav")
+        self.month_lbl = label("", "cal-month")
+        self.month_lbl.set_hexpand(True)
+        nav.append(self.month_lbl)
+        nav.append(button(icon("win11-chevron-up", 12), "flat-btn", on_click=lambda: self.shift(-1)))
+        nav.append(button(icon("win11-chevron-down", 12), "flat-btn", on_click=lambda: self.shift(1)))
+        panel.append(nav)
+        panel.append(self.cal)
+        self.cal.connect("notify::month", lambda *_: self.update_month())
+        self.cal.connect("notify::year", lambda *_: self.update_month())
+        self.win.set_child(panel)
+
+    def shift(self, months):
+        m, y = self.cal.get_month() + months, self.cal.get_year()
+        y, m = y + m // 12, m % 12
+        self.cal.set_year(y)
+        self.cal.set_month(m)
+
+    def update_month(self):
+        d = GLib.DateTime.new_local(self.cal.get_year(), self.cal.get_month() + 1, 1, 0, 0, 0)
+        self.month_lbl.set_text(d.format("%B %Y"))
+
+    def toggle(self):
+        self.hide() if self.visible else self.show()
+
+    def show(self):
+        for other in (self.shell.qs, self.shell.start):
+            if other.visible:
+                other.hide()
+        now = GLib.DateTime.new_now_local()
+        self.head.set_text(now.format("%A, %B %-d"))
+        self.cal.set_date(now) if hasattr(self.cal, "set_date") else self.cal.select_day(now)
+        self.update_month()
+        self.visible = True
+        self.shell.qs.catcher_for("calendar")
+        slide_in(self.panel)
+        self.win.present()
+        spawn("swaync-client -op")     # notification center sits right above
+
+    def hide(self):
+        if not self.visible:
+            return
+        self.visible = False
+        self.win.set_visible(False)
+        self.shell.qs.catcher_for(None)
+        spawn("swaync-client -cp")
+
+
 # ── Start menu (Windows 11 layout) ─────────────────────────────────────────
 class StartMenu:
     COLS = 6
@@ -1058,7 +1151,9 @@ class StartMenu:
 
         panel = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         panel.add_css_class("start")
+        panel.add_css_class("flyout")
         panel.set_overflow(Gtk.Overflow.HIDDEN)
+        self.panel = panel
 
         body = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         body.add_css_class("start-body")
@@ -1202,12 +1297,15 @@ class StartMenu:
     def show(self):
         if self.shell.qs.visible:
             self.shell.qs.hide()
+        if self.shell.calendar.visible:
+            self.shell.calendar.hide()
         spawn("pkill -x rofi")
         self.search.set_text("")
         self.filter()
         self.visible = True
         LS.set_keyboard_mode(self.win, LS.KeyboardMode.EXCLUSIVE)
         self.shell.qs.catcher_for("start")
+        slide_in(self.panel)
         self.win.present()
         self.search.grab_focus()
         adj = self.flow.get_parent().get_parent().get_vadjustment() if self.flow.get_parent() else None
@@ -1307,6 +1405,7 @@ class WinShell(Gtk.Application):
         self.qs = QuickSettings(self)
         self.osd = OSD(self)
         self.start = StartMenu(self, self)
+        self.calendar = CalendarFlyout(self, self)
 
         if os.path.exists(FIFO) and not os.path.isfile(FIFO):
             os.unlink(FIFO)
@@ -1343,6 +1442,7 @@ class WinShell(Gtk.Application):
             if self.start.visible:
                 self.start.hide()
             {"next": lambda: self.switcher.step(1), "prev": lambda: self.switcher.step(-1),
+             "view": self.switcher.view,
              "commit": self.switcher.commit,
              "cancel": lambda: self.switcher.visible and self.switcher.hide()}.get(arg, lambda: None)()
         elif what == "qs":
@@ -1356,6 +1456,8 @@ class WinShell(Gtk.Application):
             self.osd.show("brightness" if arg == "brightness" else "volume")
             if self.qs.visible:
                 self.qs.refresh()
+        elif what == "calendar":
+            self.calendar.hide() if arg == "hide" else self.calendar.toggle()
         elif what == "menu":
             self.start.hide() if arg == "hide" else self.start.toggle()
         elif what == "backdrop":

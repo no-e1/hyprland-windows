@@ -16,6 +16,6 @@ case "$1" in
     snap)
         case "$2" in
             top)        max max ;;
-            left|right) "$S/snap.sh" "$2" ;;
+            left|right) hyprctl eval "WinForget()" >/dev/null; "$S/snap.sh" "$2" ;;
         esac ;;
 esac

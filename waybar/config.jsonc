@@ -91,13 +91,8 @@
         "format": "{:%H:%M:%S\n%d.%m.%Y}",
         "interval": 1,
         "justify": "right",
-        "tooltip-format": "<tt><small>{calendar}</small></tt>",
-        "locale": "en_GB.UTF-8",
-        "calendar": {
-            "mode": "month",
-            "format": { "today": "<span color='#4cc2ff'><b>{}</b></span>" }
-        },
-        "on-click": "swaync-client -t -sw"
+        "tooltip": false,
+        "on-click": "~/.config/hypr/winshell/winshell-ctl calendar"
     },
 
     "custom/peek": {
