@@ -1,21 +1,21 @@
 -- ════════════════════════════════════════════════════════════════
---  Hyprland im Windows-11-Stil
---  Für Hyprland 0.55+ (Lua-Konfiguration)
+--  Hyprland in the style of Windows 11
+--  For Hyprland 0.57+ (Lua config)
 --
---  Persönliche Anpassungen (Tastatur, NVIDIA, Bildschirm) gehören
---  in ~/.config/hypr/user.lua – die wird vom Installer erzeugt und
---  am Ende dieser Datei geladen.
+--  Personal tweaks (keyboard, monitors) belong in user.lua,
+--  which is loaded at the end of this file.
 -- ════════════════════════════════════════════════════════════════
 
-local home    = os.getenv("HOME")
-local scripts = home .. "/.config/hypr/scripts"
+local home     = os.getenv("HOME")
+local scripts  = home .. "/.config/hypr/scripts"
+local winshell = home .. "/.config/hypr/winshell/winshell-ctl"
 
 local terminal    = "kitty"
 local fileManager = "nemo"
 local browser     = "brave-browser"
 
 ---------------------------------------------------------------------
--- Bildschirm
+-- Monitors
 ---------------------------------------------------------------------
 hl.monitor({
     output   = "",
@@ -25,7 +25,7 @@ hl.monitor({
 })
 
 ---------------------------------------------------------------------
--- Umgebungsvariablen
+-- Environment
 ---------------------------------------------------------------------
 hl.env("XCURSOR_SIZE", "24")
 hl.env("HYPRCURSOR_SIZE", "24")
@@ -41,17 +41,18 @@ hl.env("ELECTRON_OZONE_PLATFORM_HINT", "auto")
 ---------------------------------------------------------------------
 hl.on("hyprland.start", function()
     hl.exec_cmd("dbus-update-activation-environment --systemd WAYLAND_DISPLAY XDG_CURRENT_DESKTOP HYPRLAND_INSTANCE_SIGNATURE")
-    hl.exec_cmd(scripts .. "/theme.sh")        -- GTK-Theme, Icons, Cursor, Schrift
-    hl.exec_cmd(scripts .. "/polkit.sh")       -- Passwortabfragen für Admin-Rechte
+    hl.exec_cmd(scripts .. "/theme.sh")        -- GTK theme, icons, cursor, font
+    hl.exec_cmd(scripts .. "/polkit.sh")       -- password prompts for admin actions
     hl.exec_cmd(scripts .. "/wallpaper.sh restore")
-    hl.exec_cmd("waybar")                      -- Taskleiste
-    hl.exec_cmd("swaync")                      -- Schnelleinstellungen + Benachrichtigungen
-    hl.exec_cmd("hypridle")                    -- Sperren / Bildschirm aus bei Inaktivität
+    hl.exec_cmd("waybar")                      -- taskbar
+    hl.exec_cmd("swaync")                      -- notifications
+    hl.exec_cmd(winshell .. " start")          -- Alt+Tab and quick settings
+    hl.exec_cmd("hypridle")                    -- lock / screen off when idle
     hl.exec_cmd("sh -c 'command -v cliphist >/dev/null && wl-paste --watch cliphist store'")
 end)
 
 ---------------------------------------------------------------------
--- Aussehen: Windows 11 (dunkel, abgerundet, Schatten, "Mica"-Blur)
+-- Look: Windows 11 (dark, rounded corners, shadows, Mica-like blur)
 ---------------------------------------------------------------------
 hl.config({
     general = {
@@ -62,7 +63,7 @@ hl.config({
             active_border   = "rgba(ffffff38)",
             inactive_border = "rgba(ffffff14)",
         },
-        -- Fenster wie unter Windows am Rand mit der Maus vergrössern
+        -- resize windows by grabbing their edges, like on Windows
         resize_on_border = true,
         extend_border_grab_area = 12,
         allow_tearing = false,
@@ -95,6 +96,10 @@ hl.config({
         enabled = true,
     },
 
+    cursor = {
+        no_warps = true,             -- the mouse never jumps on its own (like Windows)
+    },
+
     misc = {
         force_default_wallpaper = 0,
         disable_hyprland_logo   = true,
@@ -103,7 +108,7 @@ hl.config({
 })
 
 ---------------------------------------------------------------------
--- Animationen: Fenster "ploppen" wie bei Windows weich auf
+-- Animations: windows pop in softly like on Windows
 ---------------------------------------------------------------------
 hl.curve("winOut",  { type = "bezier", points = { {0.1, 0.9},  {0.1, 1}  } })
 hl.curve("winIn",   { type = "bezier", points = { {0.4, 0},    {1, 0.6}  } })
@@ -120,111 +125,38 @@ hl.animation({ leaf = "border",        enabled = true, speed = 4,   bezier = "sm
 hl.animation({ leaf = "fadeIn",        enabled = true, speed = 2.5, bezier = "smooth" })
 hl.animation({ leaf = "fadeOut",       enabled = true, speed = 2,   bezier = "linear" })
 hl.animation({ leaf = "fade",          enabled = true, speed = 3,   bezier = "smooth" })
--- Startmenü / Schnelleinstellungen gleiten von unten herein
+-- start menu and quick settings slide in from the bottom
 hl.animation({ leaf = "layersIn",      enabled = true, speed = 3,   bezier = "winOut", style = "slide bottom" })
 hl.animation({ leaf = "layersOut",     enabled = true, speed = 1.8, bezier = "winIn",  style = "slide bottom" })
 hl.animation({ leaf = "fadeLayersIn",  enabled = true, speed = 2.5, bezier = "smooth" })
 hl.animation({ leaf = "fadeLayersOut", enabled = true, speed = 1.8, bezier = "linear" })
--- Virtuelle Desktops gleiten seitlich wie bei Windows
+-- virtual desktops slide sideways like on Windows
 hl.animation({ leaf = "workspaces",    enabled = true, speed = 4,   bezier = "winOut", style = "slide" })
 
 ---------------------------------------------------------------------
--- Aktives Fenster immer nach vorne holen (Taskleiste, Klick, Alt+Tab)
----------------------------------------------------------------------
--- Minimierte Fenster liegen im versteckten Workspace "special:minimized".
--- Wird so ein Fenster aktiviert (Klick in der Taskleiste), kommt es zurück.
-hl.on("window.active", function()
-    local w = hl.get_active_window()
-    if w and w.workspace and w.workspace.name == "special:minimized" then
-        local ws = hl.get_active_workspace()
-        if ws and not ws.special then
-            hl.dispatch(hl.dsp.window.move({ workspace = ws.id, window = "address:" .. w.address }))
-        end
-        local sp = hl.get_active_special_workspace()
-        if sp and sp.name == "special:minimized" then
-            hl.dispatch(hl.dsp.workspace.toggle_special("minimized"))
-        end
-    end
-    hl.dispatch(hl.dsp.window.alter_zorder({ mode = "top" }))
-end)
-
----------------------------------------------------------------------
--- Titelleisten wie Windows 11 (Plugin hyprbars, gebaut mit
--- tools/build-hyprbars.sh). Ohne Plugin wird dieser Teil übersprungen.
----------------------------------------------------------------------
-local hyprbars = home .. "/.local/share/hypr-plugins/hyprbars.so"
-local f = io.open(hyprbars, "r")
-if f then
-    f:close()
-    local ok, err = pcall(hl.plugin.load, hyprbars)
-    if ok and hl.plugin.hyprbars then
-        hl.config({
-            plugin = {
-                hyprbars = {
-                    bar_height                 = 32,
-                    bar_color                  = "rgb(202020)",
-                    ["col.text"]               = "rgb(ffffff)",
-                    bar_text_font              = "Inter",
-                    bar_text_size              = 10,
-                    bar_text_align             = "left",
-                    bar_padding                = 12,
-                    bar_button_padding         = 14,
-                    bar_part_of_window         = true,
-                    bar_precedence_over_border = true,
-                    inactive_button_color      = "rgb(202020)",
-                    on_double_click            = scripts .. "/winctl.sh maximize",
-                },
-            },
-        })
-        -- Knöpfe von rechts nach links: Schliessen, Maximieren, Minimieren
-        local function btn(icon, action)
-            hl.plugin.hyprbars.add_button({
-                bg_color = "rgb(202020)",
-                fg_color = "rgb(ffffff)",
-                size     = 16,
-                icon     = icon,
-                action   = scripts .. "/winctl.sh " .. action,
-            })
-        end
-        btn("󰖭", "close")
-        btn("󰖯", "maximize")
-        btn("󰖰", "minimize")
-
-        -- Apps mit eigener Titelleiste (zeichnen selbst – X/□/–) bekommen keine zweite
-        hl.window_rule({
-            name  = "own-titlebar",
-            match = { class = "^(brave-browser|code|code-oss|discord|org\\.gnome\\..*|org\\.kde\\..*|nm-connection-editor)$" },
-            ["hyprbars:no_bar"] = true,
-        })
-    elseif not ok then
-        hl.notification.create({ text = "hyprbars: " .. tostring(err), timeout = 8000, icon = "error" })
-    end
-end
-
----------------------------------------------------------------------
--- Eingabe
+-- Input
 ---------------------------------------------------------------------
 hl.config({
     input = {
-        kb_layout  = "ch",   -- wird in user.lua mit deinem Layout überschrieben
+        kb_layout  = "ch",   -- overridden in user.lua
         kb_variant = "",
         numlock_by_default = true,
-        -- Wie Windows: Fokus wechselt per Klick, nicht beim Drüberfahren.
-        -- Scrollen geht trotzdem im Fenster unter der Maus.
+        -- Like Windows: focus changes on click, not on hover.
+        -- Scrolling still goes to the window under the cursor.
         follow_mouse = 2,
         float_switch_override_focus = 0,
         sensitivity  = 0,
         touchpad = {
-            natural_scroll = true,   -- wie Windows-Standard bei Touchpads
+            natural_scroll = true,
         },
     },
 })
 
--- Touchpad: 4 Finger seitlich = virtuellen Desktop wechseln (wie Windows)
+-- Touchpad: 4-finger swipe switches virtual desktops (like Windows)
 hl.gesture({ fingers = 4, direction = "horizontal", action = "workspace" })
 
 ---------------------------------------------------------------------
--- Fensterregeln: ALLE Fenster schweben frei (kein Tiling) – wie Windows
+-- Window rules: every window floats freely (no tiling), like Windows
 ---------------------------------------------------------------------
 hl.window_rule({
     name   = "float-everything",
@@ -245,83 +177,315 @@ hl.window_rule({
     size  = "760 560",
 })
 
--- XWayland-Drag-Fix aus der Standard-Config
+-- XWayland drag fix from the default config
 hl.window_rule({
     name  = "fix-xwayland-drags",
     match = { class = "^$", title = "^$", xwayland = true, float = true, fullscreen = false, pin = false },
     no_focus = true,
 })
 
--- Mica/Acrylic-Effekt für Taskleiste, Startmenü und Schnelleinstellungen
-hl.layer_rule({ name = "blur-taskbar",   match = { namespace = "^waybar$" },        blur = true, ignore_alpha = 0.2 })
-hl.layer_rule({ name = "blur-startmenu", match = { namespace = "^rofi$" },          blur = true, ignore_alpha = 0.2 })
-hl.layer_rule({ name = "blur-swaync",    match = { namespace = "^swaync-.*$" },     blur = true, ignore_alpha = 0.2 })
+-- Mica/Acrylic blur for taskbar, start menu, flyouts and Alt+Tab
+hl.layer_rule({ name = "blur-taskbar",   match = { namespace = "^waybar$" },                    blur = true, ignore_alpha = 0.2 })
+hl.layer_rule({ name = "blur-startmenu", match = { namespace = "^rofi$" },                      blur = true, ignore_alpha = 0.2 })
+hl.layer_rule({ name = "blur-swaync",    match = { namespace = "^swaync-.*$" },                 blur = true, ignore_alpha = 0.2 })
+hl.layer_rule({ name = "blur-winshell",  match = { namespace = "^winshell-(qs|switcher)$" },    blur = true, ignore_alpha = 0.2 })
+hl.layer_rule({ name = "blur-osd",        match = { namespace = "^winshell-osd$" },             blur = true, ignore_alpha = 0.2 })
+hl.layer_rule({ name = "no-anim-switcher", match = { namespace = "^winshell-(switcher|catcher)$" }, no_anim = true })
 
 ---------------------------------------------------------------------
--- Tastenkürzel wie unter Windows
+-- Active window always comes to the front (taskbar, click, Alt+Tab).
+-- Minimized windows live in the hidden "special:minimized" workspace;
+-- activating one (e.g. from the taskbar) brings it back.
 ---------------------------------------------------------------------
-local win = "SUPER"
-
--- Windows-Taste alleine (beim Loslassen) = Startmenü
-hl.bind("Super_L", hl.dsp.exec_cmd(scripts .. "/startmenu.sh"), { release = true })
-hl.bind(win .. " + S", hl.dsp.exec_cmd(scripts .. "/startmenu.sh"))          -- Suche
-
-hl.bind(win .. " + E", hl.dsp.exec_cmd(fileManager))                         -- Explorer
-hl.bind(win .. " + R", hl.dsp.exec_cmd(scripts .. "/run.sh"))                -- Ausführen
-hl.bind(win .. " + I", hl.dsp.exec_cmd(scripts .. "/settings.sh"))           -- Einstellungen
-hl.bind(win .. " + A", hl.dsp.exec_cmd("swaync-client -t -sw"))              -- Schnelleinstellungen
-hl.bind(win .. " + N", hl.dsp.exec_cmd("swaync-client -t -sw"))              -- Benachrichtigungen
-hl.bind(win .. " + X", hl.dsp.exec_cmd(scripts .. "/powermenu.sh --menu"))   -- Power-Menü
-hl.bind(win .. " + L", hl.dsp.exec_cmd("pidof hyprlock || hyprlock"))        -- Sperren
-hl.bind(win .. " + V", hl.dsp.exec_cmd(scripts .. "/clipboard.sh"))          -- Zwischenablage-Verlauf
-hl.bind(win .. " + W", hl.dsp.exec_cmd(scripts .. "/wallpaper.sh pick"))     -- Hintergrund wählen
-hl.bind(win .. " + T", hl.dsp.exec_cmd(terminal))                            -- Terminal
-hl.bind(win .. " + B", hl.dsp.exec_cmd(browser))                             -- Browser
-hl.bind("CTRL + SHIFT + Escape", hl.dsp.exec_cmd("gnome-system-monitor"))    -- Task-Manager
-
--- Fenster
-hl.bind("ALT + F4", hl.dsp.window.close())
-hl.bind("ALT + Tab", function()
-    hl.dispatch(hl.dsp.window.cycle_next())
+hl.on("window.active", function()
+    local w = hl.get_active_window()
+    if w and w.workspace and w.workspace.name == "special:minimized" then
+        local ws = hl.get_active_workspace()
+        if ws and not ws.special then
+            hl.dispatch(hl.dsp.window.move({ workspace = ws.id, window = "address:" .. w.address }))
+        end
+        local sp = hl.get_active_special_workspace()
+        if sp and sp.name == "special:minimized" then
+            hl.dispatch(hl.dsp.workspace.toggle_special("minimized"))
+        end
+    end
     hl.dispatch(hl.dsp.window.alter_zorder({ mode = "top" }))
 end)
 
--- Snap: Win + Pfeiltasten
+---------------------------------------------------------------------
+-- Maximize like Windows: a maximized window is just a big floating window
+-- that fills the work area, so other windows can still come in front of it.
+-- (Hyprland's own "maximized" mode always draws the window on top.)
+-- Shell access: hyprctl eval 'WinMax("toggle" | "max" | "restore")'
+---------------------------------------------------------------------
+local BAR_HEIGHT = 32
+local OWN_TITLEBAR = { "^brave%-browser$", "^discord$", "^code$", "^code%-oss$", "^org%.gnome%." }
+local saved_geometry = {}
+
+local function has_bar(w)
+    for _, pat in ipairs(OWN_TITLEBAR) do
+        if (w.class or ""):match(pat) then return false end
+    end
+    return true
+end
+
+local function work_area(mon)
+    local r, s = mon.reserved, mon.scale
+    return mon.x + r.left, mon.y + r.top,
+           math.floor(mon.width / s) - r.left - r.right,
+           math.floor(mon.height / s) - r.top - r.bottom
+end
+
+local function set_geometry(addr, x, y, w, h)
+    local sel = "address:" .. addr
+    hl.dispatch(hl.dsp.window.resize({ x = w, y = h, window = sel }))
+    hl.dispatch(hl.dsp.window.move({ x = x, y = y, window = sel }))
+end
+
+function WinMax(action, w)
+    w = w or hl.get_active_window()
+    if not w or not w.mapped then return end
+    local a = w.address
+    if action == "toggle" then
+        action = saved_geometry[a] and "restore" or "max"
+    end
+    local mon = w.monitor or hl.get_active_monitor()
+    local x, y, ww, hh = work_area(mon)
+    local bar = has_bar(w) and BAR_HEIGHT or 0
+    if action == "max" then
+        if not saved_geometry[a] then
+            local g = { w.at.x, w.at.y, w.size.x, w.size.y }
+            -- window started maximized: restore to a centered 70% window later
+            if g[3] >= ww - 4 then
+                g = { x + math.floor(ww * 0.15), y + math.floor(hh * 0.12),
+                      math.floor(ww * 0.7), math.floor(hh * 0.7) }
+            end
+            saved_geometry[a] = g
+        end
+        set_geometry(a, x + 1, y + bar + 1, ww - 2, hh - bar - 2)
+    elseif action == "restore" and saved_geometry[a] then
+        local g = saved_geometry[a]
+        saved_geometry[a] = nil
+        set_geometry(a, g[1], g[2], g[3], g[4])
+    end
+end
+
+-- Called by the title bar when a drag starts: a maximized window shrinks back
+-- to its normal size and stays under the cursor at the same relative spot.
+function WinDragStart()
+    local w = hl.get_active_window()
+    if not w then return end
+    local g = saved_geometry[w.address]
+    if not g then return end
+    saved_geometry[w.address] = nil
+    local c = hl.get_cursor_pos()
+    local rel = (c.x - w.at.x) / math.max(1, w.size.x)
+    set_geometry(w.address, math.floor(c.x - g[3] * rel), w.at.y, g[3], g[4])
+end
+
+-- Apps asking to be maximized (their own maximize button, double click on
+-- their title bar) get the Windows-style maximize instead.
+hl.on("window.fullscreen", function(ev)
+    local w = (type(ev) == "table" and ev.address and ev) or hl.get_active_window()
+    if w and w.fullscreen == 1 then
+        hl.dispatch(hl.dsp.window.fullscreen({ mode = "maximized", action = "unset", window = "address:" .. w.address }))
+        WinMax("toggle", w)
+    end
+end)
+
+hl.on("window.close", function(ev)
+    if type(ev) == "table" and ev.address then saved_geometry[ev.address] = nil end
+end)
+
+-- Apps with their own title bar (Brave, Discord, …) ask to be minimized;
+-- Hyprland ignores that by default, so hide them like the "–" button does.
+hl.on("window.minimize", function(ev)
+    local w = (type(ev) == "table" and ev.address and ev) or hl.get_active_window()
+    if w and w.workspace and w.workspace.name ~= "special:minimized" then
+        hl.dispatch(hl.dsp.window.move({ workspace = "special:minimized", follow = false,
+                                         window = "address:" .. w.address }))
+    end
+end)
+
+-- New windows that don't fit the work area (e.g. Brave restoring an old size)
+-- open maximized, like on Windows; windows sticking out at the top are moved
+-- down so their title bar can always be grabbed.
+hl.on("window.open", function(ev)
+    local w = (type(ev) == "table" and ev.address and ev) or hl.get_active_window()
+    if not w or not w.floating then return end
+    local x, y, ww, hh = work_area(w.monitor or hl.get_active_monitor())
+    local bar = has_bar(w) and BAR_HEIGHT or 0
+    if w.size.x > ww - 2 or w.size.y > hh - bar - 2 then
+        WinMax("max", w)
+    elseif w.at.y < y + bar then
+        hl.dispatch(hl.dsp.window.move({ x = w.at.x, y = y + bar + 1, window = "address:" .. w.address }))
+    end
+end)
+
+---------------------------------------------------------------------
+-- Title bars like Windows 11 (hyprbars plugin, built with
+-- tools/build-hyprbars.sh). Skipped when the plugin is missing.
+---------------------------------------------------------------------
+local hyprbars = home .. "/.local/share/hypr-plugins/hyprbars.so"
+local f = io.open(hyprbars, "r")
+if f then
+    f:close()
+    local ok, err = pcall(hl.plugin.load, hyprbars)
+    if ok and hl.plugin.hyprbars then
+        hl.config({
+            plugin = {
+                hyprbars = {
+                    bar_height                 = 32,
+                    bar_color                  = "rgb(202020)",
+                    ["col.text"]               = "rgb(ffffff)",
+                    bar_text_font              = "Inter",
+                    bar_text_size              = 10,
+                    bar_text_align             = "left",
+                    bar_padding                = 14,
+                    bar_button_padding         = 20,
+                    bar_part_of_window         = true,
+                    bar_precedence_over_border = true,
+                    inactive_button_color      = "rgb(202020)",
+                    on_double_click            = scripts .. "/winctl.sh maximize",
+                },
+            },
+        })
+        -- buttons from right to left: close, maximize, minimize
+        local function btn(icon, action)
+            hl.plugin.hyprbars.add_button({
+                bg_color = "rgb(202020)",
+                fg_color = "rgb(ffffff)",
+                size     = 14,
+                icon     = icon,
+                action   = scripts .. "/winctl.sh " .. action,
+            })
+        end
+        btn("󰅖", "close")
+        btn("󰖯", "maximize")
+        btn("󰖰", "minimize")
+
+        -- apps that draw their own title bar (with X/□/–) don't get a second one
+        hl.window_rule({
+            name  = "own-titlebar",
+            match = { class = "^(brave-browser|discord|code|code-oss|org\\.gnome\\..*)$" },
+            ["hyprbars:no_bar"] = true,
+        })
+    elseif not ok then
+        hl.notification.create({ text = "hyprbars: " .. tostring(err), timeout = 8000, icon = "error" })
+    end
+end
+
+---------------------------------------------------------------------
+-- Keyboard shortcuts like on Windows
+---------------------------------------------------------------------
+local win = "SUPER"
+
+-- Windows key alone (on release) = start menu
+hl.bind("Super_L", hl.dsp.exec_cmd(scripts .. "/startmenu.sh"), { release = true })
+hl.bind(win .. " + S", hl.dsp.exec_cmd(scripts .. "/startmenu.sh"))          -- search
+
+hl.bind(win .. " + E", hl.dsp.exec_cmd(fileManager))                         -- File Explorer
+hl.bind(win .. " + R", hl.dsp.exec_cmd(scripts .. "/run.sh"))                -- Run
+hl.bind(win .. " + I", hl.dsp.exec_cmd(scripts .. "/settings.sh"))           -- Settings
+hl.bind(win .. " + A", hl.dsp.exec_cmd(winshell .. " qs"))                   -- quick settings
+hl.bind(win .. " + N", hl.dsp.exec_cmd("swaync-client -t -sw"))              -- notifications
+hl.bind(win .. " + X", hl.dsp.exec_cmd(scripts .. "/powermenu.sh --menu"))   -- power menu
+hl.bind(win .. " + L", hl.dsp.exec_cmd("pidof hyprlock || hyprlock"))        -- lock
+hl.bind(win .. " + V", hl.dsp.exec_cmd(scripts .. "/clipboard.sh"))          -- clipboard history
+hl.bind(win .. " + W", hl.dsp.exec_cmd(scripts .. "/wallpaper.sh pick"))     -- pick background
+hl.bind(win .. " + T", hl.dsp.exec_cmd(terminal))                            -- terminal
+hl.bind(win .. " + B", hl.dsp.exec_cmd(browser))                             -- browser
+hl.bind("CTRL + SHIFT + Escape", hl.dsp.exec_cmd("gnome-system-monitor"))    -- Task Manager
+
+-- Windows
+hl.bind("ALT + F4", hl.dsp.window.close())
+
+-- Talk to winshell directly through its pipe, so commands arrive in the
+-- order the keys were pressed (separate processes could overtake each other).
+-- Falls back to winshell-ctl (which starts the daemon) when it isn't running.
+local runtime = os.getenv("XDG_RUNTIME_DIR") or "/tmp"
+local function winshell_send(cmd)
+    local ready = io.open(runtime .. "/winshell.ready", "r")
+    local pid = ready and ready:read("*l")
+    if ready then ready:close() end
+    local alive = pid and io.open("/proc/" .. pid .. "/comm", "r")
+    if alive then
+        alive:close()
+        local fifo = io.open(runtime .. "/winshell.fifo", "a")
+        if fifo then
+            fifo:write(cmd .. "\n")
+            fifo:close()
+            return
+        end
+    end
+    hl.exec_cmd(winshell .. " " .. cmd)
+end
+
+-- Alt+Tab: hold Alt, press Tab to move through the windows, release Alt to switch
+local function switch(cmd)
+    return function()
+        winshell_send("switch " .. cmd)
+        hl.dispatch(hl.dsp.submap("alttab"))
+    end
+end
+local function switch_end(cmd)
+    return function()
+        winshell_send("switch " .. cmd)
+        hl.dispatch(hl.dsp.submap("reset"))
+    end
+end
+hl.bind("ALT + Tab",         switch("next"))
+hl.bind("ALT + SHIFT + Tab", switch("prev"))
+hl.define_submap("alttab", function()
+    hl.bind("ALT + Tab",         switch("next"), { repeating = true })
+    hl.bind("ALT + SHIFT + Tab", switch("prev"), { repeating = true })
+    hl.bind("ALT + Right",       switch("next"))
+    hl.bind("ALT + Left",        switch("prev"))
+    hl.bind("ALT + Alt_L",       switch_end("commit"), { release = true, transparent = true })
+    hl.bind("Alt_L",             switch_end("commit"), { release = true, ignore_mods = true })
+    hl.bind("ALT + Return",      switch_end("commit"))
+    hl.bind("ALT + Escape",      switch_end("cancel"))
+    hl.bind("Escape",            switch_end("cancel"))
+end)
+
+-- Snap: Win + arrow keys
 hl.bind(win .. " + Left",  hl.dsp.exec_cmd(scripts .. "/snap.sh left"))
 hl.bind(win .. " + Right", hl.dsp.exec_cmd(scripts .. "/snap.sh right"))
-hl.bind(win .. " + Up",    hl.dsp.window.fullscreen({ mode = "maximized", action = "toggle" }))
+hl.bind(win .. " + Up",    function() WinMax("max") end)
 hl.bind(win .. " + Down",  hl.dsp.exec_cmd(scripts .. "/snap.sh restore"))
 hl.bind(win .. " + SHIFT + Up", hl.dsp.window.fullscreen({ mode = "fullscreen", action = "toggle" }))
 
--- Fenster mit Win + Maus ziehen / vergrössern (zusätzlich zur Titelleiste)
+-- Move / resize windows with Win + mouse (in addition to the title bar)
 hl.bind(win .. " + mouse:272", hl.dsp.window.drag(),   { mouse = true })
 hl.bind(win .. " + mouse:273", hl.dsp.window.resize(), { mouse = true })
 
--- Virtuelle Desktops wie Windows: Strg + Win + Pfeil / Strg + Win + D
+-- Virtual desktops like Windows: Ctrl + Win + arrows / Ctrl + Win + D
 hl.bind("CTRL + " .. win .. " + Right", hl.dsp.focus({ workspace = "r+1" }))
 hl.bind("CTRL + " .. win .. " + Left",  hl.dsp.focus({ workspace = "r-1" }))
 hl.bind("CTRL + " .. win .. " + D",     hl.dsp.focus({ workspace = "empty" }))
 hl.bind(win .. " + SHIFT + Right", hl.dsp.window.move({ workspace = "r+1" }))
 hl.bind(win .. " + SHIFT + Left",  hl.dsp.window.move({ workspace = "r-1" }))
 
--- Screenshots: Win + Shift + S (Ausschnitt) / Druck (ganzer Bildschirm)
+-- Screenshots: Print / Win + Shift + S select a region with the mouse,
+-- Shift + Print captures the whole screen
+hl.bind("Print",               hl.dsp.exec_cmd(scripts .. "/screenshot.sh area"))
 hl.bind(win .. " + SHIFT + S", hl.dsp.exec_cmd(scripts .. "/screenshot.sh area"))
-hl.bind("Print",               hl.dsp.exec_cmd(scripts .. "/screenshot.sh full"))
+hl.bind("SHIFT + Print",       hl.dsp.exec_cmd(scripts .. "/screenshot.sh full"))
 
--- Laptop-Tasten: Lautstärke, Helligkeit, Medien
-hl.bind("XF86AudioRaiseVolume", hl.dsp.exec_cmd("wpctl set-volume -l 1 @DEFAULT_AUDIO_SINK@ 5%+"), { locked = true, repeating = true })
-hl.bind("XF86AudioLowerVolume", hl.dsp.exec_cmd("wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%-"),      { locked = true, repeating = true })
-hl.bind("XF86AudioMute",        hl.dsp.exec_cmd("wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle"),     { locked = true })
+-- Laptop keys: volume, brightness, media
+hl.bind("XF86AudioRaiseVolume", hl.dsp.exec_cmd("wpctl set-volume -l 1 @DEFAULT_AUDIO_SINK@ 5%+; " .. winshell .. " osd volume"), { locked = true, repeating = true })
+hl.bind("XF86AudioLowerVolume", hl.dsp.exec_cmd("wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%-; " .. winshell .. " osd volume"),      { locked = true, repeating = true })
+hl.bind("XF86AudioMute",        hl.dsp.exec_cmd("wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle; " .. winshell .. " osd volume"),     { locked = true })
 hl.bind("XF86AudioMicMute",     hl.dsp.exec_cmd("wpctl set-mute @DEFAULT_AUDIO_SOURCE@ toggle"),   { locked = true })
-hl.bind("XF86MonBrightnessUp",  hl.dsp.exec_cmd("brightnessctl -e4 -n2 set 5%+"),                  { locked = true, repeating = true })
-hl.bind("XF86MonBrightnessDown",hl.dsp.exec_cmd("brightnessctl -e4 -n2 set 5%-"),                  { locked = true, repeating = true })
+hl.bind("XF86MonBrightnessUp",  hl.dsp.exec_cmd("brightnessctl -e4 -n2 set 5%+; " .. winshell .. " osd brightness"),                  { locked = true, repeating = true })
+hl.bind("XF86MonBrightnessDown",hl.dsp.exec_cmd("brightnessctl -e4 -n2 set 5%-; " .. winshell .. " osd brightness"),                  { locked = true, repeating = true })
 hl.bind("XF86AudioNext",  hl.dsp.exec_cmd("playerctl next"),       { locked = true })
 hl.bind("XF86AudioPause", hl.dsp.exec_cmd("playerctl play-pause"), { locked = true })
 hl.bind("XF86AudioPlay",  hl.dsp.exec_cmd("playerctl play-pause"), { locked = true })
 hl.bind("XF86AudioPrev",  hl.dsp.exec_cmd("playerctl previous"),   { locked = true })
 
 ---------------------------------------------------------------------
--- Persönliche Einstellungen (vom Installer erzeugt, optional)
+-- Personal settings (optional)
 ---------------------------------------------------------------------
 local ok, err = pcall(require, "user")
 if not ok and not tostring(err):find("not found") then

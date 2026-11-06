@@ -1,9 +1,9 @@
-/* ═══ Startmenü im Windows-11-Stil ═══ */
+/* ═══ Start menu, Windows 11 style ═══ */
 @import "colors.rasi"
 
 configuration {
     show-icons:             true;
-    icon-theme:             "Win11-dark";
+    icon-theme:             "Win11-modern";
     drun-display-format:    "{name}";
     drun-use-desktop-cache: true;
     hover-select:           true;
@@ -35,7 +35,7 @@ mainbox {
     children: [ "searchbox", "header", "listview", "footer" ];
 }
 
-/* ── Suchfeld: schmal, Pille, dezenter Rand ─────────────────────── */
+/* ── Search box: slim pill with a subtle border ─────────────────── */
 searchbox {
     orientation:      horizontal;
     margin:           24px 32px 0 32px;
@@ -57,7 +57,7 @@ textbox-search-icon {
     padding:        7px 0;
 }
 entry {
-    placeholder:       "Nach Apps, Einstellungen und Dokumenten suchen";
+    placeholder:       "Search for apps, settings, and documents";
     placeholder-color: @fg-dim;
     cursor:            text;
     vertical-align:    0.5;
@@ -65,7 +65,7 @@ entry {
     font:              "Inter 9.5";
 }
 
-/* ── Überschrift ────────────────────────────────────────────────── */
+/* ── Heading ──────────────────────────────────────────────────── */
 header {
     orientation: horizontal;
     margin:      22px 56px 12px 56px;
@@ -73,11 +73,11 @@ header {
     children:    [ "textbox-title" ];
 }
 textbox-title {
-    str:  "Alle Apps";
+    str:  "All apps";
     font: "Inter SemiBold 10";
 }
 
-/* ── App-Raster ─────────────────────────────────────────────────── */
+/* ── App grid ─────────────────────────────────────────────────── */
 listview {
     columns:       6;
     lines:         4;
@@ -111,7 +111,7 @@ element-text {
     cursor:           inherit;
 }
 
-/* ── Fusszeile: Benutzer links, Alle Apps / Ein/Aus rechts ─────── */
+/* ── Footer: user on the left, all apps / power on the right ────── */
 footer {
     orientation:      horizontal;
     padding:          10px 48px;

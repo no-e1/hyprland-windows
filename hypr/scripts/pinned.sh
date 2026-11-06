@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Angeheftete Taskleisten-Apps:
-#   pinned.sh status <klasse> <tooltip> <symbol>  -> JSON für Waybar (zeigt "läuft"-Strich)
-#   pinned.sh open   <klasse> <befehl>    -> Fenster fokussieren oder App starten
+# Pinned taskbar apps:
+#   pinned.sh status <class> <tooltip> [text]  -> JSON for Waybar (running/active indicator)
+#   pinned.sh open   <class> <command>         -> focus the window or launch the app
 mode="$1"; cls="$2"; arg="$3"
 
 addr() {
@@ -16,7 +16,7 @@ case "$mode" in
         class=""
         [ -n "$a" ] && class="running"
         [ -n "$a" ] && [ "$a" = "$active" ] && class="active"
-        printf '{"text":"%s","class":"%s","tooltip":"%s"}\n' "$4" "$class" "$arg" ;;
+        printf '{"text":"%s","class":"%s","tooltip":"%s"}\n' "${4:- }" "$class" "$arg" ;;
     open)
         a=$(addr)
         if [ -n "$a" ]; then

@@ -1,4 +1,4 @@
-/* Gemeinsame Farben – Windows 11 dunkel */
+/* Shared colors – Windows 11 dark */
 * {
     bg:         #202020f5;
     bg-solid:   #202020;

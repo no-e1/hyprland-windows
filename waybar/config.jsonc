@@ -1,8 +1,9 @@
+// Windows 11 style taskbar
 {
     "layer": "top",
     "position": "bottom",
     "height": 48,
-    "spacing": 2,
+    "spacing": 0,
     "exclusive": true,
     "reload_style_on_change": true,
 
@@ -14,19 +15,18 @@
         "exec": "curl -sf --max-time 8 'https://wttr.in/?format=%c+%t' | sed 's/+//'",
         "interval": 1800,
         "format": "{}",
-        "tooltip-format": "Wetter – klicken für die Vorhersage",
+        "tooltip-format": "Weather – click for the forecast",
         "on-click": "xdg-open https://wttr.in"
     },
 
     "custom/start": {
-        "format": "󰕰",
+        "format": " ",
         "tooltip-format": "Start",
         "on-click": "~/.config/hypr/scripts/startmenu.sh"
     },
 
-
     "custom/pin-explorer": {
-        "exec": "~/.config/hypr/scripts/pinned.sh status '^nemo$' 'Explorer' '󰉋'",
+        "exec": "~/.config/hypr/scripts/pinned.sh status '^nemo$' 'File Explorer'",
         "return-type": "json",
         "interval": 2,
         "on-click": "~/.config/hypr/scripts/pinned.sh open '^nemo$' nemo",
@@ -34,7 +34,7 @@
     },
 
     "custom/pin-browser": {
-        "exec": "~/.config/hypr/scripts/pinned.sh status '^(brave-browser)$' 'Brave' '󰇧'",
+        "exec": "~/.config/hypr/scripts/pinned.sh status '^(brave-browser)$' 'Brave'",
         "return-type": "json",
         "interval": 2,
         "on-click": "~/.config/hypr/scripts/pinned.sh open '^(brave-browser)$' brave-browser",
@@ -42,7 +42,7 @@
     },
 
     "custom/pin-terminal": {
-        "exec": "~/.config/hypr/scripts/pinned.sh status '^kitty$' 'Terminal' '󰆍'",
+        "exec": "~/.config/hypr/scripts/pinned.sh status '^kitty$' 'Terminal'",
         "return-type": "json",
         "interval": 2,
         "on-click": "~/.config/hypr/scripts/pinned.sh open '^kitty$' kitty",
@@ -52,7 +52,7 @@
     "wlr/taskbar": {
         "format": "{icon}",
         "icon-size": 24,
-        "icon-theme": "Win11-dark",
+        "icon-theme": "Win11-modern",
         "tooltip-format": "{title}",
         "on-click": "activate",
         "on-click-middle": "close",
@@ -60,63 +60,45 @@
     },
 
     "tray": {
-        "icon-size": 18,
-        "spacing": 10
+        "icon-size": 16,
+        "spacing": 12
     },
 
     "group/quick": {
         "orientation": "horizontal",
-        "modules": ["network", "bluetooth", "pulseaudio", "battery"]
+        "modules": ["custom/net", "custom/vol", "custom/bat"]
     },
 
-    "network": {
-        "format-wifi": "{icon}",
-        "format-ethernet": "󰈀",
-        "format-disconnected": "󰤮",
-        "format-disabled": "󰤮",
-        "format-icons": ["󰤟", "󰤢", "󰤥", "󰤨"],
-        "tooltip-format-wifi": "{essid} – {signalStrength}%",
-        "tooltip-format-ethernet": "Ethernet verbunden",
-        "tooltip-format-disconnected": "Nicht verbunden",
-        "on-click": "swaync-client -t -sw",
-        "on-click-right": "~/.config/hypr/scripts/wifimenu.sh"
+    "custom/net": {
+        "exec": "~/.config/waybar/scripts/status.sh net",
+        "return-type": "json",
+        "restart-interval": 5,
+        "on-click": "~/.config/hypr/winshell/winshell-ctl qs",
+        "on-click-right": "~/.config/hypr/winshell/winshell-ctl qs wifi"
     },
 
-    "bluetooth": {
-        "format": "󰂯",
-        "format-disabled": "",
-        "format-off": "",
-        "format-connected": "󰂱",
-        "tooltip-format": "Bluetooth: {status}",
-        "tooltip-format-connected": "Verbunden: {device_alias}",
-        "on-click": "swaync-client -t -sw",
-        "on-click-right": "blueman-manager"
+    "custom/vol": {
+        "exec": "~/.config/waybar/scripts/status.sh vol",
+        "return-type": "json",
+        "restart-interval": 5,
+        "on-click": "~/.config/hypr/winshell/winshell-ctl qs",
+        "on-click-right": "pavucontrol",
+        "on-scroll-up": "wpctl set-volume -l 1 @DEFAULT_AUDIO_SINK@ 2%+",
+        "on-scroll-down": "wpctl set-volume @DEFAULT_AUDIO_SINK@ 2%-"
     },
 
-    "pulseaudio": {
-        "format": "{icon}",
-        "format-muted": "󰝟",
-        "format-icons": { "default": ["󰕿", "󰖀", "󰕾"], "headphone": "󰋋" },
-        "tooltip-format": "Lautstärke: {volume}%",
-        "scroll-step": 2,
-        "on-click": "swaync-client -t -sw",
-        "on-click-right": "pavucontrol"
-    },
-
-    "battery": {
-        "states": { "warning": 20, "critical": 10 },
-        "format": "{icon}",
-        "format-charging": "󰂄",
-        "format-plugged": "󰚥",
-        "format-icons": ["󰂎", "󰁺", "󰁻", "󰁼", "󰁽", "󰁾", "󰁿", "󰂀", "󰂁", "󰂂", "󰁹"],
-        "tooltip-format": "Akku: {capacity}% – {timeTo}",
-        "on-click": "swaync-client -t -sw"
+    "custom/bat": {
+        "exec": "~/.config/waybar/scripts/status.sh bat",
+        "return-type": "json",
+        "interval": 20,
+        "on-click": "~/.config/hypr/winshell/winshell-ctl qs"
     },
 
     "clock": {
         "format": "{:%H:%M\n%d.%m.%Y}",
+        "justify": "right",
         "tooltip-format": "<tt><small>{calendar}</small></tt>",
-        "locale": "de_CH.UTF-8",
+        "locale": "en_GB.UTF-8",
         "calendar": {
             "mode": "month",
             "format": { "today": "<span color='#4cc2ff'><b>{}</b></span>" }

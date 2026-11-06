@@ -1,4 +1,4 @@
-/* Hintergrund-Auswahl mit Vorschaubildern (Win + W) */
+/* Background picker with previews (Win + W) */
 @import "colors.rasi"
 
 configuration {

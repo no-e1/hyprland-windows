@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# Hintergrundbild setzen – Bilder, GIFs UND Videos (animiert).
-#   wallpaper.sh <datei>    setzt eine Datei
-#   wallpaper.sh pick       Auswahl per Menü (Win + W)
-#   wallpaper.sh next       nächstes Bild im Ordner
-#   wallpaper.sh restore    letztes Bild wiederherstellen (Autostart)
+# Set the desktop background – images, GIFs AND videos (animated).
+#   wallpaper.sh <file>     set a file
+#   wallpaper.sh pick       choose from a menu (Win + W)
+#   wallpaper.sh next       next image in the folder
+#   wallpaper.sh restore    restore the last one (autostart)
 #
-# Ordner: ~/Bilder/Wallpapers  (einfach eigene Bilder/Videos hineinlegen)
+# Folder: ~/Pictures/Wallpapers  (just drop your own images/videos in there)
 
-WALLDIR="$(xdg-user-dir PICTURES 2>/dev/null || echo "$HOME/Bilder")/Wallpapers"
+WALLDIR="$(xdg-user-dir PICTURES 2>/dev/null || echo "$HOME/Pictures")/Wallpapers"
 STATE="$HOME/.config/hypr/.current_wallpaper"
 mkdir -p "$WALLDIR"
 
@@ -28,15 +28,15 @@ stop_all() {
 
 apply() {
     local f="$1"
-    [ -f "$f" ] || { notify-send "Hintergrund" "Datei nicht gefunden: $f"; return 1; }
+    [ -f "$f" ] || { notify-send "Background" "File not found: $f"; return 1; }
     stop_all
     if command -v mpvpaper >/dev/null; then
-        # Video/GIF animiert, Bild statisch – alles über mpv (Hardware-Decoding)
+        # video/GIF animated, image static – all through mpv (hardware decoding)
         local opts="no-audio --loop-file=inf --panscan=1.0 --hwdec=auto --vo=gpu --profile=fast --really-quiet"
         is_video "$f" || opts="$opts --image-display-duration=inf"
         setsid -f mpvpaper -p -o "$opts" ALL "$f" >/dev/null 2>&1
     else
-        # Fallback ohne mpvpaper: statisches Bild (bei Videos das Vorschaubild)
+        # fallback without mpvpaper: static image (poster frame for videos)
         local img="$f"
         if is_video "$f"; then
             img="${f%.*}.poster.jpg"
@@ -69,7 +69,7 @@ case "${1:-restore}" in
                         name="▶  $name"
                     fi
                     printf '%s\0icon\x1f%s\n' "$name" "$icon"
-                 done | rofi -dmenu -i -p "Hintergrund" -show-icons -theme "$HOME/.config/rofi/wallpaper.rasi")
+                 done | rofi -dmenu -i -p "Background" -show-icons -theme "$HOME/.config/rofi/wallpaper.rasi")
         [ -z "$choice" ] && exit 0
         apply "$WALLDIR/${choice#▶  }" ;;
     *)

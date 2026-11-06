@@ -1,9 +1,9 @@
-/* Ein/Aus-Menü (Win + X) */
+/* Power menu (Win + X) */
 @import "colors.rasi"
 
 configuration {
     show-icons:      true;
-    icon-theme:      "Win11-dark";
+    icon-theme:      "Win11-modern";
     hover-select:    true;
     me-select-entry: "";
     me-accept-entry: "MousePrimary";

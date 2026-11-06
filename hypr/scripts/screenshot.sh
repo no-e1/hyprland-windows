@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Screenshots wie das Windows-Snipping-Tool: in die Zwischenablage UND als Datei.
-dir="$(xdg-user-dir PICTURES 2>/dev/null || echo "$HOME/Bilder")/Bildschirmfotos"
+# Screenshots like the Windows Snipping Tool: copied to clipboard AND saved as a file.
+dir="$(xdg-user-dir PICTURES 2>/dev/null || echo "$HOME/Pictures")/Screenshots"
 mkdir -p "$dir"
 file="$dir/Screenshot_$(date +%Y-%m-%d_%H-%M-%S).png"
 
@@ -12,4 +12,4 @@ esac
 
 [ -f "$file" ] || exit 1
 wl-copy < "$file"
-notify-send -i "$file" "Bildschirmfoto kopiert" "Gespeichert in $(basename "$dir")"
+notify-send -i "$file" "Screenshot copied" "Saved to $(basename "$dir")"

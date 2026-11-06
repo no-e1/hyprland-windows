@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Startet den ersten vorhandenen Polkit-Agenten (für Passwortabfragen)
+# Starts the first available polkit agent (password prompts)
 for a in \
     /usr/libexec/hyprpolkitagent \
     /usr/libexec/kf6/polkit-kde-authentication-agent-1 \

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Setzt das Windows-11-Design für GTK-Apps bei jedem Hyprland-Start.
-# (Nötig, weil Plasma diese Werte beim eigenen Login überschreiben kann.)
+# Applies the Windows 11 look to GTK apps on every Hyprland start
+# (Plasma may overwrite these values on its own login).
 conf="$HOME/.config/hypr/theme.env"
 [ -f "$conf" ] && . "$conf"
 

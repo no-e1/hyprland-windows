@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# Windows-Snap: Fenster an linke/rechte Bildschirmhälfte andocken.
-# Benutzung: snap.sh left | right | restore
+# Windows Snap: dock the window to the left/right half of the screen.
+# Usage: snap.sh left | right | restore
 set -euo pipefail
 
 dir="${1:-left}"
 win=$(hyprctl activewindow -j)
 [ "$(jq -r '.address // empty' <<<"$win")" ] || exit 0
 
-# Maximiert? Dann erst normalisieren
+# Maximized? Restore first
 if [ "$(jq -r '.fullscreen' <<<"$win")" != "0" ]; then
     hyprctl dispatch 'hl.dsp.window.fullscreen({ mode = "maximized", action = "unset" })' >/dev/null
     [ "$dir" = "restore" ] && exit 0
@@ -16,7 +16,7 @@ fi
 mon=$(hyprctl monitors -j | jq '.[] | select(.focused == true)')
 read -r mx my mw mh scale rl rt rr rb < <(jq -r '[.x, .y, .width, .height, .scale, .reserved[0], .reserved[1], .reserved[2], .reserved[3]] | @tsv' <<<"$mon")
 
-# logische Grösse (berücksichtigt Skalierung) minus Taskleiste
+# logical size (respects scaling) minus taskbar
 read -r W H < <(awk -v w="$mw" -v h="$mh" -v s="$scale" 'BEGIN{printf "%d %d\n", w/s, h/s}')
 ax=$((mx + rl)); ay=$((my + rt))
 aw=$((W - rl - rr)); ah=$((H - rt - rb))

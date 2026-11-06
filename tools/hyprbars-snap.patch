@@ -1,0 +1,35 @@
+diff --git a/hyprbars/barDeco.cpp b/hyprbars/barDeco.cpp
+index e57f77b..cb84640 100644
+--- a/hyprbars/barDeco.cpp
++++ b/hyprbars/barDeco.cpp
+@@ -275,6 +275,21 @@ void CHyprBar::handleUpEvent(Event::SCallbackInfo& info) {
+         if (m_bTouchEv)
+             (void)Config::Actions::floatWindow(Config::Actions::eTogglableAction::TOGGLE_ACTION_DISABLE);
+ 
++        // Windows-like snapping: drop at the top edge to maximize, left/right edge to snap to a half.
++        const auto MOUSE = g_pInputManager->getMouseCoordsInternal();
++        const auto MON   = Desktop::focusState()->monitor();
++        if (MON && !m_bTouchEv) {
++            const char* edge = nullptr;
++            if (MOUSE.y <= MON->m_position.y + 3)
++                edge = "top";
++            else if (MOUSE.x <= MON->m_position.x + 3)
++                edge = "left";
++            else if (MOUSE.x >= MON->m_position.x + MON->m_size.x - 4)
++                edge = "right";
++            if (edge)
++                Config::Supplementary::executor()->spawn(std::string{"$HOME/.config/hypr/scripts/winctl.sh snap "} + edge);
++        }
++
+         LOG(Log::DEBUG, "[hyprbars] Dragging ended on {:x}", (uintptr_t)m_pWindow.lock().get());
+     }
+ 
+@@ -284,6 +299,8 @@ void CHyprBar::handleUpEvent(Event::SCallbackInfo& info) {
+ }
+ 
+ void CHyprBar::handleMovement() {
++    // dragging a maximized window restores its normal size (like Windows)
++    Config::Supplementary::executor()->spawn("$HOME/.config/hypr/scripts/winctl.sh drag-start");
+     g_layoutManager->beginDragTarget(m_pWindow.lock()->layoutTarget(), MBIND_MOVE);
+     m_bDraggingThis = true;
+     LOG(Log::DEBUG, "[hyprbars] Dragging initiated on {:x}", (uintptr_t)m_pWindow.lock().get());

@@ -6,15 +6,13 @@
     "control-center-layer": "top",
     "layer-shell": true,
     "cssPriority": "user",
-
     "control-center-margin-top": 12,
     "control-center-margin-bottom": 12,
     "control-center-margin-right": 12,
     "control-center-margin-left": 0,
     "control-center-width": 380,
     "fit-to-screen": false,
-    "control-center-height": 620,
-
+    "control-center-height": 560,
     "notification-window-width": 380,
     "notification-icon-size": 48,
     "notification-body-image-height": 120,
@@ -28,75 +26,19 @@
     "hide-on-clear": false,
     "hide-on-action": true,
     "script-fail-notify": true,
-
     "widgets": [
-        "buttons-grid",
-        "backlight",
-        "volume",
-        "mpris",
         "title",
         "dnd",
         "notifications"
     ],
-
     "widget-config": {
-        "buttons-grid": {
-            "actions": [
-                {
-                    "label": "󰖩   WLAN",
-                    "type": "toggle",
-                    "active": true,
-                    "command": "sh -c '[ \"$SWAYNC_TOGGLE_STATE\" = true ] && nmcli radio wifi on || nmcli radio wifi off'",
-                    "update-command": "sh -c '[ \"$(nmcli radio wifi)\" = enabled ] && echo true || echo false'"
-                },
-                {
-                    "label": "󰂯   Bluetooth",
-                    "type": "toggle",
-                    "active": false,
-                    "command": "sh -c '[ \"$SWAYNC_TOGGLE_STATE\" = true ] && bluetoothctl power on || bluetoothctl power off'",
-                    "update-command": "sh -c 'bluetoothctl show | grep -q \"Powered: yes\" && echo true || echo false'"
-                },
-                {
-                    "label": "󰀝   Flugmodus",
-                    "type": "toggle",
-                    "active": false,
-                    "command": "sh -c '[ \"$SWAYNC_TOGGLE_STATE\" = true ] && nmcli radio all off || nmcli radio all on'",
-                    "update-command": "sh -c '[ \"$(nmcli radio wifi)\" = disabled ] && [ \"$(nmcli radio wwan 2>/dev/null || echo disabled)\" = disabled ] && echo true || echo false'"
-                },
-                {
-                    "label": "󰤨   Netzwerke",
-                    "command": "sh -c 'swaync-client -cp; ~/.config/hypr/scripts/wifimenu.sh'"
-                },
-                {
-                    "label": "󰂰   Geräte",
-                    "command": "sh -c 'swaync-client -cp; blueman-manager'"
-                },
-                {
-                    "label": "󰒓   Einstellungen",
-                    "command": "sh -c 'swaync-client -cp; ~/.config/hypr/scripts/settings.sh'"
-                }
-            ]
-        },
-        "backlight": {
-            "label": "󰃟",
-            "device": "amdgpu_bl1",
-            "min": 5
-        },
-        "volume": {
-            "label": "󰕾",
-            "show-per-app": false
-        },
-        "mpris": {
-            "image-size": 64,
-            "blur": true
-        },
         "title": {
-            "text": "Benachrichtigungen",
+            "text": "Notifications",
             "clear-all-button": true,
-            "button-text": "Alle löschen"
+            "button-text": "Clear all"
         },
         "dnd": {
-            "text": "Nicht stören"
+            "text": "Do not disturb"
         }
     }
 }
