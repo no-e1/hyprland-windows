@@ -1,0 +1,131 @@
+/* ═══ Startmenü im Windows-11-Stil ═══ */
+@import "colors.rasi"
+
+configuration {
+    show-icons:            true;
+    icon-theme:            "Win11-dark";
+    display-drun:          "󰀻  Alle Apps";
+    drun-display-format:   "{name}";
+    hover-select:          true;
+    me-select-entry:       "";
+    me-accept-entry:       "MousePrimary";
+    display-power:         "⏻  Ein/Aus";
+    sort:                  true;
+    sorting-method:        "fzf";
+}
+
+window {
+    location:         south;
+    anchor:           south;
+    y-offset:         -60px;
+    width:            660px;
+    height:           640px;
+    border:           1px;
+    border-color:     @border;
+    border-radius:    10px;
+    background-color: @bg;
+}
+
+mainbox {
+    spacing:  0;
+    children: [ "searchbox", "header", "listview", "footer" ];
+}
+
+/* Suchfeld oben */
+searchbox {
+    orientation:      horizontal;
+    margin:           26px 32px 18px 32px;
+    padding:          10px 16px;
+    spacing:          12px;
+    border:           0 0 2px 0;
+    border-color:     @accent;
+    border-radius:    20px;
+    background-color: @surface;
+    children:         [ "textbox-search-icon", "entry" ];
+}
+textbox-search-icon {
+    expand:     false;
+    str:        "󰍉";
+    text-color: @fg-dim;
+    font:       "Symbols Nerd Font 13";
+    vertical-align: 0.5;
+}
+entry {
+    placeholder:       "Apps, Einstellungen und Dokumente durchsuchen";
+    placeholder-color: @fg-dim;
+    cursor:            text;
+    vertical-align:    0.5;
+}
+
+/* Überschrift */
+header {
+    orientation: horizontal;
+    margin:      4px 44px 10px 44px;
+    children:    [ "textbox-title" ];
+}
+textbox-title {
+    str:  "Angeheftet & Alle Apps";
+    font: "Segoe UI Variable Text Semibold 10.5, Inter SemiBold 10.5, Noto Sans Bold 10.5";
+}
+
+/* App-Raster */
+listview {
+    columns:      6;
+    lines:        4;
+    fixed-height: true;
+    fixed-columns: true;
+    spacing:      4px;
+    margin:       0 32px 16px 32px;
+    scrollbar:    false;
+    cycle:        false;
+    dynamic:      false;
+}
+element {
+    orientation:   vertical;
+    padding:       12px 4px 10px 4px;
+    spacing:       8px;
+    border-radius: 6px;
+    cursor:        pointer;
+}
+element normal.normal, element alternate.normal { background-color: transparent; }
+element selected.normal { background-color: @selected; }
+element-icon {
+    size:             38px;
+    horizontal-align: 0.5;
+    cursor:           inherit;
+}
+element-text {
+    horizontal-align: 0.5;
+    vertical-align:   0.5;
+    font:             "Segoe UI Variable Text 9, Inter 9, Noto Sans 9";
+    cursor:           inherit;
+}
+
+/* Fusszeile mit Ein/Aus-Knopf (unten rechts, wie Windows) */
+footer {
+    orientation:      horizontal;
+    padding:          10px 32px;
+    background-color: @bg-footer;
+    border:           1px 0 0 0;
+    border-color:     @border;
+    children:         [ "textbox-user", "mode-switcher" ];
+}
+textbox-user {
+    str:            "󰀄   noel";
+    vertical-align: 0.5;
+    font:           "Segoe UI Variable Text 10, Inter 10, Noto Sans 10";
+}
+mode-switcher {
+    expand:  false;
+    spacing: 4px;
+}
+button {
+    padding:       8px 14px;
+    border-radius: 6px;
+    text-color:    @fg-dim;
+    cursor:        pointer;
+}
+button selected { background-color: @selected; text-color: @fg; }
+
+message { margin: 0 32px; }
+textbox { text-color: @fg; }

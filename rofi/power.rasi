@@ -1,0 +1,32 @@
+/* Ein/Aus-Menü (Win + X) */
+@import "colors.rasi"
+
+configuration {
+    show-icons:      true;
+    icon-theme:      "Win11-dark";
+    hover-select:    true;
+    me-select-entry: "";
+    me-accept-entry: "MousePrimary";
+}
+
+window {
+    location:         south;
+    anchor:           south;
+    y-offset:         -60px;
+    width:            280px;
+    border:           1px;
+    border-color:     @border;
+    border-radius:    10px;
+    background-color: @bg;
+}
+mainbox  { padding: 8px; children: [ "listview" ]; }
+listview { lines: 6; fixed-height: false; scrollbar: false; spacing: 2px; }
+element {
+    padding:       10px 12px;
+    spacing:       14px;
+    border-radius: 6px;
+    cursor:        pointer;
+}
+element selected.normal { background-color: @selected; }
+element-icon { size: 20px; cursor: inherit; }
+element-text { vertical-align: 0.5; cursor: inherit; }

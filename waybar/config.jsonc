@@ -1,0 +1,137 @@
+{
+    "layer": "top",
+    "position": "bottom",
+    "height": 48,
+    "spacing": 2,
+    "exclusive": true,
+    "reload_style_on_change": true,
+
+    "modules-left":   ["custom/weather"],
+    "modules-center": ["custom/start", "custom/search", "custom/pin-explorer", "custom/pin-browser", "custom/pin-terminal", "wlr/taskbar"],
+    "modules-right":  ["tray", "group/quick", "clock", "custom/peek"],
+
+    "custom/weather": {
+        "exec": "curl -sf --max-time 8 'https://wttr.in/?format=%c+%t' | sed 's/+//'",
+        "interval": 1800,
+        "format": "{}",
+        "tooltip-format": "Wetter – klicken für die Vorhersage",
+        "on-click": "xdg-open https://wttr.in"
+    },
+
+    "custom/start": {
+        "format": "󰕰",
+        "tooltip-format": "Start",
+        "on-click": "~/.config/hypr/scripts/startmenu.sh"
+    },
+
+    "custom/search": {
+        "format": "󰍉  Suche",
+        "tooltip-format": "Suche",
+        "on-click": "~/.config/hypr/scripts/startmenu.sh"
+    },
+
+    "custom/pin-explorer": {
+        "exec": "~/.config/hypr/scripts/pinned.sh status '^nemo$' 'Explorer' '󰉋'",
+        "return-type": "json",
+        "interval": 2,
+        "on-click": "~/.config/hypr/scripts/pinned.sh open '^nemo$' nemo",
+        "on-click-middle": "nemo"
+    },
+
+    "custom/pin-browser": {
+        "exec": "~/.config/hypr/scripts/pinned.sh status '^(brave-browser)$' 'Brave' '󰇧'",
+        "return-type": "json",
+        "interval": 2,
+        "on-click": "~/.config/hypr/scripts/pinned.sh open '^(brave-browser)$' brave-browser",
+        "on-click-middle": "brave-browser --new-window"
+    },
+
+    "custom/pin-terminal": {
+        "exec": "~/.config/hypr/scripts/pinned.sh status '^kitty$' 'Terminal' '󰆍'",
+        "return-type": "json",
+        "interval": 2,
+        "on-click": "~/.config/hypr/scripts/pinned.sh open '^kitty$' kitty",
+        "on-click-middle": "kitty"
+    },
+
+    "wlr/taskbar": {
+        "format": "{icon}",
+        "icon-size": 24,
+        "icon-theme": "Win11-dark",
+        "tooltip-format": "{title}",
+        "on-click": "activate",
+        "on-click-middle": "close",
+        "ignore-list": ["nemo", "brave-browser", "kitty"]
+    },
+
+    "tray": {
+        "icon-size": 18,
+        "spacing": 10
+    },
+
+    "group/quick": {
+        "orientation": "horizontal",
+        "modules": ["network", "bluetooth", "pulseaudio", "battery"]
+    },
+
+    "network": {
+        "format-wifi": "{icon}",
+        "format-ethernet": "󰈀",
+        "format-disconnected": "󰤮",
+        "format-disabled": "󰤮",
+        "format-icons": ["󰤟", "󰤢", "󰤥", "󰤨"],
+        "tooltip-format-wifi": "{essid} – {signalStrength}%",
+        "tooltip-format-ethernet": "Ethernet verbunden",
+        "tooltip-format-disconnected": "Nicht verbunden",
+        "on-click": "swaync-client -t -sw",
+        "on-click-right": "~/.config/hypr/scripts/wifimenu.sh"
+    },
+
+    "bluetooth": {
+        "format": "󰂯",
+        "format-disabled": "",
+        "format-off": "",
+        "format-connected": "󰂱",
+        "tooltip-format": "Bluetooth: {status}",
+        "tooltip-format-connected": "Verbunden: {device_alias}",
+        "on-click": "swaync-client -t -sw",
+        "on-click-right": "blueman-manager"
+    },
+
+    "pulseaudio": {
+        "format": "{icon}",
+        "format-muted": "󰝟",
+        "format-icons": { "default": ["󰕿", "󰖀", "󰕾"], "headphone": "󰋋" },
+        "tooltip-format": "Lautstärke: {volume}%",
+        "scroll-step": 2,
+        "on-click": "swaync-client -t -sw",
+        "on-click-right": "pavucontrol"
+    },
+
+    "battery": {
+        "states": { "warning": 20, "critical": 10 },
+        "format": "{icon}",
+        "format-charging": "󰂄",
+        "format-plugged": "󰚥",
+        "format-icons": ["󰂎", "󰁺", "󰁻", "󰁼", "󰁽", "󰁾", "󰁿", "󰂀", "󰂁", "󰂂", "󰁹"],
+        "tooltip-format": "Akku: {capacity}% – {timeTo}",
+        "on-click": "swaync-client -t -sw"
+    },
+
+    "clock": {
+        "format": "{:%H:%M\n%d.%m.%Y}",
+        "tooltip-format": "<tt><small>{calendar}</small></tt>",
+        "locale": "de_CH.UTF-8",
+        "calendar": {
+            "mode": "month",
+            "format": { "today": "<span color='#4cc2ff'><b>{}</b></span>" }
+        },
+        "on-click": "swaync-client -t -sw"
+    },
+
+    "custom/peek": {
+        "format": " ",
+        "tooltip": false,
+        "on-click": "~/.config/hypr/scripts/wallpaper.sh next"
+    }
+}

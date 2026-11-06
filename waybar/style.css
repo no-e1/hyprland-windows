@@ -1,0 +1,142 @@
+/* Windows-11-Taskleiste (dunkel, Mica) */
+
+@define-color accent #4cc2ff;
+@define-color fg #ffffff;
+@define-color fg-dim rgba(255, 255, 255, 0.7);
+@define-color hover rgba(255, 255, 255, 0.08);
+@define-color pressed rgba(255, 255, 255, 0.05);
+
+* {
+    font-family: "Segoe UI Variable", "Inter", "Noto Sans", "Symbols Nerd Font", sans-serif;
+    font-size: 12px;
+    min-height: 0;
+    border: none;
+    border-radius: 0;
+    box-shadow: none;
+    text-shadow: none;
+}
+
+window#waybar {
+    background: rgba(28, 28, 28, 0.78);
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+    color: @fg;
+}
+
+tooltip {
+    background: rgba(43, 43, 43, 0.97);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 8px;
+}
+tooltip label { color: @fg; padding: 2px 4px; }
+
+/* ── Mitte: Start, Suche, angeheftete und laufende Apps ─────────── */
+
+#custom-start,
+#custom-search,
+#custom-pin-explorer,
+#custom-pin-browser,
+#custom-pin-terminal,
+#taskbar button {
+    margin: 4px 1px;
+    padding: 0 11px;
+    border-radius: 6px;
+    background-repeat: no-repeat;
+    background-position: center bottom;
+    transition: background-color 120ms ease;
+}
+
+#custom-start {
+    font-size: 24px;
+    color: @accent;
+    padding: 0 12px;
+}
+
+#custom-search {
+    font-size: 13px;
+    color: @fg-dim;
+    background-color: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 18px;
+    margin: 7px 6px;
+    padding: 0 26px 0 14px;
+}
+
+#custom-pin-explorer { font-size: 24px; color: #f6c94a; }
+#custom-pin-browser  { font-size: 24px; color: #ff8a3d; }
+#custom-pin-terminal { font-size: 22px; color: #d6d6d6; }
+
+#custom-start:hover,
+#custom-search:hover,
+#custom-pin-explorer:hover,
+#custom-pin-browser:hover,
+#custom-pin-terminal:hover,
+#taskbar button:hover {
+    background-color: @hover;
+}
+
+/* Kleiner Strich unter laufenden Apps, langer blauer Strich unter der aktiven */
+#custom-pin-explorer.running,
+#custom-pin-browser.running,
+#custom-pin-terminal.running,
+#taskbar button {
+    background-image: linear-gradient(rgba(255, 255, 255, 0.55), rgba(255, 255, 255, 0.55));
+    background-size: 6px 3px;
+}
+
+#custom-pin-explorer.active,
+#custom-pin-browser.active,
+#custom-pin-terminal.active,
+#taskbar button.active {
+    background-color: rgba(255, 255, 255, 0.06);
+    background-image: linear-gradient(@accent, @accent);
+    background-size: 16px 3px;
+}
+
+#taskbar button image { margin: 0; }
+
+/* ── Links: Wetter ──────────────────────────────────────────────── */
+#custom-weather {
+    margin: 4px 8px;
+    padding: 0 12px;
+    font-size: 13px;
+    border-radius: 6px;
+}
+#custom-weather:hover { background-color: @hover; }
+
+/* ── Rechts: Tray, Schnelleinstellungen, Uhr ────────────────────── */
+#tray { margin: 0 4px; padding: 0 6px; }
+#tray > .needs-attention { background-color: rgba(255, 99, 99, 0.3); border-radius: 4px; }
+
+#quick, #group-quick {
+    margin: 4px 2px;
+    padding: 0 6px;
+    border-radius: 6px;
+}
+#quick:hover, #group-quick:hover { background-color: @hover; }
+
+#network, #bluetooth, #pulseaudio, #battery {
+    font-size: 16px;
+    padding: 0 6px;
+    color: @fg;
+}
+#battery.warning  { color: #ffcc4d; }
+#battery.critical { color: #ff6363; }
+#network.disconnected { color: @fg-dim; }
+
+#clock {
+    margin: 4px 2px;
+    padding: 0 10px;
+    border-radius: 6px;
+    font-size: 12px;
+    color: @fg;
+}
+#clock:hover { background-color: @hover; }
+
+/* "Desktop anzeigen"-Streifen ganz rechts (hier: nächstes Hintergrundbild) */
+#custom-peek {
+    min-width: 6px;
+    margin: 0 0 0 6px;
+    padding: 0;
+    border-left: 1px solid rgba(255, 255, 255, 0.15);
+}
+#custom-peek:hover { background-color: @hover; }

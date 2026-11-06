@@ -1,0 +1,40 @@
+/* Hintergrund-Auswahl mit Vorschaubildern (Win + W) */
+@import "colors.rasi"
+
+configuration {
+    show-icons:      true;
+    hover-select:    true;
+    me-select-entry: "";
+    me-accept-entry: "MousePrimary";
+}
+
+window {
+    location:         center;
+    width:            900px;
+    border:           1px;
+    border-color:     @border;
+    border-radius:    10px;
+    background-color: @bg;
+}
+mainbox  { padding: 18px; spacing: 14px; children: [ "inputbar", "listview" ]; }
+inputbar {
+    padding:          9px 14px;
+    border:           0 0 2px 0;
+    border-color:     @accent;
+    border-radius:    6px;
+    background-color: @surface;
+    children:         [ "prompt", "entry" ];
+    spacing:          10px;
+}
+prompt   { text-color: @fg-dim; }
+listview { columns: 3; lines: 2; spacing: 10px; fixed-height: true; scrollbar: false; }
+element {
+    orientation:   vertical;
+    padding:       8px;
+    spacing:       6px;
+    border-radius: 8px;
+    cursor:        pointer;
+}
+element selected.normal { background-color: @selected; }
+element-icon { size: 150px; horizontal-align: 0.5; cursor: inherit; }
+element-text { horizontal-align: 0.5; font: "Inter 9, Noto Sans 9"; cursor: inherit; }

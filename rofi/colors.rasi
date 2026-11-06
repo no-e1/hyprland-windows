@@ -1,0 +1,17 @@
+/* Gemeinsame Farben – Windows 11 dunkel */
+* {
+    bg:         #202020e0;
+    bg-solid:   #202020;
+    bg-footer:  #1a1a1af0;
+    surface:    #2d2d2d;
+    hover:      #ffffff12;
+    selected:   #ffffff1a;
+    border:     #ffffff1c;
+    fg:         #ffffff;
+    fg-dim:     #ffffffa6;
+    accent:     #4cc2ff;
+
+    font: "Segoe UI Variable Text 10.5, Inter 10.5, Noto Sans 10.5";
+    background-color: transparent;
+    text-color: @fg;
+}
