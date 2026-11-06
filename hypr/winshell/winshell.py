@@ -24,8 +24,14 @@ import gi
 gi.require_version("Gtk", "4.0")
 gi.require_version("Gdk", "4.0")
 gi.require_version("Gtk4LayerShell", "1.0")
-from gi.repository import Gdk, Gio, GLib, Gtk  # noqa: E402
+from gi.repository import Gdk, Gio, GLib, GObject, Gtk  # noqa: E402
 from gi.repository import Gtk4LayerShell as LS  # noqa: E402
+try:                                    # GLib >= 2.86 moved it to GioUnix
+    gi.require_version("GioUnix", "2.0")
+    from gi.repository import GioUnix  # noqa: E402
+    DesktopAppInfo = GioUnix.DesktopAppInfo
+except (ValueError, ImportError):
+    DesktopAppInfo = Gio.DesktopAppInfo
 
 HERE = os.path.dirname(os.path.realpath(__file__))
 ICONS = os.path.join(os.path.dirname(os.path.dirname(HERE)), "icons")
@@ -33,7 +39,6 @@ RUNTIME = os.environ.get("XDG_RUNTIME_DIR", "/tmp")
 FIFO = os.path.join(RUNTIME, "winshell.fifo")
 READY = os.path.join(RUNTIME, "winshell.ready")
 LOCK = os.path.join(RUNTIME, "winshell.lock")
-START_OPEN = os.path.join(RUNTIME, "winshell.start-open")
 SCRIPTS = os.path.expanduser("~/.config/hypr/scripts")
 
 
@@ -54,8 +59,17 @@ def ok(cmd, timeout=30):
         return False
 
 
+# environment only winshell itself needs (see winshell-ctl); apps and tools
+# started from here must not inherit it
+OWN_ENV = ("LD_PRELOAD", "LC_TIME", "GSK_DEBUG")
+
+
+def child_env():
+    return {k: v for k, v in os.environ.items() if k not in OWN_ENV}
+
+
 def spawn(cmd):
-    subprocess.Popen(cmd, shell=True, start_new_session=True,
+    subprocess.Popen(cmd, shell=True, start_new_session=True, env=child_env(),
                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
@@ -103,14 +117,17 @@ TASKBAR_EVENTS = {"activewindowv2", "openwindow", "closewindow", "movewindowv2",
 _taskbar_timer = None
 
 
+SHELL = None          # the WinShell application, set at startup
+
+
 def refresh_taskbar():
-    """Ask Waybar to redraw the pinned apps (debounced: one signal per burst)."""
+    """Redraw the taskbar's app buttons (debounced: once per burst of events)."""
     global _taskbar_timer
-    if _taskbar_timer is None:
+    if _taskbar_timer is None and SHELL and getattr(SHELL, "taskbar", None):
         def fire():
             global _taskbar_timer
             _taskbar_timer = None
-            spawn("pkill -RTMIN+8 -x waybar")
+            SHELL.taskbar.refresh()
             return False
         _taskbar_timer = GLib.timeout_add(40, fire)
     return False
@@ -916,7 +933,24 @@ class QuickSettings:
             old = nets.get(ssid)
             if not old or net["active"] or (not old["active"] and net["signal"] > old["signal"]):
                 nets[ssid] = net
+        for net in nets.values():
+            if net["enterprise"] and net["known"]:
+                net["identity"], net["needs_password"] = QuickSettings.eap_secrets(net["ssid"])
         return sorted(nets.values(), key=lambda n: (not n["active"], -n["signal"]))
+
+    @staticmethod
+    def eap_secrets(con):
+        """(user name, password missing?) of a saved school/company Wi-Fi.
+        A password saved "for this user only" (agent-owned, e.g. by the
+        connection editor) can't be used here – there is no keyring agent
+        running – so it counts as missing too."""
+        out = sh(["nmcli", "-s", "-g", "802-1x.identity,802-1x.password,802-1x.password-flags",
+                  "connection", "show", "id", con]).splitlines()
+        identity = out[0] if out else ""
+        password = out[1] if len(out) > 1 else ""
+        flags = (out[2].split() or ["0"])[0] if len(out) > 2 else "0"
+        missing = not password or (flags.isdigit() and int(flags) & 0b101)   # agent-owned / not saved
+        return identity, bool(missing)
 
     def show_wifi(self, nets):
         self.nets = nets
@@ -952,9 +986,9 @@ class QuickSettings:
         rev = Gtk.Revealer(transition_type=Gtk.RevealerTransitionType.SLIDE_DOWN, transition_duration=120)
         detail = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         entry = user = None
-        if n["enterprise"] and not n["known"] and not n["active"]:
+        if n["enterprise"] and not n["active"] and (not n["known"] or n.get("needs_password")):
             # school / company Wi-Fi: user name + password (PEAP / MSCHAPv2)
-            user = Gtk.Entry(placeholder_text="User name")
+            user = Gtk.Entry(placeholder_text="User name", text=n.get("identity", ""))
             detail.append(user)
             entry = Gtk.PasswordEntry(show_peek_icon=True, placeholder_text="Password")
             detail.append(entry)
@@ -980,6 +1014,14 @@ class QuickSettings:
             msg.set_visible(False)
 
             def run():
+                if n["known"] and user:
+                    # saved school/company Wi-Fi without a usable password:
+                    # store user name + password with the connection, then connect
+                    if not ok(["nmcli", "connection", "modify", "id", n["ssid"],
+                               "802-1x.identity", name, "802-1x.password", pw,
+                               "802-1x.password-flags", "0"], timeout=15):
+                        return False
+                    return ok(["nmcli", "connection", "up", "id", n["ssid"]], timeout=60)
                 if n["known"]:
                     return ok(["nmcli", "connection", "up", "id", n["ssid"]], timeout=45)
                 if user:
@@ -988,7 +1030,7 @@ class QuickSettings:
                                 "ifname", dev, "ssid", n["ssid"],
                                 "wifi-sec.key-mgmt", "wpa-eap", "802-1x.eap", "peap",
                                 "802-1x.phase2-auth", "mschapv2", "802-1x.identity", name,
-                                "802-1x.password", pw], timeout=15)
+                                "802-1x.password", pw, "802-1x.password-flags", "0"], timeout=15)
                     if added and ok(["nmcli", "connection", "up", "id", n["ssid"]], timeout=60):
                         return True
                     ok(["nmcli", "connection", "delete", "id", n["ssid"]])
@@ -1220,12 +1262,6 @@ class CalendarFlyout:
         self.render()
 
     def render(self):
-        # GTK only repaints the area of the changed text, which leaves bits of
-        # the previous month name behind when it was longer (e.g. after fast
-        # scrolling). Flipping between two invisibly different backgrounds
-        # makes it repaint the whole flyout instead.
-        flip = not self.panel.has_css_class("repaint")
-        (self.panel.add_css_class if flip else self.panel.remove_css_class)("repaint")
         today = GLib.DateTime.new_now_local()
         first = GLib.DateTime.new_local(self.year, self.month, 1, 0, 0, 0)
         self.month_lbl.set_text(first.format("%B %Y"))
@@ -1272,6 +1308,74 @@ class CalendarFlyout:
         spawn("swaync-client -cp")
 
 
+# ── Start menu search ranking ───────────────────────────────────────────────
+LAUNCHES = os.path.join(os.environ.get("XDG_STATE_HOME", os.path.expanduser("~/.local/state")),
+                        "winshell", "launches.json")
+WORD_SPLIT = re.compile(r"[^0-9a-zäöüß]+")
+
+
+def _words(text):
+    return [w for w in WORD_SPLIT.split(text.lower()) if w]
+
+
+def _subsequence(needle, hay):
+    it = iter(hay)
+    return all(ch in it for ch in needle)
+
+
+def term_score(t, f):
+    """How well one search word matches an app (0 = not at all)."""
+    name = f["name"]
+    if name == t:
+        return 100
+    if name.startswith(t):
+        return 85
+    if any(w.startswith(t) for w in f["name_words"]):
+        return 70
+    if len(t) >= 2 and "".join(w[0] for w in f["name_words"]).startswith(t):
+        return 60                                   # initials: "vsc" -> Visual Studio Code
+    if t in name:
+        return 50
+    if any(a.startswith(t) for a in f["alt"]):
+        return 45                                   # other names, command (e.g. "kitty")
+    if any(t in a for a in f["alt"]):
+        return 35
+    if any(w.startswith(t) for w in f["tag_words"]):
+        return 30                                   # generic name / keywords ("terminal")
+    if t in f["tags"]:
+        return 20
+    if t in f["desc"]:
+        return 10
+    if len(t) >= 3 and _subsequence(t, name):
+        return 8                                    # typo-ish: "brve" -> brave
+    return 0
+
+
+def app_score(query, f, uses=0):
+    """Rank of an app for the search text: every word has to match; whole
+    phrase at the start of the name counts extra; apps you start often win
+    ties. 0 = hidden."""
+    terms = query.lower().split()
+    total = 0
+    for t in terms:
+        sc = term_score(t, f)
+        if not sc:
+            return 0
+        total += sc
+    q = " ".join(terms)
+    if len(terms) > 1 and f["name"].startswith(q):
+        total += 40
+    return total + min(uses, 20) * 1.5
+
+
+def app_fields(name, alt_names, generic, keywords, executable, description):
+    name = name.lower()
+    alt = [a.lower() for a in alt_names + [os.path.basename(executable or "")] if a]
+    tags = " ".join(filter(None, [generic or "", " ".join(keywords or [])])).lower()
+    return {"name": name, "name_words": _words(name), "alt": alt,
+            "tags": tags, "tag_words": _words(tags), "desc": (description or "").lower()}
+
+
 # ── Start menu (Windows 11 layout) ─────────────────────────────────────────
 class StartMenu:
     COLS = 6
@@ -1300,25 +1404,35 @@ class StartMenu:
         if hasattr(self.search.props, "search_delay"):
             self.search.props.search_delay = 40      # default 150 ms feels laggy
         self.search.connect("search-changed", lambda *_: self.filter())
-        self.search.connect("activate", lambda *_: self.launch_first())
+        self.search.connect("activate", lambda *_: self.launch_selected() if self.query else self.launch_first())
         body.append(self.search)
 
+        # page "apps": the A–Z grid; page "search": Windows 11 search results
+        self.pages = Gtk.Stack(transition_type=Gtk.StackTransitionType.CROSSFADE,
+                               transition_duration=90, vhomogeneous=True)
+        apps_page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         head = Gtk.Box()
         head.add_css_class("start-head")
         self.title = label("All apps", "start-title")
         self.title.set_hexpand(True)
         head.append(self.title)
-        body.append(head)
+        apps_page.append(head)
 
         self.flow = Gtk.FlowBox(selection_mode=Gtk.SelectionMode.NONE, homogeneous=True,
                                 min_children_per_line=self.COLS, max_children_per_line=self.COLS,
                                 row_spacing=4, column_spacing=4, valign=Gtk.Align.START)
+        self.query = ""
         self.flow.set_filter_func(self.match)
+        self.flow.set_sort_func(self.order)
         self.flow.connect("child-activated", lambda _f, child: self.launch(child.app))
         scroll = Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.NEVER,
                                     min_content_height=420, max_content_height=420)
         scroll.set_child(self.flow)
-        body.append(scroll)
+        self.scroll = scroll
+        apps_page.append(scroll)
+        self.pages.add_named(apps_page, "apps")
+        self.pages.add_named(self.build_search_page(), "search")
+        body.append(self.pages)
         panel.append(body)
         panel.append(self.build_footer())
         self.win.set_child(panel)
@@ -1326,6 +1440,129 @@ class StartMenu:
         self.load_apps()
         self.monitor = Gio.AppInfoMonitor.get()
         self.monitor.connect("changed", lambda *_: self.load_apps())
+
+    # ── search results (Windows 11: best match + list left, details right) ──
+    MAX_RESULTS = 8
+
+    def build_search_page(self):
+        page = Gtk.Box(spacing=12)
+        page.add_css_class("search-page")
+        left = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        left.set_size_request(300, -1)
+        self.results = Gtk.ListBox(selection_mode=Gtk.SelectionMode.SINGLE)
+        self.results.add_css_class("results")
+        self.results.set_header_func(self.result_header)
+        self.results.connect("row-activated", lambda _l, row: self.launch(row.app))
+        self.results.connect("row-selected", lambda _l, row: self.show_details(row))
+        self.no_results = label("No results", "empty-text", xalign=0.5)
+        left.append(self.results)
+        left.append(self.no_results)
+        page.append(left)
+
+        self.details = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        self.details.add_css_class("details")
+        self.details.set_hexpand(True)
+        page.append(self.details)
+        return page
+
+    @staticmethod
+    def result_header(row, before):
+        """"Best match" above the first result, "Apps" above the second."""
+        if before is None:
+            row.set_header(label("Best match", "results-head"))
+        elif before.get_index() == 0:
+            row.set_header(label("Apps", "results-head"))
+        else:
+            row.set_header(None)
+
+    def result_row(self, app, name, best):
+        box = Gtk.Box(spacing=12)
+        box.add_css_class("result")
+        img = Gtk.Image.new_from_gicon(app.get_icon() or Gio.ThemedIcon.new("application-x-executable"))
+        img.set_pixel_size(32 if best else 20)
+        box.append(img)
+        text = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, valign=Gtk.Align.CENTER)
+        text.set_hexpand(True)
+        text.append(label(name, "result-name"))
+        if best:
+            text.append(label("App", "result-kind"))
+        box.append(text)
+        chev = icon("win11-chevron-right", 12)
+        chev.add_css_class("result-chevron")
+        box.append(chev)
+        row = Gtk.ListBoxRow(child=box)
+        if best:
+            row.add_css_class("best")
+        row.app, row.name = app, name
+        return row
+
+    def show_results(self):
+        clear(self.results)
+        ranked = []
+        c = self.flow.get_first_child()
+        while c:
+            if c.score > 0:
+                ranked.append(c)
+            c = c.get_next_sibling()
+        ranked.sort(key=lambda c: (-c.score, len(c.fields["name"]), c.fields["name"]))
+        ranked = ranked[:self.MAX_RESULTS]
+        for i, c in enumerate(ranked):
+            self.results.append(self.result_row(c.app, c.name, i == 0))
+        self.no_results.set_visible(not ranked)
+        self.details.set_visible(bool(ranked))
+        if ranked:
+            self.results.select_row(self.results.get_row_at_index(0))
+
+    def show_details(self, row):
+        clear(self.details)
+        if row is None:
+            return
+        app = row.app
+        top = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6, halign=Gtk.Align.CENTER)
+        top.add_css_class("details-top")
+        img = Gtk.Image.new_from_gicon(app.get_icon() or Gio.ThemedIcon.new("application-x-executable"))
+        img.set_pixel_size(64)
+        top.append(img)
+        top.append(label(row.name, "details-name", xalign=0.5))
+        top.append(label("App", "details-kind", xalign=0.5))
+        self.details.append(top)
+        sep = Gtk.Separator()
+        sep.add_css_class("details-sep")
+        self.details.append(sep)
+
+        actions = [("win11-open", "Open", lambda: self.launch(app))]
+        if hasattr(app, "list_actions"):                  # desktop-file apps
+            for act in app.list_actions()[:5]:          # jump list: "New Window", …
+                actions.append(("win11-window", app.get_action_name(act),
+                                lambda a=act: self.launch_action(app, a)))
+        for ic, text, fn in actions:
+            line = Gtk.Box(spacing=12)
+            line.append(icon(ic, 16))
+            line.append(label(text, "action-text"))
+            self.details.append(button(line, "action", on_click=fn))
+
+    def move_selection(self, delta):
+        row = self.results.get_selected_row()
+        i = (row.get_index() if row else -1) + delta
+        target = self.results.get_row_at_index(max(0, i))
+        if target:
+            self.results.select_row(target)
+
+    def launch_selected(self):
+        row = self.results.get_selected_row()
+        if row:
+            self.launch(row.app)
+
+    def launch_action(self, app, action):
+        self.hide()
+        self.count_launch(app)
+        try:
+            ctx = Gdk.Display.get_default().get_app_launch_context()
+            for var in OWN_ENV:
+                ctx.unsetenv(var)
+            app.launch_action(action, ctx)
+        except Exception as e:
+            print("winshell: action failed:", e, file=sys.stderr)
 
     def build_footer(self):
         foot = Gtk.Box()
@@ -1401,31 +1638,70 @@ class StartMenu:
             tile.append(name)
             child = Gtk.FlowBoxChild(child=tile)
             child.app = a
+            child.name = name_of(a)
             generic = a.get_generic_name() if hasattr(a, "get_generic_name") else None
-            child.key = " ".join(filter(None, [name_of(a), a.get_display_name(), a.get_name(), generic or "",
-                                               a.get_executable() or "", a.get_description() or "",
-                                               " ".join(a.get_keywords() if hasattr(a, "get_keywords") else [])])).lower()
+            child.fields = app_fields(name_of(a), [a.get_display_name(), a.get_name()], generic,
+                                      a.get_keywords() if hasattr(a, "get_keywords") else [],
+                                      a.get_executable(), a.get_description())
+            child.score = 0
             click = Gtk.GestureClick()
             click.connect("released", lambda *_x, app=a: self.launch(app))
             child.add_controller(click)
             self.flow.append(child)
 
     def match(self, child):
-        q = self.search.get_text().strip().lower()
-        return not q or all(part in child.key for part in q.split())
+        return not self.query or child.score > 0
+
+    def order(self, a, b):
+        """Best match first; without a search: A–Z (the order apps were added)."""
+        if not self.query:
+            return 0
+        if a.score != b.score:
+            return -1 if a.score > b.score else 1
+        ka, kb = (len(a.fields["name"]), a.fields["name"]), (len(b.fields["name"]), b.fields["name"])
+        return (ka > kb) - (ka < kb)
 
     def filter(self):
-        self.flow.invalidate_filter()
-        q = self.search.get_text().strip()
-        self.title.set_text("Best matches" if q else "All apps")
+        self.query = self.search.get_text().strip()
+        if self.query:
+            uses = self.load_uses()
+            c = self.flow.get_first_child()
+            while c:
+                c.score = app_score(self.query, c.fields, uses.get(c.app.get_id(), 0))
+                c = c.get_next_sibling()
+        if self.query:
+            self.show_results()
+            self.pages.set_visible_child_name("search")
+        else:
+            self.pages.set_visible_child_name("apps")
+            self.scroll.get_vadjustment().set_value(0)
 
     def first_visible(self):
-        c = self.flow.get_first_child()
-        while c:
-            if c.get_child_visible() and self.match(c):
+        i = 0
+        while (c := self.flow.get_child_at_index(i)) is not None:   # in sorted order
+            if self.match(c):
                 return c
-            c = c.get_next_sibling()
+            i += 1
         return None
+
+    # how often each app was started from here, so favourites win ties
+    @staticmethod
+    def load_uses():
+        try:
+            with open(LAUNCHES) as f:
+                return json.load(f)
+        except (OSError, ValueError):
+            return {}
+
+    def count_launch(self, app):
+        uses = self.load_uses()
+        uses[app.get_id()] = uses.get(app.get_id(), 0) + 1
+        try:
+            os.makedirs(os.path.dirname(LAUNCHES), exist_ok=True)
+            with open(LAUNCHES, "w") as f:
+                json.dump(uses, f)
+        except OSError:
+            pass
 
     def launch_first(self):
         c = self.first_visible()
@@ -1434,9 +1710,10 @@ class StartMenu:
 
     def launch(self, app):
         self.hide()
+        self.count_launch(app)
         try:
             ctx = Gdk.Display.get_default().get_app_launch_context()
-            for var in ("LD_PRELOAD", "LC_TIME"):
+            for var in OWN_ENV:
                 ctx.unsetenv(var)
             app.launch([], ctx)
         except Exception as e:
@@ -1475,17 +1752,11 @@ class StartMenu:
         self.shell.qs.catcher_for(None)
         self.mark_open(False)
 
-    @staticmethod
-    def mark_open(on):
-        """Tell Waybar's start button (startmenu.sh status) whether we're open."""
-        try:
-            if on:
-                open(START_OPEN, "w").close()
-            else:
-                os.unlink(START_OPEN)
-        except OSError:
-            pass
-        spawn("pkill -RTMIN+9 -x waybar")
+    def mark_open(self, on):
+        """The taskbar's start button is grey while the menu is open."""
+        tb = getattr(self.shell, "taskbar", None)
+        if tb:
+            tb.set_start_open(on)
 
     def on_key(self, _c, keyval, _code, _state):
         if keyval == Gdk.KEY_Escape:
@@ -1493,6 +1764,12 @@ class StartMenu:
                 self.search.set_text("")
             else:
                 self.hide()
+            return True
+        if self.query and keyval in (Gdk.KEY_Down, Gdk.KEY_Up):
+            self.move_selection(1 if keyval == Gdk.KEY_Down else -1)
+            return True
+        if self.query and keyval in (Gdk.KEY_Return, Gdk.KEY_KP_Enter):
+            self.launch_selected()
             return True
         if keyval in (Gdk.KEY_Down, Gdk.KEY_Tab) and self.search.has_focus():
             c = self.first_visible()
@@ -1551,6 +1828,480 @@ class OSD:
         return False
 
 
+
+# ── Taskbar (replaces Waybar) ───────────────────────────────────────────────
+TASKBAR_CONFIG = os.path.join(os.environ.get("XDG_CONFIG_HOME", os.path.expanduser("~/.config")),
+                              "winshell", "taskbar.json")
+STATUS = os.path.expanduser("~/.config/waybar/scripts/status.sh")
+
+
+class AppIndex:
+    """Finds the desktop app (Gio.AppInfo) belonging to a window class."""
+
+    def __init__(self):
+        self.reload()
+        Gio.AppInfoMonitor.get().connect("changed", lambda *_: self.reload())
+
+    def reload(self):
+        self.map = {}
+        # apps shown in menus first: e.g. Brave ships a hidden second .desktop
+        # file with the same window class
+        apps = sorted(Gio.AppInfo.get_all(), key=lambda a: not a.should_show())
+        passes = [
+            lambda a: (a.get_startup_wm_class() or "") if hasattr(a, "get_startup_wm_class") else "",
+            lambda a: (a.get_id() or "").removesuffix(".desktop"),
+            lambda a: (a.get_id() or "").removesuffix(".desktop").split(".")[-1],
+            lambda a: os.path.basename(a.get_executable() or ""),
+        ]
+        for get in passes:                       # earlier passes win
+            for a in apps:
+                k = get(a).lower()
+                if k:
+                    self.map.setdefault(k, a)
+
+    def for_class(self, cls):
+        c = (cls or "").lower()
+        return self.map.get(c) or self.map.get(c.split(".")[-1])
+
+    def canonical(self, app_id):
+        """A hidden duplicate .desktop file (e.g. com.brave.Browser next to
+        brave-browser) stands for the visible app with the same window class."""
+        app = self.by_id(app_id)
+        if app and not app.should_show():
+            wm = (app.get_startup_wm_class() or "") if hasattr(app, "get_startup_wm_class") else ""
+            alt = self.for_class(wm) if wm else None
+            if alt and alt.should_show() and alt.get_id():
+                return alt.get_id()
+        return app_id
+
+    @staticmethod
+    def by_id(app_id):
+        try:
+            return DesktopAppInfo.new(app_id)
+        except TypeError:
+            return None
+
+
+class Taskbar:
+    """Windows 11 taskbar: start + pinned/running apps in the middle (drag to
+    reorder, right click to pin/unpin), tray with overflow flyout, status
+    icons, clock and the "show desktop" sliver on the right."""
+
+    ICON_OVERRIDE = {"kitty.desktop": "utilities-terminal"}
+    DEFAULT_PINNED = ["brave-browser.desktop", "kitty.desktop"]
+
+    def __init__(self, app, shell):
+        self.shell = shell
+        self.apps = AppIndex()
+        self.cfg = self.load_config()
+        pinned = []
+        for k in self.cfg["pinned"]:
+            k = self.apps.canonical(k)
+            if k not in pinned:
+                pinned.append(k)
+        self.cfg["pinned"] = pinned
+        self.order = list(self.cfg["pinned"])          # display order of all known keys
+        self.buttons = {}                              # key -> button
+        self.shown = []                                # keys currently in the bar
+        self.groups = {}                               # key -> windows, most recent first
+        self.active_key = None
+
+        self.win = layer_window(app, "winshell-taskbar", LS.Layer.TOP,
+                                anchors=(LS.Edge.BOTTOM, LS.Edge.LEFT, LS.Edge.RIGHT), exclusive=48)
+        self.win.add_css_class("taskbar-window")
+        self.win.set_size_request(-1, 48)
+        bar = Gtk.CenterBox()
+        bar.add_css_class("taskbar")
+
+        center = Gtk.Box()
+        self.start_btn = button(icon("win11-start", 26), "tb-start", tooltip="Start",
+                                on_click=lambda: self.shell.start.toggle())
+        center.append(self.start_btn)
+        self.app_box = Gtk.Box()
+        center.append(self.app_box)
+        drop = Gtk.DropTarget.new(GObject.TYPE_STRING, Gdk.DragAction.MOVE)
+        drop.connect("drop", self.on_app_drop)
+        self.app_box.add_controller(drop)
+        bar.set_center_widget(center)
+        bar.set_end_widget(self.build_right())
+        self.win.set_child(bar)
+
+        self.refresh()
+        self.win.present()
+
+    # ── settings: pinned apps, hidden tray icons ──
+    def load_config(self):
+        try:
+            with open(TASKBAR_CONFIG) as f:
+                cfg = json.load(f)
+        except (OSError, ValueError):
+            cfg = {}
+        cfg.setdefault("pinned", list(self.DEFAULT_PINNED))
+        cfg.setdefault("tray_hidden", [])
+        cfg.setdefault("tray_order", [])
+        return cfg
+
+    def save_config(self):
+        try:
+            os.makedirs(os.path.dirname(TASKBAR_CONFIG), exist_ok=True)
+            with open(TASKBAR_CONFIG, "w") as f:
+                json.dump(self.cfg, f, indent=2)
+        except OSError as e:
+            print("winshell: can't save taskbar settings:", e, file=sys.stderr)
+
+    # ── apps in the middle ──
+    def key_for(self, client):
+        a = self.apps.for_class(client.get("class"))
+        return a.get_id() if a and a.get_id() else "class:" + (client.get("class") or "?")
+
+    def app_of(self, key):
+        return None if key.startswith("class:") else self.apps.by_id(key)
+
+    def refresh(self):
+        clients = hypr_json("clients") or []
+        active = hypr_json("activewindow") or {}
+        groups = {}
+        for c in sorted(clients, key=lambda c: c.get("focusHistoryID", 99)):
+            ws = (c.get("workspace") or {}).get("name", "")
+            if not c.get("mapped") or (ws.startswith("special:") and ws != "special:minimized"):
+                continue
+            groups.setdefault(self.key_for(c), []).append(c)
+        self.groups = groups
+        aws = (active.get("workspace") or {}).get("name", "")
+        self.active_key = (self.key_for(active) if active.get("address") and not aws.startswith("special:")
+                           else None)
+        for k in groups:
+            if k not in self.order:
+                self.order.append(k)
+        pinned = set(self.cfg["pinned"])
+        keys = [k for k in self.order if k in pinned or k in groups]
+        if keys != self.shown:
+            clear(self.app_box)
+            for k in keys:
+                if k not in self.buttons:
+                    self.buttons[k] = self.make_app_button(k)
+                self.app_box.append(self.buttons[k])
+            self.shown = keys
+        for k in keys:
+            b, wins = self.buttons[k], groups.get(k, [])
+            (b.add_css_class if wins else b.remove_css_class)("running")
+            (b.add_css_class if k == self.active_key else b.remove_css_class)("active")
+            app = self.app_of(k)
+            b.set_tooltip_text((wins[0].get("title") if wins else None)
+                               or (app.get_display_name() if app else k.split(":", 1)[-1]))
+
+    def make_app_button(self, key):
+        app = self.app_of(key)
+        if key in self.ICON_OVERRIDE:
+            img = icon(self.ICON_OVERRIDE[key], 24)
+        else:
+            gicon = app.get_icon() if app else None
+            if not gicon:
+                cls = key.split(":", 1)[-1]
+                gicon = Gio.ThemedIcon.new_from_names([cls, cls.lower(), "application-x-executable"])
+            img = Gtk.Image.new_from_gicon(gicon)
+            img.set_pixel_size(24)
+        dash = Gtk.Box(halign=Gtk.Align.CENTER, valign=Gtk.Align.END)
+        dash.add_css_class("dash")
+        over = Gtk.Overlay(child=img)
+        over.add_overlay(dash)
+        b = Gtk.Button(child=over)
+        b.add_css_class("tb-app")
+        b.key = key
+        b.connect("clicked", lambda *_: self.on_app_click(key))
+        for num, fn in ((Gdk.BUTTON_MIDDLE, lambda: self.launch(key)),
+                        (Gdk.BUTTON_SECONDARY, lambda: self.app_menu(key, b))):
+            g = Gtk.GestureClick(button=num)
+            g.connect("released", lambda *_a, f=fn: f())
+            b.add_controller(g)
+        src = Gtk.DragSource(actions=Gdk.DragAction.MOVE)
+        src.connect("prepare", lambda *_: Gdk.ContentProvider.new_for_value(
+            GObject.Value(GObject.TYPE_STRING, "app:" + key)))
+        src.connect("drag-begin", lambda s, _d: s.set_icon(Gtk.WidgetPaintable.new(img), 12, 12))
+        b.add_controller(src)
+        return b
+
+    def on_app_click(self, key):
+        wins = self.groups.get(key, [])
+        if not wins:
+            self.launch(key)
+            return
+        if key == self.active_key:
+            if len(wins) == 1:          # the app in front: minimize it, like Windows
+                spawn(f"hyprctl eval 'HideWindow(\"{wins[0]['address']}\")'")
+                return
+            target = wins[1]            # several windows: go to the next one
+        else:
+            target = wins[0]
+        spawn(f"hyprctl eval 'ShowWindow(\"{target['address']}\")'")
+
+    def launch(self, key):
+        app = self.app_of(key)
+        if not app:
+            return
+        try:
+            ctx = Gdk.Display.get_default().get_app_launch_context()
+            for var in OWN_ENV:
+                ctx.unsetenv(var)
+            app.launch([], ctx)
+        except Exception as e:
+            print("winshell: launch failed:", e, file=sys.stderr)
+
+    def app_menu(self, key, anchor):
+        app = self.app_of(key)
+        wins = self.groups.get(key, [])
+        pinned = key in self.cfg["pinned"]
+        items = []
+        if app:
+            items.append((app.get_display_name(), lambda: self.launch(key)))
+            items.append(("Unpin from taskbar" if pinned else "Pin to taskbar",
+                          lambda: self.set_pinned(key, not pinned)))
+        if wins:
+            items.append(("Close window" if len(wins) == 1 else "Close all windows",
+                          lambda: [spawn(f"hyprctl dispatch 'hl.dsp.window.close({{ window = \"address:{w['address']}\" }})'")
+                                   for w in wins]))
+        popup_menu(anchor, items)
+
+    def set_pinned(self, key, on):
+        pinned = [k for k in self.cfg["pinned"] if k != key]
+        if on:
+            pinned.append(key)
+        # keep the order the user sees
+        self.cfg["pinned"] = [k for k in self.order if k in pinned] + [k for k in pinned if k not in self.order]
+        self.save_config()
+        self.refresh()
+
+    def on_app_drop(self, _target, value, x, _y):
+        if not isinstance(value, str) or not value.startswith("app:"):
+            return False
+        key = value[4:]
+        keys = [k for k in self.shown if k != key]
+        idx = len(keys)
+        for i, k in enumerate(keys):
+            ok_, r = self.buttons[k].compute_bounds(self.app_box)
+            if ok_ and x < r.get_x() + r.get_width() / 2:
+                idx = i
+                break
+        keys.insert(idx, key)
+        self.order = keys + [k for k in self.order if k not in keys]
+        self.cfg["pinned"] = [k for k in self.order if k in self.cfg["pinned"]]
+        self.save_config()
+        self.shown = []                 # force re-adding in the new order
+        self.refresh()
+        return True
+
+    def set_start_open(self, on):
+        (self.start_btn.add_css_class if on else self.start_btn.remove_css_class)("open")
+
+    # ── right side: tray, status icons, clock, show-desktop sliver ──
+    def build_right(self):
+        right = Gtk.Box()
+        right.add_css_class("tb-right")
+
+        self.tray_arrow = button(icon("win11-chevron-up", 12), "tb-tray-arrow",
+                                 tooltip="Show hidden icons", on_click=self.toggle_overflow)
+        drop = Gtk.DropTarget.new(GObject.TYPE_STRING, Gdk.DragAction.MOVE)
+        drop.connect("drop", lambda _t, v, _x, _y: self.move_tray(v, hidden=True))
+        drop.connect("enter", lambda *_: (self.open_overflow(), Gdk.DragAction.MOVE)[1])
+        self.tray_arrow.add_controller(drop)
+        right.append(self.tray_arrow)
+
+        self.tray_box = Gtk.Box()
+        self.tray_box.add_css_class("tb-tray")
+        drop = Gtk.DropTarget.new(GObject.TYPE_STRING, Gdk.DragAction.MOVE)
+        drop.connect("drop", lambda _t, v, x, _y: self.move_tray(v, hidden=False, x=x))
+        self.tray_box.add_controller(drop)
+        right.append(self.tray_box)
+
+        self.overflow = Gtk.Popover(has_arrow=False, position=Gtk.PositionType.TOP)
+        self.overflow.add_css_class("tray-overflow")
+        self.overflow_grid = Gtk.FlowBox(selection_mode=Gtk.SelectionMode.NONE,
+                                         min_children_per_line=1, max_children_per_line=5)
+        self.overflow_empty = label("Drag icons here to hide them", "overflow-empty", xalign=0.5)
+        ob = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        ob.append(self.overflow_grid)
+        ob.append(self.overflow_empty)
+        drop = Gtk.DropTarget.new(GObject.TYPE_STRING, Gdk.DragAction.MOVE)
+        drop.connect("drop", lambda _t, v, _x, _y: self.move_tray(v, hidden=True))
+        ob.add_controller(drop)
+        self.overflow.set_child(ob)
+        self.overflow.set_parent(self.tray_arrow)
+
+        # Wi-Fi / volume / battery, like Windows' quick settings button
+        quick = Gtk.Box()
+        self.st_net, self.st_vol, self.st_bat = icon("win11-wifi-4", 20), icon("win11-volume-3", 20), \
+            icon("win11-battery-100", 24)
+        for img, cls in ((self.st_net, "st-net"), (self.st_vol, "st-vol"), (self.st_bat, "st-bat")):
+            img.add_css_class(cls)
+            quick.append(img)
+        self.quick_btn = button(quick, "tb-quick", on_click=lambda: self.shell.qs.toggle())
+        g = Gtk.GestureClick(button=Gdk.BUTTON_SECONDARY)
+        g.connect("released", lambda *_: self.shell.qs.show("wifi"))
+        self.quick_btn.add_controller(g)
+        sc = Gtk.EventControllerScroll(flags=Gtk.EventControllerScrollFlags.VERTICAL |
+                                       Gtk.EventControllerScrollFlags.DISCRETE)
+        sc.connect("scroll", self.on_volume_scroll)
+        self.quick_btn.add_controller(sc)
+        right.append(self.quick_btn)
+        self.status = {}
+        for what in ("net", "vol", "bat"):
+            threading.Thread(target=self.watch_status, args=(what,), daemon=True).start()
+
+        self.clock_lbl = Gtk.Label(justify=Gtk.Justification.RIGHT, xalign=1.0)
+        self.clock_lbl.add_css_class("tb-clock-text")
+        right.append(button(self.clock_lbl, "tb-clock", on_click=lambda: self.shell.calendar.toggle()))
+        self.tick()
+
+        right.append(button(Gtk.Box(), "tb-peek", on_click=lambda: spawn(f"{SCRIPTS}/wallpaper.sh next")))
+        return right
+
+    def tick(self):
+        now = GLib.DateTime.new_now_local()
+        self.clock_lbl.set_text(now.format("%H:%M:%S\n%d.%m.%Y"))
+        GLib.timeout_add(1000 - now.get_microsecond() // 1000 + 5, self.tick)
+        return False
+
+    def on_volume_scroll(self, _c, _dx, dy):
+        step = "2%+" if dy < 0 else "2%-"
+        spawn(f"wpctl set-volume -l 1 @DEFAULT_AUDIO_SINK@ {step}")
+        return True
+
+    STATUS_ICON = {"ethernet": "win11-ethernet", "wifi-off": "win11-wifi-off", "mute": "win11-volume-mute"}
+
+    def watch_status(self, what):
+        """Follow status.sh (it prints a line whenever Wi-Fi, volume or the
+        battery changes) and show the matching icon."""
+        while True:
+            try:
+                proc = subprocess.Popen([STATUS, what], stdout=subprocess.PIPE, text=True,
+                                        stderr=subprocess.DEVNULL, env=child_env())
+                for line in proc.stdout:
+                    try:
+                        data = json.loads(line)
+                    except ValueError:
+                        continue
+                    GLib.idle_add(self.show_status, what, data)
+            except OSError:
+                pass
+            time.sleep(5)
+
+    def show_status(self, what, data):
+        cls = (data.get("class") or "").split()[0] if data.get("class") else ""
+        name = self.STATUS_ICON.get(cls)
+        if not name:
+            m = re.match(r"(wifi|vol|bat)-(\d+)(-charging)?", cls)
+            if m:
+                kind = {"wifi": "wifi", "vol": "volume", "bat": "battery"}[m.group(1)]
+                name = f"win11-{kind}-{m.group(2)}{m.group(3) or ''}"
+        img = {"net": self.st_net, "vol": self.st_vol, "bat": self.st_bat}[what]
+        img.set_visible(bool(name))
+        if name:
+            img.set_from_icon_name(name)
+        self.status[what] = (data.get("tooltip") or "").replace("\\n", "\n")
+        self.quick_btn.set_tooltip_text("\n".join(t for t in (self.status.get(k) for k in ("net", "vol", "bat")) if t))
+        return False
+
+    # ── tray ──
+    def tray_changed(self):
+        items = [it for it in self.shell.tray.items.values() if it.props and not it.passive]
+        order = self.cfg["tray_order"]
+        for it in items:
+            if it.ident not in order:
+                order.append(it.ident)
+        items.sort(key=lambda it: order.index(it.ident))
+        hidden = set(self.cfg["tray_hidden"])
+        clear(self.tray_box)
+        clear(self.overflow_grid)
+        for it in items:
+            btn = self.tray_button(it)
+            if it.ident in hidden:
+                self.overflow_grid.append(btn)
+            else:
+                self.tray_box.append(btn)
+        self.overflow_empty.set_visible(not any(it.ident in hidden for it in items))
+        return False
+
+    def tray_button(self, item):
+        pic = item.paintable(16)
+        if isinstance(pic, str):
+            img = Gtk.Image.new_from_icon_name(pic)
+        else:
+            img = Gtk.Image.new_from_paintable(pic)
+        img.set_pixel_size(16)
+        b = Gtk.Button(child=img)
+        b.add_css_class("tb-tray-item")
+        b.set_tooltip_text(item.title)
+        tray = self.shell.tray
+        b.connect("clicked", lambda *_: tray.activate(item, b))
+        for num, fn in ((Gdk.BUTTON_SECONDARY, lambda: tray.menu(item, b)),
+                        (Gdk.BUTTON_MIDDLE, lambda: tray.secondary(item))):
+            g = Gtk.GestureClick(button=num)
+            g.connect("released", lambda *_a, f=fn: f())
+            b.add_controller(g)
+        sc = Gtk.EventControllerScroll(flags=Gtk.EventControllerScrollFlags.VERTICAL |
+                                       Gtk.EventControllerScrollFlags.DISCRETE)
+        sc.connect("scroll", lambda _c, _dx, dy: (tray.scroll(item, -dy), True)[1])
+        b.add_controller(sc)
+        src = Gtk.DragSource(actions=Gdk.DragAction.MOVE)
+        src.connect("prepare", lambda *_: Gdk.ContentProvider.new_for_value(
+            GObject.Value(GObject.TYPE_STRING, "tray:" + item.ident)))
+        src.connect("drag-begin", lambda s, _d: s.set_icon(Gtk.WidgetPaintable.new(img), 8, 8))
+        b.add_controller(src)
+        return b
+
+    def move_tray(self, value, hidden, x=None):
+        if not isinstance(value, str) or not value.startswith("tray:"):
+            return False
+        ident = value[5:]
+        hid = [i for i in self.cfg["tray_hidden"] if i != ident]
+        if hidden:
+            hid.append(ident)
+        self.cfg["tray_hidden"] = hid
+        if x is not None:                       # dropped in the bar: put it where it was dropped
+            order = [i for i in self.cfg["tray_order"] if i != ident]
+            pos = len(order)
+            child, i = self.tray_box.get_first_child(), 0
+            while child:
+                ok_, r = child.compute_bounds(self.tray_box)
+                if ok_ and x < r.get_x() + r.get_width() / 2:
+                    tip = child.get_tooltip_text()
+                    match = next((it.ident for it in self.shell.tray.items.values() if it.title == tip), None)
+                    if match in order:
+                        pos = order.index(match)
+                    break
+                child = child.get_next_sibling()
+            order.insert(pos, ident)
+            self.cfg["tray_order"] = order
+        self.save_config()
+        GLib.idle_add(self.tray_changed)
+        return True
+
+    def toggle_overflow(self):
+        if self.overflow.get_visible():
+            self.overflow.popdown()
+        else:
+            self.open_overflow()
+
+    def open_overflow(self):
+        if not self.overflow.get_visible():
+            self.overflow.popup()
+
+
+def popup_menu(anchor, items):
+    """Small Windows-style context menu above a taskbar button."""
+    pop = Gtk.Popover(has_arrow=False, position=Gtk.PositionType.TOP)
+    pop.add_css_class("tray-menu")
+    box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=1)
+    for text, fn in items:
+        b = button(label(text, xalign=0.0), "tray-menu-item")
+        b.connect("clicked", lambda _b, f=fn: (pop.popdown(), f()))
+        box.append(b)
+    pop.set_child(box)
+    pop.set_parent(anchor)
+    pop.connect("closed", lambda p: GLib.idle_add(lambda: p.unparent() and False))
+    pop.popup()
+
+
 # ── application ──────────────────────────────────────────────────────────
 class WinShell(Gtk.Application):
     def __init__(self):
@@ -1574,12 +2325,18 @@ class WinShell(Gtk.Application):
         css.load_from_path(os.path.join(HERE, "style.css"))
         Gtk.StyleContext.add_provider_for_display(display, css, Gtk.STYLE_PROVIDER_PRIORITY_USER)
 
+        global SHELL
+        SHELL = self
+        self.taskbar = None
         icons = AppIcons()
         self.switcher = Switcher(self, icons)
         self.qs = QuickSettings(self)
         self.osd = OSD(self)
         self.start = StartMenu(self, self)
         self.calendar = CalendarFlyout(self, self)
+        self.taskbar = Taskbar(self, self)
+        import tray as tray_mod
+        self.tray = tray_mod.Tray(lambda: GLib.idle_add(self.taskbar.tray_changed))
 
         if os.path.exists(FIFO) and not os.path.isfile(FIFO):
             os.unlink(FIFO)
@@ -1634,6 +2391,20 @@ class WinShell(Gtk.Application):
             self.calendar.hide() if arg == "hide" else self.calendar.toggle()
         elif what == "menu":
             self.start.hide() if arg == "hide" else self.start.toggle()
+        elif what == "tray":                    # hidden-icons flyout / an icon's menu
+            if arg == "menu":
+                child = self.taskbar.tray_box.get_first_child()
+                items = [it for it in self.tray.items.values() if it.title == (child.get_tooltip_text() if child else None)]
+                if child and items:
+                    self.tray.menu(items[0], child)
+            else:
+                self.taskbar.toggle_overflow()
+        elif what == "search":                  # open the start menu with text typed in
+            if not self.start.visible:
+                self.start.show()
+            self.start.search.set_text(" ".join(args[1:]))
+            self.start.search.set_position(-1)
+            self.start.filter()
         elif what == "backdrop":
             self.qs.backdrop_rofi(arg == "rofi")
         elif what == "debug":

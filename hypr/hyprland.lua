@@ -44,10 +44,10 @@ hl.on("hyprland.start", function()
     hl.exec_cmd(scripts .. "/theme.sh")        -- GTK theme, icons, cursor, font
     hl.exec_cmd(scripts .. "/polkit.sh")       -- password prompts for admin actions
     hl.exec_cmd(scripts .. "/wallpaper.sh restore")
-    -- taskbar; restarts itself if it ever crashes (like explorer.exe)
-    hl.exec_cmd("sh -c 'while :; do waybar; sleep 1; done'")
     hl.exec_cmd("swaync")                      -- notifications
-    hl.exec_cmd(winshell .. " start")          -- Alt+Tab and quick settings
+    -- winshell: taskbar, start menu, Alt+Tab, quick settings, calendar;
+    -- restarts itself if it ever crashes (like explorer.exe)
+    hl.exec_cmd(winshell .. " supervise")
     hl.exec_cmd("hypridle")                    -- lock / screen off when idle
     hl.exec_cmd("sh -c 'command -v cliphist >/dev/null && wl-paste --watch cliphist store'")
 end)
@@ -346,12 +346,20 @@ end)
 -- Shell access: hyprctl eval 'WinMax("toggle" | "max" | "restore")'
 ---------------------------------------------------------------------
 local BAR_HEIGHT = 32
-local OWN_TITLEBAR = { "^brave%-browser$", "^discord$", "^firefox$", "^org%.mozilla%.firefox$",
-                       "^code$", "^code%-oss$", "^org%.gnome%." }
+-- Apps that draw their own title bar with X / □ / – : they get no second
+-- (hyprbars) title bar. Exact window classes, plus class prefixes.
+OWN_TITLEBAR = { "brave-browser", "discord", "vesktop", "webcord", "steam",
+                 "spotify", "obsidian", "slack", "firefox", "org.mozilla.firefox",
+                 "code", "code-oss" }
+OWN_TITLEBAR_PREFIX = { "org.gnome." }
 
 local function has_bar(w)
-    for _, pat in ipairs(OWN_TITLEBAR) do
-        if (w.class or ""):match(pat) then return false end
+    local cls = w.class or ""
+    for _, c in ipairs(OWN_TITLEBAR) do
+        if cls == c then return false end
+    end
+    for _, p in ipairs(OWN_TITLEBAR_PREFIX) do
+        if cls:sub(1, #p) == p then return false end
     end
     return true
 end
@@ -538,9 +546,13 @@ if f then
         btn("", "minimize")
 
         -- apps that draw their own title bar (with X/□/–) don't get a second one
+        local function re(str) return (str:gsub("[%.%-%+%*%?%^%$%(%)%[%]%{%}|\\]", "\\%0")) end
+        local alts = {}
+        for _, c in ipairs(OWN_TITLEBAR) do table.insert(alts, re(c)) end
+        for _, p in ipairs(OWN_TITLEBAR_PREFIX) do table.insert(alts, re(p) .. ".*") end
         hl.window_rule({
             name  = "own-titlebar",
-            match = { class = "^(brave-browser|discord|firefox|org\\.mozilla\\.firefox|code|code-oss|org\\.gnome\\..*)$" },
+            match = { class = "^(" .. table.concat(alts, "|") .. ")$" },
             ["hyprbars:no_bar"] = true,
         })
     elseif not ok then

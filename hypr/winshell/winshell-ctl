@@ -2,8 +2,11 @@
 # Sends a command to the winshell daemon and starts the daemon if needed.
 #   winshell-ctl switch next|prev|commit|cancel
 #   winshell-ctl qs [toggle|wifi|bluetooth|hide]
-#   winshell-ctl menu [hide] | calendar [hide] | osd volume|brightness
+#   winshell-ctl menu [hide] | search <text> | calendar [hide] | osd volume|brightness
+#   winshell-ctl tray [menu]   hidden-icons flyout / menu of the first tray icon
 #   winshell-ctl start | restart
+#   winshell-ctl supervise   keep winshell (and so the taskbar) running, restart
+#                            it if it ever crashes (Hyprland autostart)
 RUN="${XDG_RUNTIME_DIR:-/tmp}"
 FIFO="$RUN/winshell.fifo"
 READY="$RUN/winshell.ready"
@@ -15,19 +18,40 @@ running() {
     [ -n "$p" ] && grep -q "winshell.py" "/proc/$p/cmdline" 2>/dev/null && [ -p "$FIFO" ]
 }
 
-start() {
-    rm -f "$READY"
-    LC_TIME=en_GB.UTF-8 LD_PRELOAD=/usr/lib64/libgtk4-layer-shell.so.0 \
-        setsid -f python3 "$DIR/winshell.py" >"$RUN/winshell.log" 2>&1
-    for _ in $(seq 1 100); do
-        running && return
-        sleep 0.03
-    done
+# GSK_DEBUG=full-redraw: GTK otherwise repaints only the changed area and
+# leaves bits of old text behind on these layer surfaces (flickering white
+# marks in the Wi-Fi list, the calendar, …)
+run() {
+    GSK_DEBUG=full-redraw LC_TIME=en_GB.UTF-8 LD_PRELOAD=/usr/lib64/libgtk4-layer-shell.so.0 \
+        python3 "$DIR/winshell.py" >>"$RUN/winshell.log" 2>&1
 }
 
+wait_running() {
+    for _ in $(seq 1 100); do
+        running && return 0
+        sleep 0.03
+    done
+    return 1
+}
+
+start() {
+    rm -f "$READY"
+    : >"$RUN/winshell.log"
+    ( run & )
+    wait_running
+}
+
+supervised() { pgrep -f "winshell-ctl supervise" >/dev/null; }
+
 case "$1" in
+    supervise)
+        while :; do run; sleep 1; done ;;
     start)   running || start; exit ;;
-    restart) running && kill "$(pid)"; sleep 0.3; start; exit ;;
+    restart)
+        running && kill "$(pid)"
+        sleep 0.3
+        if supervised; then wait_running; else start; fi
+        exit ;;
 esac
 
 running || start

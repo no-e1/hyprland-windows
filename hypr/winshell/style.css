@@ -257,6 +257,50 @@ window.catcher { background: rgba(0, 0, 0, 0.004); }
 .app { padding: 14px 4px 12px 4px; }
 .app-name { font-size: 12px; }
 
+/* ── Start menu search results (Windows 11) ── */
+.search-page { padding: 18px 0 8px 0; }
+.results { background: transparent; }
+.results row {
+    padding: 0;
+    margin: 1px 0;
+    border-radius: 4px;
+    background: transparent;
+    outline: none;
+}
+.results row:hover { background: rgba(255, 255, 255, 0.05); }
+.results row:selected { background: rgba(255, 255, 255, 0.08); }
+.results row.best:selected { background: rgba(255, 255, 255, 0.10); }
+.results-head { font-size: 13px; font-weight: 600; padding: 10px 8px 6px 8px; }
+.result { padding: 7px 10px; min-height: 22px; }
+.results row.best .result { padding: 12px 10px; }
+.result-name { font-size: 13px; }
+.results row.best .result-name { font-size: 14px; font-weight: 600; }
+.result-kind { font-size: 12px; color: rgba(255, 255, 255, 0.6); }
+.result-chevron { opacity: 0; }
+.results row:hover .result-chevron, .results row:selected .result-chevron { opacity: 0.7; }
+
+.details {
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 8px;
+    padding: 0 0 8px 0;
+}
+.details-top { padding: 28px 16px 18px 16px; }
+.details-name { font-size: 16px; font-weight: 600; }
+.details-kind { font-size: 12px; color: rgba(255, 255, 255, 0.6); }
+.details-sep { margin: 0 16px 8px 16px; background: rgba(255, 255, 255, 0.08); min-height: 1px; }
+button.action {
+    margin: 0 8px;
+    padding: 8px 12px;
+    border-radius: 4px;
+    background: transparent;
+    border: none;
+    box-shadow: none;
+    color: #ffffff;
+}
+button.action:hover { background: rgba(255, 255, 255, 0.06); }
+.action-text { font-size: 13px; }
+
 .start-footer {
     padding: 14px 52px 14px 52px;
     background: rgba(28, 28, 28, 0.96);
@@ -314,7 +358,6 @@ button.menu-item:hover { background: rgba(255, 255, 255, 0.06); }
     border: 1px solid rgba(255, 255, 255, 0.08);
     border-radius: 8px;
 }
-.cal.repaint { background: rgba(36, 36, 36, 0.941); }   /* see CalendarFlyout.render */
 .cal-head {
     padding: 14px 18px;
     font-size: 13px;
@@ -336,3 +379,99 @@ button.menu-item:hover { background: rgba(255, 255, 255, 0.06); }
 .cal-day.today { background: #4cc2ff; color: #000000; font-weight: 600; }
 .cal-nav { padding: 12px 12px 0 22px; }
 .cal-month { font-size: 13px; font-weight: 600; }
+
+/* ── Taskbar (replaces Waybar) ───────────────────────────────────── */
+window.taskbar-window { background: transparent; }
+.taskbar { min-height: 48px; font-size: 12px; }
+.taskbar label { text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6); }
+popover.tray-menu label, popover.tray-overflow label { text-shadow: none; }
+.taskbar button {
+    background: transparent;
+    border: none;
+    box-shadow: none;
+    color: #ffffff;
+    border-radius: 4px;
+    padding: 0;
+    min-height: 40px;
+    margin: 4px 1px;
+    transition: background-color 120ms ease;
+}
+.taskbar button:hover { background: rgba(255, 255, 255, 0.08); }
+
+/* start button: grey while the start menu is open, logo dips when it opens */
+button.tb-start { min-width: 40px; }
+button.tb-start.open { background: rgba(255, 255, 255, 0.08); }
+button.tb-start.open image { animation: start-dip 260ms ease-out; }
+button.tb-start:active image { transform: scale(0.82); }
+@keyframes start-dip {
+    0%   { transform: scale(1); }
+    35%  { transform: scale(0.78); }
+    100% { transform: scale(1); }
+}
+
+/* app buttons with the "running" dash; the active app gets a wide blue one */
+button.tb-app { min-width: 40px; padding: 0 8px; }
+button.tb-app.active { background: rgba(255, 255, 255, 0.06); }
+button.tb-app.active:hover { background: rgba(255, 255, 255, 0.10); }
+button.tb-app:active image { transform: scale(0.88); }
+.dash {
+    min-width: 6px;
+    min-height: 3px;
+    margin-bottom: 0;
+    border-radius: 2px;
+    background: rgba(255, 255, 255, 0.55);
+    opacity: 0;
+    transition: min-width 160ms ease-out, background-color 160ms ease-out, opacity 120ms;
+}
+button.tb-app.running .dash { opacity: 1; }
+button.tb-app.active .dash { min-width: 16px; background: #4cc2ff; }
+
+/* right side */
+.tb-right { margin-right: 0; }
+button.tb-tray-arrow { min-width: 24px; }
+button.tb-tray-item { min-width: 28px; }
+.tb-tray { margin-right: 4px; }
+button.tb-quick { padding: 0 4px; margin: 4px 2px; }
+.tb-quick image.st-net, .tb-quick image.st-vol { min-width: 28px; }
+.tb-quick image.st-bat { min-width: 32px; }
+button.tb-clock { padding: 0 10px; margin: 4px 2px; }
+.tb-clock-text { font-size: 12px; }
+button.tb-peek {
+    min-width: 6px;
+    margin: 0 0 0 6px;
+    border-radius: 0;
+    border-left: 1px solid rgba(255, 255, 255, 0.15);
+}
+
+/* overflow flyout with hidden tray icons, and app/tray context menus */
+popover.tray-overflow > contents,
+popover.tray-menu > contents {
+    background: rgba(43, 43, 43, 0.97);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 8px;
+    padding: 6px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+    color: #ffffff;
+}
+popover.tray-overflow flowboxchild { padding: 0; }
+popover.tray-overflow button.tb-tray-item {
+    min-width: 36px; min-height: 36px; margin: 2px;
+    background: transparent; border: none; box-shadow: none; border-radius: 4px;
+}
+popover.tray-overflow button.tb-tray-item:hover { background: rgba(255, 255, 255, 0.08); }
+.overflow-empty { font-size: 12px; color: rgba(255, 255, 255, 0.6); padding: 8px 10px; }
+/* popovers live inside the taskbar widget tree: undo the taskbar button sizes */
+popover.tray-menu button, popover.tray-overflow button { min-height: 0; margin: 0; }
+popover.tray-overflow button.tb-tray-item { min-height: 36px; margin: 2px; }
+button.tray-menu-item {
+    min-width: 200px;
+    padding: 6px 10px;
+    background: transparent;
+    border: none;
+    box-shadow: none;
+    border-radius: 4px;
+    color: #ffffff;
+}
+button.tray-menu-item:hover { background: rgba(255, 255, 255, 0.06); }
+button.tray-menu-item:disabled { color: rgba(255, 255, 255, 0.4); }
+.tray-menu-sep { margin: 4px 6px; background: rgba(255, 255, 255, 0.08); min-height: 1px; }

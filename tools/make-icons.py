@@ -70,6 +70,10 @@ save("bluetooth", f'<path d="M7 7.5l10 9-5 4.5V3l5 4.5-10 9" {st}/>')
 save("airplane", f'<path d="M21 15.5v-1.8l-7.5-4.7V4.2a1.5 1.5 0 0 0-3 0V9L3 13.7v1.8l7.5-2.3v4.9l-2 1.5V21l3.5-1 3.5 1v-1.4l-2-1.5v-4.9z" {st}/>')
 save("moon", f'<path d="M19.5 14.5A8 8 0 0 1 9.5 4.5a8 8 0 1 0 10 10z" {st}/>')
 save("snip", f'<circle cx="6" cy="17.5" r="2.5" {st}/><circle cx="6" cy="6.5" r="2.5" {st}/><path d="M8.2 7.8L20 18M8.2 16.2L20 6" {st}/>')
+# start menu search: "Open" (arrow out of a box) and app actions (window)
+save("open", f'<path d="M10 5H6.5A1.5 1.5 0 0 0 5 6.5v11A1.5 1.5 0 0 0 6.5 19h11a1.5 1.5 0 0 0 1.5-1.5V14" {st}/>'
+             f'<path d="M13.5 5H19v5.5M19 5l-8 8" {st}/>')
+save("window", f'<rect x="3.75" y="5" width="16.5" height="14" rx="2" {st}/><path d="M3.75 9h16.5" {st}/>')
 save("lock", f'<rect x="5" y="10.5" width="14" height="10" rx="2" {st}/><path d="M8 10.5V7.5a4 4 0 0 1 8 0v3" {st}/>')
 # power: open ring (gap at the top) + short stem, like Segoe Fluent "PowerButton"
 save("power", arc(12, 12.75, 7.75, 38, 322, W).replace('0 0 1', '0 1 1') + f'<path d="M12 3.75v7.5" {st}/>')
