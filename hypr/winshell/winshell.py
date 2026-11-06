@@ -33,6 +33,7 @@ RUNTIME = os.environ.get("XDG_RUNTIME_DIR", "/tmp")
 FIFO = os.path.join(RUNTIME, "winshell.fifo")
 READY = os.path.join(RUNTIME, "winshell.ready")
 LOCK = os.path.join(RUNTIME, "winshell.lock")
+START_OPEN = os.path.join(RUNTIME, "winshell.start-open")
 SCRIPTS = os.path.expanduser("~/.config/hypr/scripts")
 
 
@@ -1455,6 +1456,7 @@ class StartMenu:
             self.search.set_text("")
             self.filter()
         self.visible = True
+        self.mark_open(True)
         LS.set_keyboard_mode(self.win, LS.KeyboardMode.EXCLUSIVE)
         self.shell.qs.catcher_for("start")
         slide_in(self.panel)
@@ -1471,6 +1473,19 @@ class StartMenu:
         self.win.set_visible(False)
         LS.set_keyboard_mode(self.win, LS.KeyboardMode.NONE)
         self.shell.qs.catcher_for(None)
+        self.mark_open(False)
+
+    @staticmethod
+    def mark_open(on):
+        """Tell Waybar's start button (startmenu.sh status) whether we're open."""
+        try:
+            if on:
+                open(START_OPEN, "w").close()
+            else:
+                os.unlink(START_OPEN)
+        except OSError:
+            pass
+        spawn("pkill -RTMIN+9 -x waybar")
 
     def on_key(self, _c, keyval, _code, _state):
         if keyval == Gdk.KEY_Escape:

@@ -64,6 +64,20 @@ tooltip label { color: @fg; padding: 2px 4px; }
     background-size: 24px 24px, 16px 3px;
 }
 
+/* start button: grey like an open app while the start menu is open, and
+   the logo dips briefly when it opens (like Windows 11) */
+#custom-start { transition: background-color 120ms ease, background-size 120ms ease; }
+#custom-start.open {
+    background-color: rgba(255, 255, 255, 0.08);
+    animation: start-dip 260ms ease-out;
+}
+#custom-start:active { background-size: 21px 21px; }
+@keyframes start-dip {
+    0%   { background-size: 26px 26px; }
+    35%  { background-size: 20px 20px; }
+    100% { background-size: 26px 26px; }
+}
+
 #custom-start:hover,
 #custom-pin-explorer:hover,
 #custom-pin-browser:hover,

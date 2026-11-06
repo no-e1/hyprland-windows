@@ -1,5 +1,5 @@
 diff --git a/hyprbars/barDeco.cpp b/hyprbars/barDeco.cpp
-index e57f77b..c81d03b 100644
+index e57f77b..4eb4392 100644
 --- a/hyprbars/barDeco.cpp
 +++ b/hyprbars/barDeco.cpp
 @@ -29,6 +29,20 @@
@@ -35,6 +35,19 @@ index e57f77b..c81d03b 100644
          return;
  
      if (e.state != WL_POINTER_BUTTON_STATE_PRESSED) {
+@@ -152,9 +169,9 @@ void CHyprBar::onTouchUp(Event::SCallbackInfo& info, ITouch::SUpEvent e) {
+ }
+ 
+ void CHyprBar::onMouseMove(Vector2D coords) {
+-    // ensure proper redraws of button icons on hover when using hardware cursors
+-    if (g_pGlobalState->config.iconOnHover->value())
+-        damageOnButtonHover();
++    // keep the highlighted button in step with the cursor (not only when
++    // something else happens to redraw the bar)
++    damageOnButtonHover();
+ 
+     // buttons_on_hover: the buttons only exist while the cursor is over the bar,
+     // so the whole bar has to be redrawn as the cursor crosses its edge.
 @@ -198,6 +215,11 @@ void CHyprBar::handleDownEvent(Event::SCallbackInfo& info, std::optional<ITouch:
      const auto PWINDOW = m_pWindow.lock();
  
@@ -56,40 +69,32 @@ index e57f77b..c81d03b 100644
      if (m_pWindow.lock() != Desktop::focusState()->window())
          return;
  
-@@ -275,6 +299,21 @@ void CHyprBar::handleUpEvent(Event::SCallbackInfo& info) {
+@@ -275,6 +299,7 @@ void CHyprBar::handleUpEvent(Event::SCallbackInfo& info) {
          if (m_bTouchEv)
              (void)Config::Actions::floatWindow(Config::Actions::eTogglableAction::TOGGLE_ACTION_DISABLE);
  
-+        // Windows-like snapping: drop at the top edge to maximize, left/right edge to snap to a half.
-+        const auto MOUSE = g_pInputManager->getMouseCoordsInternal();
-+        const auto MON   = Desktop::focusState()->monitor();
-+        if (MON && !m_bTouchEv) {
-+            const char* edge = nullptr;
-+            if (MOUSE.y <= MON->m_position.y + 3)
-+                edge = "top";
-+            else if (MOUSE.x <= MON->m_position.x + 3)
-+                edge = "left";
-+            else if (MOUSE.x >= MON->m_position.x + MON->m_size.x - 4)
-+                edge = "right";
-+            if (edge)
-+                Config::Supplementary::executor()->spawn(std::string{"$HOME/.config/hypr/scripts/winctl.sh snap "} + edge);
-+        }
-+
++        // snapping at the screen edges: see onDragEnded() in main.cpp (all windows)
          LOG(Log::DEBUG, "[hyprbars] Dragging ended on {:x}", (uintptr_t)m_pWindow.lock().get());
      }
  
-@@ -284,27 +323,48 @@ void CHyprBar::handleUpEvent(Event::SCallbackInfo& info) {
+@@ -284,27 +309,38 @@ void CHyprBar::handleUpEvent(Event::SCallbackInfo& info) {
  }
  
  void CHyprBar::handleMovement() {
 +    // dragging a maximized window restores its normal size (like Windows)
-+    Config::Supplementary::executor()->spawn("$HOME/.config/hypr/scripts/winctl.sh drag-start");
      g_layoutManager->beginDragTarget(m_pWindow.lock()->layoutTarget(), MBIND_MOVE);
      m_bDraggingThis = true;
      LOG(Log::DEBUG, "[hyprbars] Dragging initiated on {:x}", (uintptr_t)m_pWindow.lock().get());
      return;
  }
  
+-bool CHyprBar::doButtonPress(Config::INTEGER barPadding, Config::INTEGER barButtonPadding, Config::INTEGER barHeight, Vector2D COORDS, const bool BUTTONSRIGHT) {
+-    //check if on a button
+-    float offset = barPadding;
+-
+-    for (auto& b : g_pGlobalState->buttons) {
+-        const auto BARBUF     = Vector2D{assignedBoxGlobal().w, sc<double>(barHeight)};
+-        Vector2D   currentPos = Vector2D{(BUTTONSRIGHT ? BARBUF.x - barButtonPadding - b.size - offset : offset), (BARBUF.y - b.size) / 2.0}.floor();
 +// The command strings stored with the buttons get corrupted at runtime (their
 +// memory is freed while the buttons are still in use; short strings like the
 +// icons survive because they live inside the object). So the command is
@@ -98,33 +103,19 @@ index e57f77b..c81d03b 100644
 +static void spawnButton(size_t i) {
 +    Config::Supplementary::executor()->spawn("$HOME/.config/hypr/scripts/winctl.sh button " + std::to_string(i));
 +}
-+
- bool CHyprBar::doButtonPress(Config::INTEGER barPadding, Config::INTEGER barButtonPadding, Config::INTEGER barHeight, Vector2D COORDS, const bool BUTTONSRIGHT) {
--    //check if on a button
--    float offset = barPadding;
-+    // Windows 11 caption buttons: full-height rectangles, flush with the edge.
-+    // The button that is drawn highlighted is the one that gets the click, so
-+    // what you see is always what you hit.
-+    for (size_t i = 0; i < g_pGlobalState->buttons.size() && i < 32; ++i) {
-+        if (m_iButtonHoverState & (1u << i)) {
-+            debugLog(std::format("button {} (hover)", i));
-+            spawnButton(i);
-+            return true;
-+        }
-+    }
  
--    for (auto& b : g_pGlobalState->buttons) {
--        const auto BARBUF     = Vector2D{assignedBoxGlobal().w, sc<double>(barHeight)};
--        Vector2D   currentPos = Vector2D{(BUTTONSRIGHT ? BARBUF.x - barButtonPadding - b.size - offset : offset), (BARBUF.y - b.size) / 2.0}.floor();
+-        if (VECINRECT(COORDS, currentPos.x, currentPos.y, currentPos.x + b.size + barButtonPadding, currentPos.y + b.size)) {
+-            // hit on close
+-            Config::Supplementary::executor()->spawn(b.cmd);
++bool CHyprBar::doButtonPress(Config::INTEGER barPadding, Config::INTEGER barButtonPadding, Config::INTEGER barHeight, Vector2D COORDS, const bool BUTTONSRIGHT) {
++    // Windows 11 caption buttons: full-height rectangles, flush with the edge.
++    // Decided by where the cursor is (same geometry as the highlight).
 +    float offset = 0;
 +    for (size_t i = 0; i < g_pGlobalState->buttons.size(); ++i) {
 +        const auto& b          = g_pGlobalState->buttons[i];
 +        const auto  BARBUF     = Vector2D{assignedBoxGlobal().w, sc<double>(barHeight)};
 +        Vector2D    currentPos = Vector2D{(BUTTONSRIGHT ? BARBUF.x - b.size - offset : offset), 0.0}.floor();
- 
--        if (VECINRECT(COORDS, currentPos.x, currentPos.y, currentPos.x + b.size + barButtonPadding, currentPos.y + b.size)) {
--            // hit on close
--            Config::Supplementary::executor()->spawn(b.cmd);
++
 +        if (VECINRECT(COORDS, currentPos.x, currentPos.y, currentPos.x + b.size, BARBUF.y)) {
 +            debugLog(std::format("button {} (geometry)", i));
 +            spawnButton(i);
@@ -136,7 +127,7 @@ index e57f77b..c81d03b 100644
      }
      return false;
  }
-@@ -367,30 +427,28 @@ void CHyprBar::renderBarButtons(Render::CRenderContext& ctx, CBox* barBox, const
+@@ -367,30 +403,28 @@ void CHyprBar::renderBarButtons(Render::CRenderContext& ctx, CBox* barBox, const
      const auto visibleCount    = getVisibleButtonCount(BARBUTTONPADDING, BARPADDING, Vector2D{barBox->w, barBox->h}, scale);
      const bool INVALIDATEICONS = m_bButtonsDirty || m_bWindowSizeChanged;
  
@@ -146,9 +137,9 @@ index e57f77b..c81d03b 100644
          auto&      button           = g_pGlobalState->buttons[i];
          const auto scaledButtonSize = button.size * scale;
 -        const auto scaledButtonsPad = BARBUTTONPADDING * scale;
--
--        auto       color = button.bgcol;
  
+-        auto       color = button.bgcol;
+-
 -        if (INACTIVECOLOR > 0) {
 -            color = m_bWindowHasFocus ? color : configColor(INACTIVECOLOR);
 -            if (INVALIDATEICONS && button.userfg && button.iconTex)
@@ -182,7 +173,7 @@ index e57f77b..c81d03b 100644
  }
  
  void CHyprBar::renderBarButtonsText(Render::CRenderContext& ctx, CBox* barBox, const float scale, const float a) {
-@@ -407,19 +465,19 @@ void CHyprBar::renderBarButtonsText(Render::CRenderContext& ctx, CBox* barBox, c
+@@ -407,19 +441,19 @@ void CHyprBar::renderBarButtonsText(Render::CRenderContext& ctx, CBox* barBox, c
      const auto visibleCount = getVisibleButtonCount(BARBUTTONPADDING, BARPADDING, Vector2D{barBox->w, barBox->h}, scale);
      const auto COORDS       = cursorRelativeToBar();
  
@@ -209,7 +200,7 @@ index e57f77b..c81d03b 100644
  
          const bool NEEDICON = !button.icon.empty() &&
              (!button.iconTex || button.iconTex->m_texID == 0 || !button.m_fIconScale.has_value() || std::abs(button.m_fIconScale.value_or(0.F) - scale) > 1e-6);
-@@ -428,7 +486,7 @@ void CHyprBar::renderBarButtonsText(Render::CRenderContext& ctx, CBox* barBox, c
+@@ -428,7 +462,7 @@ void CHyprBar::renderBarButtonsText(Render::CRenderContext& ctx, CBox* barBox, c
              auto fgcol = button.userfg ? button.fgcol : (button.bgcol.r + button.bgcol.g + button.bgcol.b < 1) ? CHyprColor(0xFFFFFFFF) : CHyprColor(0xFF000000);
  
              button.iconTex =
@@ -218,31 +209,117 @@ index e57f77b..c81d03b 100644
              button.m_fIconScale = scale;
          }
  
-@@ -709,21 +767,23 @@ void CHyprBar::damageOnButtonHover() {
-     const auto ALIGNBUTTONS     = g_pGlobalState->config.barButtonsAlignment->value();
-     const bool BUTTONSRIGHT     = ALIGNBUTTONS != "left";
+@@ -703,27 +737,25 @@ void CHyprBar::updateRules() {
+ }
  
+ void CHyprBar::damageOnButtonHover() {
+-    const auto BARPADDING       = g_pGlobalState->config.barPadding->value();
+-    const auto BARBUTTONPADDING = g_pGlobalState->config.barButtonPadding->value();
+-    const auto HEIGHT           = g_pGlobalState->config.barHeight->value();
+-    const auto ALIGNBUTTONS     = g_pGlobalState->config.barButtonsAlignment->value();
+-    const bool BUTTONSRIGHT     = ALIGNBUTTONS != "left";
+-
 -    float      offset = BARPADDING;
-+    float      offset = 0;
-+    (void)BARPADDING;
-+    (void)BARBUTTONPADDING;
- 
-     const auto COORDS = cursorRelativeToBar();
- 
-     for (auto& b : g_pGlobalState->buttons) {
-         const auto BARBUF     = Vector2D{assignedBoxGlobal().w, sc<double>(HEIGHT)};
+-
+-    const auto COORDS = cursorRelativeToBar();
+-
+-    for (auto& b : g_pGlobalState->buttons) {
+-        const auto BARBUF     = Vector2D{assignedBoxGlobal().w, sc<double>(HEIGHT)};
 -        Vector2D   currentPos = Vector2D{(BUTTONSRIGHT ? BARBUF.x - BARBUTTONPADDING - b.size - offset : offset), (BARBUF.y - b.size) / 2.0}.floor();
-+        Vector2D   currentPos = Vector2D{(BUTTONSRIGHT ? BARBUF.x - b.size - offset : offset), 0.0}.floor();
- 
+-
 -        bool       hover = VECINRECT(COORDS, currentPos.x, currentPos.y, currentPos.x + b.size + BARBUTTONPADDING, currentPos.y + b.size);
-+        bool       hover = VECINRECT(COORDS, currentPos.x, 0, currentPos.x + b.size, BARBUF.y);
- 
-         if (hover != m_bButtonHovered) {
-             m_bButtonHovered = hover;
-             damageEntire();
-         }
+-
+-        if (hover != m_bButtonHovered) {
+-            m_bButtonHovered = hover;
+-            damageEntire();
+-        }
++    const auto HEIGHT       = g_pGlobalState->config.barHeight->value();
++    const auto ALIGNBUTTONS = g_pGlobalState->config.barButtonsAlignment->value();
++    const bool BUTTONSRIGHT = ALIGNBUTTONS != "left";
++    const auto COORDS       = cursorRelativeToBar();
++    const auto BARBUF       = Vector2D{assignedBoxGlobal().w, sc<double>(HEIGHT)};
++
++    unsigned int mask   = 0;
++    float        offset = 0;
++    for (size_t i = 0; i < g_pGlobalState->buttons.size() && i < 32; ++i) {
++        const auto& b = g_pGlobalState->buttons[i];
++        const float x = BUTTONSRIGHT ? BARBUF.x - b.size - offset : offset;
++        if (VECINRECT(COORDS, std::floor(x), 0, std::floor(x) + b.size, BARBUF.y))
++            mask |= 1u << i;
++        offset += b.size;
++    }
  
 -        offset += BARBUTTONPADDING + b.size;
-+        offset += b.size;
++    if (mask != m_iButtonHoverState) {
++        m_iButtonHoverState = mask;
++        m_bButtonHovered    = mask != 0;
++        damageEntire();
      }
  }
+diff --git a/hyprbars/main.cpp b/hyprbars/main.cpp
+index 3d88b57..93ff626 100644
+--- a/hyprbars/main.cpp
++++ b/hyprbars/main.cpp
+@@ -14,6 +14,11 @@
+ #include <hyprland/src/config/lua/bindings/LuaBindingsInternal.hpp>
+ #include <hyprland/src/config/lua/types/LuaConfigColor.hpp>
+ #include <hyprland/src/state/MonitorState.hpp>
++#include <hyprland/src/layout/LayoutManager.hpp>
++#include <hyprland/src/layout/supplementary/DragController.hpp>
++#include <hyprland/src/managers/input/InputManager.hpp>
++#include <hyprland/src/desktop/state/FocusState.hpp>
++#include <hyprland/src/config/supplementary/executor/Executor.hpp>
+ 
+ #include <algorithm>
+ 
+@@ -153,6 +158,41 @@ int setLuaTitle(lua_State* L) {
+     return 0;
+ }
+ 
++
++// ── Windows-like window dragging (every window, also apps with their own
++//    title bar such as Brave or Discord, whose drags hyprbars never sees) ──
++//  * as soon as a window is being moved, a maximized one shrinks back
++//    (winctl.sh drag-start)
++//  * when it is dropped: at the top edge it maximizes, at the left/right
++//    edge it snaps to that half; anywhere else it is pushed back below the
++//    top and right of the left edge (winctl.sh drag-end <edge>)
++static bool s_moveDrag = false;
++
++static void onDragMotion() {
++    if (g_layoutManager->dragController()->mode() != MBIND_MOVE || s_moveDrag)
++        return;
++    s_moveDrag = true;
++    Config::Supplementary::executor()->spawn("$HOME/.config/hypr/scripts/winctl.sh drag-start");
++}
++
++static void onDragEnded() {
++    if (!s_moveDrag)
++        return;
++    s_moveDrag = false;
++    const auto  MOUSE = g_pInputManager->getMouseCoordsInternal();
++    const auto  MON   = Desktop::focusState()->monitor();
++    std::string edge  = "none";
++    if (MON) {
++        if (MOUSE.y <= MON->m_position.y + 3)
++            edge = "top";
++        else if (MOUSE.x <= MON->m_position.x + 3)
++            edge = "left";
++        else if (MOUSE.x >= MON->m_position.x + MON->m_size.x - 4)
++            edge = "right";
++    }
++    Config::Supplementary::executor()->spawn("$HOME/.config/hypr/scripts/winctl.sh drag-end " + edge);
++}
++
+ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
+     PHANDLE = handle;
+ 
+@@ -222,6 +262,8 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
+ 
+     static auto P4 = Event::bus()->m_events.config.preReload.listen([&] { onPreConfigReload(); });
+     static auto P5 = Event::bus()->m_events.config.reloaded.listen([&] { onConfigReloaded(); });
++    static auto P6 = g_layoutManager->dragController()->m_events.motion.listen([] { onDragMotion(); });
++    static auto P7 = g_layoutManager->dragController()->m_events.ended.listen([] { onDragEnded(); });
+ 
+     // add deco to existing windows
+     for (auto& w : Desktop::windowState()->windows()) {

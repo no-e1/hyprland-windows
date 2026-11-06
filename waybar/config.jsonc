@@ -13,6 +13,10 @@
 
 
     "custom/start": {
+        "exec": "~/.config/hypr/scripts/startmenu.sh status",
+        "return-type": "json",
+        "interval": "once",
+        "signal": 9,
         "format": " ",
         "tooltip-format": "Start",
         "on-click": "~/.config/hypr/scripts/startmenu.sh"

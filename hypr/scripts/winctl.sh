@@ -23,6 +23,14 @@ case "$1" in
     maximize)   max toggle ;;
     unmaximize) max restore ;;
     drag-start) hyprctl eval "WinDragStart()" >/dev/null ;;
+    # a window was dropped (any window, sent by the hyprbars plugin):
+    # top edge = maximize, left/right edge = half, else keep it on screen
+    drag-end)
+        case "$2" in
+            top)        max max ;;
+            left|right) hyprctl eval "WinForget()" >/dev/null; "$S/snap.sh" "$2" ;;
+            *)          hyprctl eval "WinClamp()" >/dev/null ;;
+        esac ;;
     minimize)   hyprctl eval "HideWindow()" >/dev/null ;;
     snap)
         case "$2" in

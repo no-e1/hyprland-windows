@@ -409,6 +409,20 @@ function WinForget()
     end
 end
 
+-- Called when a dragged window is dropped somewhere other than a screen
+-- edge: like on Windows it may not stick out past the top (its title bar
+-- stays reachable) or past the left edge.
+function WinClamp()
+    local w = hl.get_active_window()
+    if not w or not w.floating or saved_geometry[w.address] then return end
+    local x, y = work_area(w.monitor or hl.get_active_monitor())
+    local top = y + (has_bar(w) and BAR_HEIGHT or 0)
+    local nx, ny = math.max(w.at.x, x), math.max(w.at.y, top)
+    if nx ~= w.at.x or ny ~= w.at.y then
+        hl.dispatch(hl.dsp.window.move({ x = nx, y = ny, window = "address:" .. w.address }))
+    end
+end
+
 -- Called by the title bar when a drag starts: a maximized window shrinks back
 -- to its normal size and stays under the cursor at the same relative spot.
 function WinDragStart()
