@@ -95,6 +95,26 @@ def dispatch(lua):
     subprocess.run(["hyprctl", "dispatch", lua], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
+# Window events that change what the pinned taskbar buttons show. Waybar
+# refreshes those modules on SIGRTMIN+8 instead of polling every few seconds.
+TASKBAR_EVENTS = {"activewindowv2", "openwindow", "closewindow", "movewindowv2",
+                  "workspacev2", "activespecialv2"}
+_taskbar_timer = None
+
+
+def refresh_taskbar():
+    """Ask Waybar to redraw the pinned apps (debounced: one signal per burst)."""
+    global _taskbar_timer
+    if _taskbar_timer is None:
+        def fire():
+            global _taskbar_timer
+            _taskbar_timer = None
+            spawn("pkill -RTMIN+8 -x waybar")
+            return False
+        _taskbar_timer = GLib.timeout_add(40, fire)
+    return False
+
+
 def wifi_device():
     return next((l.split(":")[0] for l in sh("nmcli -t -f DEVICE,TYPE dev").splitlines()
                  if l.endswith(":wifi")), "")
@@ -349,8 +369,10 @@ class Switcher:
         GLib.timeout_add(50, finish)
 
     def focus(self, addr, cls, tries):
-        """Focus a window and make sure it really ended up active and on top."""
-        dispatch(f'hl.dsp.focus({{ window = "address:{addr}" }})')
+        """Focus a window and make sure it really ended up active and on top.
+        ShowWindow (hyprland.lua) restores a minimized window before focusing it."""
+        subprocess.run(["hyprctl", "eval", f'ShowWindow("{addr}")'],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         dispatch(f'hl.dsp.window.alter_zorder({{ mode = "top", window = "address:{addr}" }})')
 
         def check():
@@ -407,6 +429,8 @@ class Switcher:
             s.connect(hypr_socket(".socket2.sock"))
             for line in s.makefile("r", errors="replace"):
                 ev, _, data = line.strip().partition(">>")
+                if ev in TASKBAR_EVENTS:
+                    GLib.idle_add(refresh_taskbar)
                 if ev == "configreloaded":
                     self.paused_until = time.monotonic() + 3   # grim can crash during a reload
                 elif ev == "activewindowv2" and data:
@@ -1076,8 +1100,8 @@ class CalendarFlyout:
         self.win = layer_window(app, "winshell-calendar", LS.Layer.OVERLAY,
                                 anchors=(LS.Edge.BOTTOM, LS.Edge.RIGHT),
                                 margins={LS.Edge.BOTTOM: 12, LS.Edge.RIGHT: 12},
-                                keyboard=LS.KeyboardMode.ON_DEMAND)
-        keys = Gtk.EventControllerKey()
+                                keyboard=LS.KeyboardMode.NONE)
+        keys = Gtk.EventControllerKey(propagation_phase=Gtk.PropagationPhase.CAPTURE)
         keys.connect("key-pressed", lambda _c, k, *_: (self.hide(), True)[1] if k == Gdk.KEY_Escape else False)
         self.win.add_controller(keys)
 
@@ -1100,19 +1124,36 @@ class CalendarFlyout:
 
         self.grid = Gtk.Grid(column_homogeneous=True, row_homogeneous=True, column_spacing=2, row_spacing=2)
         self.grid.add_css_class("cal-grid")
+        # column 0: calendar week (ISO 8601, as used in Switzerland/Germany)
+        self.grid.attach(label("KW", "cal-weekname", xalign=0.5, ellipsize=False), 0, 0, 1, 1)
         for i, d in enumerate(("Mo", "Tu", "We", "Th", "Fr", "Sa", "Su")):
-            self.grid.attach(label(d, "cal-dayname", xalign=0.5, ellipsize=False), i, 0, 1, 1)
-        self.cells = []
+            self.grid.attach(label(d, "cal-dayname", xalign=0.5, ellipsize=False), i + 1, 0, 1, 1)
+        self.cells, self.weeks = [], []
         for r in range(6):
+            wk = label("", "cal-week", xalign=0.5, ellipsize=False)
+            wk.set_valign(Gtk.Align.CENTER)
+            self.grid.attach(wk, 0, r + 1, 1, 1)
+            self.weeks.append(wk)
             for c in range(7):
                 cell = label("", "cal-day", xalign=0.5, ellipsize=False)
                 cell.set_size_request(40, 40)
                 cell.set_valign(Gtk.Align.CENTER)
                 cell.set_halign(Gtk.Align.CENTER)
-                self.grid.attach(cell, c, r + 1, 1, 1)
+                self.grid.attach(cell, c + 1, r + 1, 1, 1)
                 self.cells.append(cell)
         panel.append(self.grid)
         self.win.set_child(panel)
+
+        # mouse wheel / touchpad: one notch = one month
+        scroll = Gtk.EventControllerScroll(
+            flags=Gtk.EventControllerScrollFlags.VERTICAL | Gtk.EventControllerScrollFlags.DISCRETE)
+        scroll.connect("scroll", self.on_scroll)
+        panel.add_controller(scroll)
+
+    def on_scroll(self, _c, _dx, dy):
+        if dy:
+            self.shift(1 if dy > 0 else -1)
+        return True
 
     def shift(self, months):
         m = self.month - 1 + months
@@ -1124,6 +1165,8 @@ class CalendarFlyout:
         first = GLib.DateTime.new_local(self.year, self.month, 1, 0, 0, 0)
         self.month_lbl.set_text(first.format("%B %Y"))
         start = first.add_days(-(first.get_day_of_week() - 1))     # back to Monday
+        for r, wk in enumerate(self.weeks):
+            wk.set_text(str(start.add_days(7 * r).get_week_of_year()))
         for i, cell in enumerate(self.cells):
             day = start.add_days(i)
             cell.set_text(str(day.get_day_of_month()))
@@ -1149,14 +1192,17 @@ class CalendarFlyout:
         self.visible = True
         self.shell.qs.catcher_for("calendar")
         slide_in(self.panel)
-        self.win.present()
         spawn("swaync-client -op")     # notification center sits right above
+        # take the keyboard (after swaync opened) so Escape closes both
+        LS.set_keyboard_mode(self.win, LS.KeyboardMode.EXCLUSIVE)
+        self.win.present()
 
     def hide(self):
         if not self.visible:
             return
         self.visible = False
         self.win.set_visible(False)
+        LS.set_keyboard_mode(self.win, LS.KeyboardMode.NONE)
         self.shell.qs.catcher_for(None)
         spawn("swaync-client -cp")
 
@@ -1171,7 +1217,8 @@ class StartMenu:
         self.apps = []
         self.win = layer_window(app, "winshell-start", LS.Layer.OVERLAY,
                                 anchors=(LS.Edge.BOTTOM,), margins={LS.Edge.BOTTOM: 12})
-        keys = Gtk.EventControllerKey()
+        # capture phase: the search field would otherwise swallow Escape
+        keys = Gtk.EventControllerKey(propagation_phase=Gtk.PropagationPhase.CAPTURE)
         keys.connect("key-pressed", self.on_key)
         self.win.add_controller(keys)
 
@@ -1185,6 +1232,8 @@ class StartMenu:
         body.add_css_class("start-body")
         self.search = Gtk.SearchEntry(placeholder_text="Search for apps, settings, and documents")
         self.search.add_css_class("start-search")
+        if hasattr(self.search.props, "search_delay"):
+            self.search.props.search_delay = 40      # default 150 ms feels laggy
         self.search.connect("search-changed", lambda *_: self.filter())
         self.search.connect("activate", lambda *_: self.launch_first())
         body.append(self.search)
@@ -1261,9 +1310,18 @@ class StartMenu:
         spawn(f"sleep 0.2; {SCRIPTS}/powermenu.sh '{action}'")
 
     # apps -----------------------------------------------------------------
+    # kitty is the terminal of this setup: it shows up as "Terminal", and the
+    # other terminal apps that came with the system stay out of the menu
+    RENAME = {"kitty.desktop": "Terminal"}
+    HIDDEN = {"org.kde.konsole.desktop", "xterm.desktop", "uxterm.desktop",
+              "org.gnome.Terminal.desktop", "org.gnome.Ptyxis.desktop", "foot.desktop",
+              "footclient.desktop", "foot-server.desktop"}
+
     def load_apps(self):
-        apps = [a for a in Gio.AppInfo.get_all() if a.should_show()]
-        apps.sort(key=lambda a: a.get_display_name().lower())
+        apps = [a for a in Gio.AppInfo.get_all()
+                if a.should_show() and a.get_id() not in self.HIDDEN]
+        name_of = lambda a: self.RENAME.get(a.get_id(), a.get_display_name())
+        apps.sort(key=lambda a: name_of(a).lower())
         self.apps = apps
         clear(self.flow)
         for a in apps:
@@ -1272,13 +1330,14 @@ class StartMenu:
             img = Gtk.Image.new_from_gicon(a.get_icon() or Gio.ThemedIcon.new("application-x-executable"))
             img.set_pixel_size(32)
             tile.append(img)
-            name = label(a.get_display_name(), "app-name", xalign=0.5)
+            name = label(name_of(a), "app-name", xalign=0.5)
             name.set_max_width_chars(10)
             name.set_width_chars(10)
             tile.append(name)
             child = Gtk.FlowBoxChild(child=tile)
             child.app = a
-            child.key = " ".join(filter(None, [a.get_display_name(), a.get_name(),
+            generic = a.get_generic_name() if hasattr(a, "get_generic_name") else None
+            child.key = " ".join(filter(None, [name_of(a), a.get_display_name(), a.get_name(), generic or "",
                                                a.get_executable() or "", a.get_description() or "",
                                                " ".join(a.get_keywords() if hasattr(a, "get_keywords") else [])])).lower()
             click = Gtk.GestureClick()
@@ -1326,8 +1385,9 @@ class StartMenu:
         if self.shell.calendar.visible:
             self.shell.calendar.hide()
         spawn("pkill -x rofi")
-        self.search.set_text("")
-        self.filter()
+        if self.search.get_text():
+            self.search.set_text("")
+            self.filter()
         self.visible = True
         LS.set_keyboard_mode(self.win, LS.KeyboardMode.EXCLUSIVE)
         self.shell.qs.catcher_for("start")

@@ -2,31 +2,34 @@
 # Pinned taskbar apps:
 #   pinned.sh status <class> <tooltip> [text]  -> JSON for Waybar (running/active indicator)
 #   pinned.sh open   <class> <command>         -> focus / minimize the window or launch the app
+#
+# Waybar refreshes the status right away when winshell sends SIGRTMIN+8
+# (on every window event), so the highlight follows clicks immediately.
 mode="$1"; cls="$2"; arg="$3"
 
-addr() {
-    hyprctl clients -j 2>/dev/null \
-      | jq -r --arg c "$cls" '[.[] | select(.class | test($c; "i"))] | sort_by(.focusHistoryID) | .[0].address // empty'
-}
+clients=$(hyprctl clients -j 2>/dev/null)
+active=$(hyprctl activewindow -j 2>/dev/null)
+
+# most recently used window of this app (minimized ones included)
+addr=$(jq -r --arg c "$cls" '[.[] | select(.class | test($c; "i"))] | sort_by(.focusHistoryID) | .[0].address // empty' <<<"$clients")
+# the active window, if it belongs to this app and is not minimized
+front=$(jq -r --arg c "$cls" 'select(.class? and (.class | test($c; "i")) and (.workspace.name | startswith("special:") | not)) | .address' <<<"$active")
 
 case "$mode" in
     status)
-        a=$(addr)
-        active=$(hyprctl activewindow -j 2>/dev/null | jq -r '.address // empty')
         class=""
-        [ -n "$a" ] && class="running"
-        [ -n "$a" ] && [ "$a" = "$active" ] && class="active"
+        [ -n "$addr" ] && class="running"
+        [ -n "$front" ] && class="active"
         printf '{"text":"%s","class":"%s","tooltip":"%s"}\n' "${4:- }" "$class" "$arg" ;;
     open)
-        a=$(addr)
-        active=$(hyprctl activewindow -j 2>/dev/null | jq -r '.address // empty')
-        if [ -n "$a" ] && [ "$a" = "$active" ]; then
-            # like Windows: clicking the app that is already in front minimizes it
-            hyprctl eval "HideWindow(\"$a\")" >/dev/null
-        elif [ -n "$a" ]; then
-            hyprctl dispatch "hl.dsp.focus({ window = \"address:$a\" })" >/dev/null
-            hyprctl dispatch 'hl.dsp.window.alter_zorder({ mode = "top" })' >/dev/null
+        if [ -n "$front" ]; then
+            # like Windows: clicking the app that is in front minimizes it
+            hyprctl eval "HideWindow(\"$front\")" >/dev/null
+        elif [ -n "$addr" ]; then
+            # brings it back if it was minimized (see the window.active hook)
+            hyprctl eval "ShowWindow(\"$addr\")" >/dev/null
         else
             setsid -f sh -c "$arg" >/dev/null 2>&1
-        fi ;;
+        fi
+        pkill -RTMIN+8 -x waybar ;;
 esac

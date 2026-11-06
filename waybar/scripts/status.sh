@@ -2,7 +2,7 @@
 # Tray status for Waybar (JSON with a CSS class that selects the icon).
 #   status.sh net   – Wi-Fi / Ethernet, updates on network changes
 #   status.sh vol   – speaker volume, updates on audio changes
-#   status.sh bat   – battery level (one shot, Waybar polls it)
+#   status.sh bat   – battery level, updates when the charger is plugged in/out
 
 json() { printf '{"text":" ","class":"%s","tooltip":"%s"}\n' "$1" "$2"; }
 
@@ -55,5 +55,13 @@ case "$1" in
         vol
         pactl subscribe 2>/dev/null | grep --line-buffered -E "'change' on (sink|server)" |
             while read -r _; do vol; done ;;
-    bat) bat ;;
+    bat)
+        # redraw as soon as the charger is plugged in or out (udev event),
+        # plus every 30 s for the charge level
+        bat
+        { udevadm monitor --udev --subsystem-match=power_supply 2>/dev/null &
+          while sleep 30; do echo tick; done; } |
+            while read -r line; do
+                case "$line" in UDEV*|tick) bat ;; esac
+            done ;;
 esac

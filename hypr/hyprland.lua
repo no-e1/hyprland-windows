@@ -119,11 +119,11 @@ hl.curve("soft",    { type = "spring", mass = 1, stiffness = 260, damping = 26 }
 
 hl.animation({ leaf = "global",        enabled = true, speed = 8,   bezier = "smooth" })
 hl.animation({ leaf = "windows",       enabled = true, speed = 4,   spring = "soft" })
-hl.animation({ leaf = "windowsIn",     enabled = true, speed = 3.2, bezier = "winOut", style = "popin 92%" })
+hl.animation({ leaf = "windowsIn",     enabled = true, speed = 2.2, bezier = "winOut", style = "popin 92%" })
 hl.animation({ leaf = "windowsOut",    enabled = true, speed = 2,   bezier = "winIn",  style = "popin 94%" })
 hl.animation({ leaf = "windowsMove",   enabled = true, speed = 3.5, spring = "soft" })
 hl.animation({ leaf = "border",        enabled = true, speed = 4,   bezier = "smooth" })
-hl.animation({ leaf = "fadeIn",        enabled = true, speed = 2.5, bezier = "smooth" })
+hl.animation({ leaf = "fadeIn",        enabled = true, speed = 1.8, bezier = "smooth" })
 hl.animation({ leaf = "fadeOut",       enabled = true, speed = 2,   bezier = "linear" })
 hl.animation({ leaf = "fade",          enabled = true, speed = 3,   bezier = "smooth" })
 -- start menu and quick settings slide in from the bottom
@@ -204,50 +204,133 @@ hl.layer_rule({ name = "no-anim-winshell", match = { namespace = "^winshell-.*$"
 -- Minimized windows live in the hidden "special:minimized" workspace;
 -- activating one (e.g. from the taskbar) brings it back.
 ---------------------------------------------------------------------
--- Bring a hidden window back to a desktop. Chromium-based apps (Brave)
--- come back with their input shifted a few pixels unless they are made to
--- reconfigure, so nudge the size by one pixel and back.
-function RestoreWindow(w, ws_id)
-    local sel = "address:" .. w.address
-    hl.dispatch(hl.dsp.window.move({ workspace = ws_id, follow = false, window = sel }))
-    hl.dispatch(hl.dsp.window.resize({ x = w.size.x + 1, y = w.size.y, window = sel }))
-    hl.dispatch(hl.dsp.window.resize({ x = w.size.x, y = w.size.y, window = sel }))
-    hl.dispatch(hl.dsp.window.move({ x = w.at.x, y = w.at.y, window = sel }))
+-- State shared with the maximize code further down (defined here because
+-- hiding and restoring need it too).
+local saved_geometry = {}       -- address -> geometry before maximizing
+local fs_hook_paused = {}       -- address -> true while we change its state ourselves
+local hidden_maximized = {}     -- address -> true: was maximized when it got minimized
+
+-- Tell the app it is maximized (no shadow margins, "restore" button) while
+-- Hyprland keeps treating it as a normal window (normal stacking order).
+local function client_maximized(addr, on)
+    hl.dispatch(hl.dsp.window.fullscreen_state({ internal = 0, client = on and 1 or 0,
+                                                 window = "address:" .. addr }))
 end
 
--- Hide (minimize) a window. While we hide windows, Hyprland may hand focus
--- to an already hidden one; the restore hook below must ignore that.
-local restore_blocked_until = 0
-function HideWindow(addr)
+local function later(ms, fn)
+    hl.timer(fn, { timeout = ms, type = "oneshot" })
+end
+
+-- Bring a hidden window back to a desktop.
+-- Maximized windows were told "not maximized" while hidden (see HideWindow),
+-- so tell them again. Other Chromium-based windows need a reconfigure or
+-- their input ends up shifted, so nudge the size by one pixel and back –
+-- the second resize goes out a moment later, otherwise Hyprland merges both
+-- and the window grows by a pixel on every restore.
+function RestoreWindow(w, ws_id)
+    local a, sel = w.address, "address:" .. w.address
+    hl.dispatch(hl.dsp.window.move({ workspace = ws_id, follow = false, window = sel }))
+    hl.dispatch(hl.dsp.window.move({ x = w.at.x, y = w.at.y, window = sel }))
+    if hidden_maximized[a] then
+        hidden_maximized[a] = nil
+        fs_hook_paused[a] = true
+        client_maximized(a, true)
+        later(300, function() fs_hook_paused[a] = nil end)
+    else
+        local sx, sy = w.size.x, w.size.y
+        hl.dispatch(hl.dsp.window.resize({ x = sx + 1, y = sy, window = sel }))
+        later(60, function()
+            hl.dispatch(hl.dsp.window.resize({ x = sx, y = sy, window = sel }))
+        end)
+    end
+end
+
+-- Hide (minimize) a window into the hidden "special:minimized" workspace.
+--  * A maximized Chromium window (Brave) that is moved to a special
+--    workspace while it believes it is maximized comes back with its
+--    contents shifted ~50 px to the right (a blank strip on the left and
+--    the mouse off target) until the browser is restarted. Dropping the
+--    "maximized" state before hiding avoids that; RestoreWindow sets it again.
+--  * Focus moves on to the next window of this desktop, so the taskbar no
+--    longer shows the hidden window as the active one.
+--  * Meanwhile Hyprland may hand focus to an already hidden window; the
+--    restore hook below must ignore that for a moment.
+local restore_blocked = false
+local MAX_HIDE_DELAY = 250      -- ms
+local function focus_next_visible(except)
+    local ws = hl.get_active_workspace()
+    local best
+    for _, w in ipairs(hl.get_windows() or {}) do
+        if w.mapped and w.address ~= except and w.workspace and ws and w.workspace.id == ws.id
+           and (not best or (w.focus_history_id or 99) < (best.focus_history_id or 99)) then
+            best = w
+        end
+    end
+    if best then
+        hl.dispatch(hl.dsp.focus({ window = "address:" .. best.address }))
+    end
+end
+
+function HideWindow(addr, keep_focus)
     if not addr then
         local w = hl.get_active_window()
         addr = w and w.address
     end
     if not addr then return end
-    restore_blocked_until = os.time() + 1
-    hl.dispatch(hl.dsp.window.move({ workspace = "special:minimized", follow = false,
-                                     window = "address:" .. addr }))
+    restore_blocked = true
+    later(MAX_HIDE_DELAY + 400, function() restore_blocked = false end)
+    local function hide()
+        hl.dispatch(hl.dsp.window.move({ workspace = "special:minimized", follow = false,
+                                         window = "address:" .. addr }))
+    end
+    local w = hl.get_window("address:" .. addr)
+    if saved_geometry[addr] or (w and w.fullscreen_client == 1) then
+        -- the app has to redraw as "not maximized" before it disappears
+        hidden_maximized[addr] = true
+        fs_hook_paused[addr] = true
+        client_maximized(addr, false)
+        later(MAX_HIDE_DELAY, hide)
+        later(MAX_HIDE_DELAY + 300, function() fs_hook_paused[addr] = nil end)
+    else
+        hide()
+    end
+    if not keep_focus then
+        focus_next_visible(addr)
+    end
 end
 
+-- Bring a window to the front, restoring it first if it is minimized.
+-- Taskbar and Alt+Tab use this: the window is back on the desktop before it
+-- gets focus, so the hidden workspace never shows up on screen (Brave draws
+-- its contents shifted after being shown there while maximized).
+function ShowWindow(addr)
+    local w = hl.get_window("address:" .. addr)
+    if not w then return end
+    if w.workspace and w.workspace.name == "special:minimized" then
+        local ws = hl.get_active_workspace()
+        if ws and not ws.special then
+            RestoreWindow(w, ws.id)
+        end
+    end
+    hl.dispatch(hl.dsp.focus({ window = "address:" .. addr }))
+end
+
+-- Other ways of activating a minimized window (e.g. Waybar's app buttons)
+-- focus it while it is still hidden: hide the minimized workspace again
+-- first, then bring the window back.
 hl.on("window.active", function()
     local w = hl.get_active_window()
     if w and w.workspace and w.workspace.name == "special:minimized" then
-        if os.time() <= restore_blocked_until then
-            -- focus fell onto a hidden window as a side effect of hiding: drop it
-            local sp = hl.get_active_special_workspace()
-            if sp and sp.name == "special:minimized" then
-                hl.dispatch(hl.dsp.workspace.toggle_special("minimized"))
-            end
-            return
+        local sp = hl.get_active_special_workspace()
+        if sp and sp.name == "special:minimized" then
+            hl.dispatch(hl.dsp.workspace.toggle_special("minimized"))
         end
+        -- focus fell onto a hidden window as a side effect of hiding: ignore it
+        if restore_blocked then return end
         local ws = hl.get_active_workspace()
         if ws and not ws.special then
             RestoreWindow(w, ws.id)
             hl.dispatch(hl.dsp.focus({ window = "address:" .. w.address }))
-        end
-        local sp = hl.get_active_special_workspace()
-        if sp and sp.name == "special:minimized" then
-            hl.dispatch(hl.dsp.workspace.toggle_special("minimized"))
         end
     end
     hl.dispatch(hl.dsp.window.alter_zorder({ mode = "top" }))
@@ -262,7 +345,6 @@ end)
 local BAR_HEIGHT = 32
 local OWN_TITLEBAR = { "^brave%-browser$", "^discord$", "^firefox$", "^org%.mozilla%.firefox$",
                        "^code$", "^code%-oss$", "^org%.gnome%." }
-local saved_geometry = {}
 
 local function has_bar(w)
     for _, pat in ipairs(OWN_TITLEBAR) do
@@ -282,13 +364,6 @@ local function set_geometry(addr, x, y, w, h)
     local sel = "address:" .. addr
     hl.dispatch(hl.dsp.window.resize({ x = w, y = h, window = sel }))
     hl.dispatch(hl.dsp.window.move({ x = x, y = y, window = sel }))
-end
-
--- Tell the app it is maximized (no shadow margins, "restore" button) while
--- Hyprland keeps treating it as a normal window (normal stacking order).
-local function client_maximized(addr, on)
-    hl.dispatch(hl.dsp.window.fullscreen_state({ internal = 0, client = on and 1 or 0,
-                                                 window = "address:" .. addr }))
 end
 
 function WinMax(action, w)
@@ -348,7 +423,7 @@ end
 -- their title bar) get the Windows-style maximize instead.
 hl.on("window.fullscreen", function(ev)
     local w = (type(ev) == "table" and ev.address and ev) or hl.get_active_window()
-    if not w then return end
+    if not w or fs_hook_paused[w.address] then return end
     if w.fullscreen == 1 then
         hl.dispatch(hl.dsp.window.fullscreen({ mode = "maximized", action = "unset", window = "address:" .. w.address }))
         WinMax("toggle", w)
@@ -445,10 +520,6 @@ end
 ---------------------------------------------------------------------
 local win = "SUPER"
 
--- Windows key alone (on release) = start menu
-hl.bind("Super_L", hl.dsp.exec_cmd(scripts .. "/startmenu.sh"), { release = true })
-hl.bind(win .. " + S", hl.dsp.exec_cmd(scripts .. "/startmenu.sh"))          -- search
-
 hl.bind(win .. " + E", hl.dsp.exec_cmd(fileManager))                         -- File Explorer
 hl.bind(win .. " + R", hl.dsp.exec_cmd(scripts .. "/run.sh"))                -- Run
 hl.bind(win .. " + I", hl.dsp.exec_cmd(scripts .. "/settings.sh"))           -- Settings
@@ -492,6 +563,11 @@ end
 hl.bind("ALT + Tab",         function() winshell_send("switch next") end, { repeating = true })
 hl.bind("ALT + SHIFT + Tab", function() winshell_send("switch prev") end, { repeating = true })
 
+-- Windows key alone (on release) = start menu; Win + S = search.
+-- Straight into winshell's pipe: no shell scripts to start first.
+hl.bind("Super_L",     function() winshell_send("menu") end, { release = true })
+hl.bind(win .. " + S", function() winshell_send("menu") end)
+
 -- Show desktop (Win + D): hide every window of this desktop, press again to
 -- bring them back exactly as they were. Win + M minimizes all,
 -- Win + Shift + M restores them.
@@ -513,7 +589,7 @@ local function hide_all()
     local saved = { windows = {}, active = active and active.address }
     for _, w in ipairs(windows_here()) do
         table.insert(saved.windows, w.address)
-        HideWindow(w.address)
+        HideWindow(w.address, true)
     end
     return #saved.windows > 0 and saved or nil
 end
@@ -551,7 +627,7 @@ hl.bind(win .. " + Home", function()
     local active = hl.get_active_window()
     for _, w in ipairs(windows_here()) do
         if not active or w.address ~= active.address then
-            HideWindow(w.address)
+            HideWindow(w.address, true)
         end
     end
 end)

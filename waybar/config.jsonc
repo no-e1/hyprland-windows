@@ -21,7 +21,8 @@
     "custom/pin-explorer": {
         "exec": "~/.config/hypr/scripts/pinned.sh status '^nemo$' 'File Explorer'",
         "return-type": "json",
-        "interval": 2,
+        "interval": 10,
+        "signal": 8,
         "on-click": "~/.config/hypr/scripts/pinned.sh open '^nemo$' nemo",
         "on-click-middle": "nemo"
     },
@@ -29,7 +30,8 @@
     "custom/pin-browser": {
         "exec": "~/.config/hypr/scripts/pinned.sh status '^(brave-browser)$' 'Brave'",
         "return-type": "json",
-        "interval": 2,
+        "interval": 10,
+        "signal": 8,
         "on-click": "~/.config/hypr/scripts/pinned.sh open '^(brave-browser)$' brave-browser",
         "on-click-middle": "brave-browser --new-window"
     },
@@ -37,7 +39,8 @@
     "custom/pin-terminal": {
         "exec": "~/.config/hypr/scripts/pinned.sh status '^kitty$' 'Terminal'",
         "return-type": "json",
-        "interval": 2,
+        "interval": 10,
+        "signal": 8,
         "on-click": "~/.config/hypr/scripts/pinned.sh open '^kitty$' kitty",
         "on-click-middle": "kitty"
     },
@@ -83,7 +86,7 @@
     "custom/bat": {
         "exec": "~/.config/waybar/scripts/status.sh bat",
         "return-type": "json",
-        "interval": 20,
+        "restart-interval": 5,
         "on-click": "~/.config/hypr/winshell/winshell-ctl qs"
     },
 

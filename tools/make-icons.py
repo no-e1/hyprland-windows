@@ -47,7 +47,11 @@ for lvl in range(4):            # 0 = no wave ... 3 = three waves
 save("volume-mute", spk + f'<path d="M15 9.5l5 5M20 9.5l-5 5" stroke="{W}" stroke-width="{SW}"/>')
 
 # ── Battery: horizontal, proportional fill ───────────────────────────
-bolt = (f'<path d="M12.6 7.2L9.4 12.3h3.2l-1.2 4.5 3.4-5.4h-3.2z" fill="{W}" stroke="#202020" stroke-width="0.9"/>')
+# Charging bolt: a bigger white bolt on a dark "gap" (drawn first), so it
+# stands out both on the white fill and on the dark taskbar.
+BOLT = "M13.2 5.6L8.6 12.6h3.6l-1.4 5.8 4.6-7.2h-3.6z"
+bolt = (f'<path d="{BOLT}" fill="#202020" stroke="#202020" stroke-width="2.2"/>'
+        f'<path d="{BOLT}" fill="{W}"/>')
 for pct in range(0, 101, 10):
     for chg in (False, True):
         b = (f'<rect x="2.25" y="7.25" width="17.5" height="9.5" rx="2.25" stroke="{W}" stroke-width="{SW}"/>'
