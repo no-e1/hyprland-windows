@@ -376,6 +376,10 @@ function WinMax(action, w)
     local mon = w.monitor or hl.get_active_monitor()
     local x, y, ww, hh = work_area(mon)
     local bar = has_bar(w) and BAR_HEIGHT or 0
+    if not fs_hook_paused[a] then
+        fs_hook_paused[a] = true
+        later(400, function() fs_hook_paused[a] = nil end)
+    end
     if action == "max" then
         if not saved_geometry[a] then
             local g = { w.at.x, w.at.y, w.size.x, w.size.y }
@@ -425,8 +429,17 @@ hl.on("window.fullscreen", function(ev)
     local w = (type(ev) == "table" and ev.address and ev) or hl.get_active_window()
     if not w or fs_hook_paused[w.address] then return end
     if w.fullscreen == 1 then
-        hl.dispatch(hl.dsp.window.fullscreen({ mode = "maximized", action = "unset", window = "address:" .. w.address }))
-        WinMax("toggle", w)
+        -- Undo Hyprland's own maximize, then maximize Windows-style once it
+        -- is gone. Events caused by these two steps arrive late; ignore them,
+        -- or the late "not maximized" event restores the window right away.
+        local a = w.address
+        fs_hook_paused[a] = true
+        hl.dispatch(hl.dsp.window.fullscreen({ mode = "maximized", action = "unset", window = "address:" .. a }))
+        later(40, function()
+            local cur = hl.get_window("address:" .. a)
+            if cur then WinMax("toggle", cur) end
+            later(400, function() fs_hook_paused[a] = nil end)
+        end)
     elseif w.fullscreen == 0 and w.fullscreen_client == 0 and saved_geometry[w.address] then
         WinMax("restore", w)          -- the app's own "restore" button
     end

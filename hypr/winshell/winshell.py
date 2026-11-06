@@ -267,14 +267,31 @@ class Switcher:
         if not self.task_view and keyval in (Gdk.KEY_Alt_L, Gdk.KEY_Alt_R):
             self.commit()
 
-    # windows of the current desktop (plus minimized ones), most recent first
+    # every open window – all desktops, minimized ones too – most recent first.
+    # (Hyprland reports no workspace "id" for minimized windows.)
     def collect(self):
         clients = hypr_json("clients") or []
-        ws = (hypr_json("activeworkspace") or {}).get("id")
-        wins = [c for c in clients if c.get("mapped") and not c.get("hidden") and
-                (c["workspace"]["id"] == ws or c["workspace"]["name"] == "special:minimized")]
+        wins = []
+        for c in clients:
+            name = (c.get("workspace") or {}).get("name", "")
+            if not c.get("mapped") or c.get("hidden") or not c.get("address"):
+                continue
+            if name.startswith("special:") and name != "special:minimized":
+                continue                    # scratchpads and the like
+            wins.append(c)
         wins.sort(key=lambda c: c.get("focusHistoryID", 99))
         return wins
+
+    def first_selection(self, delta):
+        """Alt+Tab goes to the previous window – unless no window is in front
+        (desktop shown, everything minimized): then the most recent one."""
+        active = (hypr_json("activewindow") or {})
+        top = self.items[0]
+        front = (active.get("address") == top["address"] and
+                 not top["workspace"].get("name", "").startswith("special:"))
+        if delta > 0:
+            return 1 % len(self.items) if front else 0
+        return -1 % len(self.items)
 
     def view(self):
         """Win + Tab: like Alt+Tab, but stays open until a window is picked."""
@@ -290,7 +307,7 @@ class Switcher:
             if not self.items:
                 return
             self.build()
-            self.sel = (1 if delta > 0 else -1) % len(self.items)
+            self.sel = self.first_selection(delta)
             self.visible = True
             self.update_selection()
             LS.set_keyboard_mode(self.win, LS.KeyboardMode.EXCLUSIVE)
@@ -397,7 +414,7 @@ class Switcher:
     def capture(self, c, update=True):
         if time.monotonic() < self.paused_until:
             return
-        if c["workspace"]["name"].startswith("special:"):
+        if c["workspace"].get("name", "").startswith("special:"):
             return                      # hidden windows are not rendered
         addr, sid = c["address"], c.get("stableId")
         if not sid:
@@ -1418,6 +1435,8 @@ class StartMenu:
         self.hide()
         try:
             ctx = Gdk.Display.get_default().get_app_launch_context()
+            for var in ("LD_PRELOAD", "LC_TIME"):
+                ctx.unsetenv(var)
             app.launch([], ctx)
         except Exception as e:
             print("winshell: launch failed:", e, file=sys.stderr)
@@ -1527,6 +1546,13 @@ class WinShell(Gtk.Application):
     def do_startup(self):
         Gtk.Application.do_startup(self)
         self.hold()
+        # winshell-ctl starts us with LD_PRELOAD=libgtk4-layer-shell and
+        # LC_TIME=en_GB. Both are in effect now (GTK has set the locale), so
+        # drop them from the environment: apps launched from the start menu
+        # or quick settings must not inherit them – the preload drags GTK 4
+        # into GTK 3 programs such as Discord, which then abort on start.
+        for var in ("LD_PRELOAD", "LC_TIME"):
+            os.environ.pop(var, None)
         display = Gdk.Display.get_default()
         Gtk.IconTheme.get_for_display(display).add_search_path(ICONS)
         css = Gtk.CssProvider()
