@@ -46,23 +46,37 @@ for lvl in range(4):            # 0 = no wave ... 3 = three waves
     save(f"volume-{lvl}", b)
 save("volume-mute", spk + f'<path d="M15 9.5l5 5M20 9.5l-5 5" stroke="{W}" stroke-width="{SW}"/>')
 
-# ── Battery: horizontal, proportional fill ───────────────────────────
-# Charging bolt: a bigger white bolt on a dark "gap" (drawn first), so it
-# stands out both on the white fill and on the dark taskbar.
-BOLT = "M13.2 5.6L8.6 12.6h3.6l-1.4 5.8 4.6-7.2h-3.6z"
-bolt = (f'<path d="{BOLT}" fill="#202020" stroke="#202020" stroke-width="2.2"/>'
-        f'<path d="{BOLT}" fill="{W}"/>')
+# ── Battery (Windows 11 / Segoe Fluent style) ─────────────────────────
+# Rounded body with a thin outline, a rounded terminal on the right and an
+# inset fill. Charging: a bolt in the middle, cut out of outline and fill by
+# a transparent gap (so it works on any background). Plugged in but not
+# charging (full): a plug instead of the bolt.
+BODY = '<rect x="2.6" y="7.1" width="17" height="9.8" rx="2.4" stroke="{c}" stroke-width="1.3"/>'
+NUB = '<rect x="20.3" y="10.1" width="1.6" height="3.8" rx="0.8" fill="{c}"/>'
+BOLT = "M12.9 4.9L8.3 12.5h3.4l-1.1 6.6 4.9-8h-3.5z"
+PLUG = ("M9.3 9.2v-2.2M12.7 9.2v-2.2M8 9.2h6v2.4a3 3 0 0 1-3 3 3 3 0 0 1-3-3zM11 14.6v2.6")
 for pct in range(0, 101, 10):
-    for chg in (False, True):
-        b = (f'<rect x="2.25" y="7.25" width="17.5" height="9.5" rx="2.25" stroke="{W}" stroke-width="{SW}"/>'
-             f'<path d="M21.5 10.5v3" stroke="{W}" stroke-width="{SW}"/>')
-        w = 13.5 * pct / 100
+    for kind in ("", "-charging", "-plugged"):
+        low = pct <= 10 and not kind
+        col = "#ff6363" if low else W
+        fill = ""
+        w = 13.6 * pct / 100
         if w > 0.3:
-            col = "#ff6363" if pct <= 10 and not chg else W
-            b += f'<rect x="4.25" y="9.25" width="{w:.2f}" height="5.5" rx="1" fill="{col}"/>'
-        if chg:
-            b += bolt
-        save(f"battery-{pct}{'-charging' if chg else ''}", b)
+            fill = f'<rect x="4.7" y="9.2" width="{w:.2f}" height="5.6" rx="1.1" fill="{col}"/>'
+        shape = BODY.format(c=W) + NUB.format(c=W) + fill
+        if kind == "-charging":
+            gap = f'<path d="{BOLT}" fill="black" stroke="black" stroke-width="2.6" stroke-linejoin="round"/>'
+            glyph = f'<path d="{BOLT}" fill="{W}"/>'
+        elif kind == "-plugged":
+            gap = f'<path d="{PLUG}" fill="black" stroke="black" stroke-width="3.6" stroke-linecap="round" stroke-linejoin="round"/>'
+            glyph = f'<path d="{PLUG}" fill="{W}" stroke="{W}" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>'
+        else:
+            gap = glyph = ""
+        if gap:
+            mid = f"m{pct}{kind}"
+            shape = (f'<mask id="{mid}"><rect width="24" height="24" fill="white"/>{gap}</mask>'
+                     f'<g mask="url(#{mid})">{shape}</g>{glyph}')
+        save(f"battery-{pct}{kind}", shape)
 
 # ── Quick settings and switcher glyphs ───────────────────────────────
 st = f'stroke="{W}" stroke-width="{SW}"'

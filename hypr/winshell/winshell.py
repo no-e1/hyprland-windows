@@ -685,6 +685,8 @@ class QuickSettings:
             if self.shell.calendar.visible:
                 self.shell.calendar.hide()
             self.visible = True
+            if getattr(self.shell, "taskbar", None):
+                self.shell.taskbar.close_overflow()
             self.backdrop_for = "qs"
             self.backdrop.present()
             slide_in(self.panel)
@@ -718,6 +720,9 @@ class QuickSettings:
 
     def catcher_for(self, who):
         """Show the click catcher for another flyout (start menu), or hide it."""
+        tb = getattr(self.shell, "taskbar", None)
+        if who and who != "tray" and tb:
+            tb.close_overflow()
         if who:
             self.backdrop_for = who
             self.backdrop.present()
@@ -733,6 +738,8 @@ class QuickSettings:
             self.shell.start.hide()
         elif self.backdrop_for == "calendar":
             self.shell.calendar.hide()
+        elif self.backdrop_for == "tray":
+            self.shell.taskbar.close_overflow()
         else:
             self.hide()
 
@@ -816,9 +823,9 @@ class QuickSettings:
                 self.bat_img.set_visible(False)
                 self.bat_lbl.set_visible(False)
             else:
-                chg = st["bat_status"] in ("Charging", "Full", "Not charging")
-                self.bat_img.set_from_icon_name(
-                    f"win11-battery-{round(st['bat'], -1)}{'-charging' if chg else ''}")
+                kind = {"Charging": "-charging", "Full": "-plugged",
+                        "Not charging": "-plugged"}.get(st["bat_status"], "")
+                self.bat_img.set_from_icon_name(f"win11-battery-{round(st['bat'], -1)}{kind}")
                 self.bat_lbl.set_text(f"{st['bat']}%")
         finally:
             self.updating = False
@@ -1892,6 +1899,8 @@ class Taskbar:
 
     def __init__(self, app, shell):
         self.shell = shell
+        self.app = app
+        self.dragging_tray = False
         self.apps = AppIndex()
         self.cfg = self.load_config()
         pinned = []
@@ -2098,8 +2107,11 @@ class Taskbar:
         right = Gtk.Box()
         right.add_css_class("tb-right")
 
+        self.right = right
+        # "^": only there while icons are hidden (or while an icon is dragged)
         self.tray_arrow = button(icon("win11-chevron-up", 12), "tb-tray-arrow",
                                  tooltip="Show hidden icons", on_click=self.toggle_overflow)
+        self.tray_arrow.set_visible(False)
         drop = Gtk.DropTarget.new(GObject.TYPE_STRING, Gdk.DragAction.MOVE)
         drop.connect("drop", lambda _t, v, _x, _y: self.move_tray(v, hidden=True))
         drop.connect("enter", lambda *_: (self.open_overflow(), Gdk.DragAction.MOVE)[1])
@@ -2108,24 +2120,13 @@ class Taskbar:
 
         self.tray_box = Gtk.Box()
         self.tray_box.add_css_class("tb-tray")
-        drop = Gtk.DropTarget.new(GObject.TYPE_STRING, Gdk.DragAction.MOVE)
-        drop.connect("drop", lambda _t, v, x, _y: self.move_tray(v, hidden=False, x=x))
-        self.tray_box.add_controller(drop)
         right.append(self.tray_box)
-
-        self.overflow = Gtk.Popover(has_arrow=False, position=Gtk.PositionType.TOP)
-        self.overflow.add_css_class("tray-overflow")
-        self.overflow_grid = Gtk.FlowBox(selection_mode=Gtk.SelectionMode.NONE,
-                                         min_children_per_line=1, max_children_per_line=5)
-        self.overflow_empty = label("Drag icons here to hide them", "overflow-empty", xalign=0.5)
-        ob = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-        ob.append(self.overflow_grid)
-        ob.append(self.overflow_empty)
+        # dropping an icon anywhere on the right side (not on "^") shows it in
+        # the taskbar – also when no icon is shown there yet
         drop = Gtk.DropTarget.new(GObject.TYPE_STRING, Gdk.DragAction.MOVE)
-        drop.connect("drop", lambda _t, v, _x, _y: self.move_tray(v, hidden=True))
-        ob.add_controller(drop)
-        self.overflow.set_child(ob)
-        self.overflow.set_parent(self.tray_arrow)
+        drop.connect("drop", self.on_right_drop)
+        right.add_controller(drop)
+        self.build_overflow()
 
         # Wi-Fi / volume / battery, like Windows' quick settings button
         quick = Gtk.Box()
@@ -2189,7 +2190,7 @@ class Taskbar:
         cls = (data.get("class") or "").split()[0] if data.get("class") else ""
         name = self.STATUS_ICON.get(cls)
         if not name:
-            m = re.match(r"(wifi|vol|bat)-(\d+)(-charging)?", cls)
+            m = re.match(r"(wifi|vol|bat)-(\d+)(-charging|-plugged)?", cls)
             if m:
                 kind = {"wifi": "wifi", "vol": "volume", "bat": "battery"}[m.group(1)]
                 name = f"win11-{kind}-{m.group(2)}{m.group(3) or ''}"
@@ -2218,7 +2219,17 @@ class Taskbar:
                 self.overflow_grid.append(btn)
             else:
                 self.tray_box.append(btn)
-        self.overflow_empty.set_visible(not any(it.ident in hidden for it in items))
+        any_hidden = any(it.ident in hidden for it in items)
+        n = sum(it.ident in hidden for it in items)
+        self.overflow_grid.set_min_children_per_line(max(1, min(5, n)))
+        self.overflow_grid.set_max_children_per_line(max(1, min(5, n)))
+        self.overflow_empty.set_visible(not any_hidden)
+        self.overflow_grid.set_visible(any_hidden)
+        self.tray_arrow.set_visible(any_hidden or self.dragging_tray)
+        if not any_hidden and not self.dragging_tray:
+            self.close_overflow()
+        elif self.ov_win.get_visible():
+            GLib.idle_add(self.place_overflow)
         return False
 
     def tray_button(self, item):
@@ -2245,9 +2256,27 @@ class Taskbar:
         src = Gtk.DragSource(actions=Gdk.DragAction.MOVE)
         src.connect("prepare", lambda *_: Gdk.ContentProvider.new_for_value(
             GObject.Value(GObject.TYPE_STRING, "tray:" + item.ident)))
-        src.connect("drag-begin", lambda s, _d: s.set_icon(Gtk.WidgetPaintable.new(img), 8, 8))
+        src.connect("drag-begin", lambda s, _d: (s.set_icon(Gtk.WidgetPaintable.new(img), 8, 8),
+                                                 self.tray_drag(True)))
+        src.connect("drag-end", lambda *_: self.tray_drag(False))
         b.add_controller(src)
         return b
+
+    def tray_drag(self, on):
+        """While a tray icon is dragged: "^" is there to drop it on, and the
+        click catcher is out of the way so the taskbar takes drops."""
+        self.dragging_tray = on
+        if on:
+            self.tray_arrow.set_visible(True)
+            self.shell.qs.backdrop.set_visible(False)
+        else:
+            if self.ov_win.get_visible():
+                self.shell.qs.backdrop.present()
+            GLib.idle_add(self.tray_changed)
+
+    def on_right_drop(self, _target, value, x, _y):
+        ok_, r = self.tray_box.compute_bounds(self.right)
+        return self.move_tray(value, hidden=False, x=(x - r.get_x()) if ok_ else None)
 
     def move_tray(self, value, hidden, x=None):
         if not isinstance(value, str) or not value.startswith("tray:"):
@@ -2276,15 +2305,63 @@ class Taskbar:
         GLib.idle_add(self.tray_changed)
         return True
 
+    # hidden-icons flyout: its own layer surface (a Gtk.Popover grabs the
+    # pointer and closes as soon as an icon is dragged out of it)
+    def build_overflow(self):
+        self.ov_win = layer_window(self.app, "winshell-tray", LS.Layer.OVERLAY,
+                                   anchors=(LS.Edge.BOTTOM, LS.Edge.RIGHT),
+                                   margins={LS.Edge.BOTTOM: 8, LS.Edge.RIGHT: 8})
+        panel = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        panel.add_css_class("tray-flyout")
+        panel.add_css_class("flyout")
+        self.ov_panel = panel
+        self.overflow_grid = Gtk.FlowBox(selection_mode=Gtk.SelectionMode.NONE, homogeneous=True,
+                                         min_children_per_line=1, max_children_per_line=5)
+        self.overflow_empty = label("Drop here to hide", "overflow-empty", xalign=0.5)
+        panel.append(self.overflow_grid)
+        panel.append(self.overflow_empty)
+        drop = Gtk.DropTarget.new(GObject.TYPE_STRING, Gdk.DragAction.MOVE)
+        drop.connect("drop", lambda _t, v, _x, _y: self.move_tray(v, hidden=True))
+        panel.add_controller(drop)
+        self.ov_win.set_child(panel)
+
+    def place_overflow(self):
+        """Center the flyout above the "^" button."""
+        ok_, r = self.tray_arrow.compute_bounds(self.win)
+        if ok_:
+            width = self.ov_panel.measure(Gtk.Orientation.HORIZONTAL, -1)[1]
+            center = r.get_x() + r.get_width() / 2
+            LS.set_margin(self.ov_win, LS.Edge.RIGHT, max(8, int(self.win.get_width() - center - width / 2)))
+        return False
+
     def toggle_overflow(self):
-        if self.overflow.get_visible():
-            self.overflow.popdown()
+        if self.ov_win.get_visible():
+            self.close_overflow()
         else:
             self.open_overflow()
 
     def open_overflow(self):
-        if not self.overflow.get_visible():
-            self.overflow.popup()
+        if self.ov_win.get_visible():
+            return
+        for other in (self.shell.start, self.shell.calendar):
+            if other.visible:
+                other.hide()
+        if self.shell.qs.visible:
+            self.shell.qs.hide()
+        self.place_overflow()
+        if not self.dragging_tray:
+            self.shell.qs.catcher_for("tray")
+        slide_in(self.ov_panel)
+        self.ov_win.present()
+        self.tray_arrow.add_css_class("open")
+
+    def close_overflow(self):
+        if not getattr(self, "ov_win", None) or not self.ov_win.get_visible():
+            return
+        self.ov_win.set_visible(False)
+        self.tray_arrow.remove_css_class("open")
+        if self.shell.qs.backdrop_for == "tray":
+            self.shell.qs.catcher_for(None)
 
 
 def popup_menu(anchor, items):
@@ -2350,6 +2427,42 @@ class WinShell(Gtk.Application):
     def do_activate(self):
         pass
 
+    # At most POPUP_LIMIT notification popups on screen: when another one
+    # arrives, the oldest one still showing is deleted. swaync can't do this
+    # itself, so its "popup-limit" script reports every new notification.
+    POPUP_LIMIT = 3
+    POPUP_TIMEOUT = {"low": 4, "normal": 6}         # seconds, as in swaync's config
+
+    def limit_popups(self, nid, urgency):
+        if not nid.isdigit():
+            return
+        if not hasattr(self, "popups"):
+            self.popups = []                        # (id, shown until) oldest first
+        try:
+            dnd, cc_open = self.swaync_call("GetSubscribeData").unpack()[0][:2]
+        except Exception:
+            dnd = cc_open = False
+        if dnd or cc_open:                          # no popups are shown right now
+            return
+        now = time.monotonic()
+        life = self.POPUP_TIMEOUT.get(urgency.lower())
+        until = now + life if life else float("inf")   # critical: stays until closed
+        self.popups = [(i, u) for i, u in self.popups if u > now and i != int(nid)]
+        self.popups.append((int(nid), until))
+        while len(self.popups) > self.POPUP_LIMIT:
+            oldest, _ = self.popups.pop(0)
+            try:
+                self.swaync_call("CloseNotification", GLib.Variant("(u)", (oldest,)))
+            except Exception as e:
+                print("winshell: can't close notification:", e, file=sys.stderr)
+
+    @staticmethod
+    def swaync_call(method, args=None):
+        bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+        return bus.call_sync("org.erikreider.swaync.cc", "/org/erikreider/swaync/cc",
+                             "org.erikreider.swaync.cc", method, args, None,
+                             Gio.DBusCallFlags.NONE, 1000, None)
+
     def on_fifo(self, fd, _cond):
         try:
             self.buf += os.read(fd, 4096).decode(errors="replace")
@@ -2391,8 +2504,10 @@ class WinShell(Gtk.Application):
             self.calendar.hide() if arg == "hide" else self.calendar.toggle()
         elif what == "menu":
             self.start.hide() if arg == "hide" else self.start.toggle()
-        elif what == "tray":                    # hidden-icons flyout / an icon's menu
-            if arg == "menu":
+        elif what == "tray":                    # hidden-icons flyout / an icon's menu / hide|show <id>
+            if arg in ("hide", "show") and len(args) > 2:
+                self.taskbar.move_tray("tray:" + args[2], hidden=arg == "hide")
+            elif arg == "menu":
                 child = self.taskbar.tray_box.get_first_child()
                 items = [it for it in self.tray.items.values() if it.title == (child.get_tooltip_text() if child else None)]
                 if child and items:
@@ -2407,6 +2522,8 @@ class WinShell(Gtk.Application):
             self.start.filter()
         elif what == "backdrop":
             self.qs.backdrop_rofi(arg == "rofi")
+        elif what == "notified":                # swaync script: a notification arrived
+            self.limit_popups(args[1] if len(args) > 1 else "", args[2] if len(args) > 2 else "")
         elif what == "debug":
             b = self.qs.backdrop
             print(f"winshell: backdrop visible={b.get_visible()} mapped={b.get_mapped()} "

@@ -26,6 +26,13 @@
     "hide-on-clear": false,
     "hide-on-action": true,
     "script-fail-notify": true,
+    "scripts": {
+        "popup-limit": {
+            "exec": "sh -c 'exec \"$HOME/.config/hypr/winshell/winshell-ctl\" notified \"$SWAYNC_ID\" \"$SWAYNC_URGENCY\"'",
+            "summary": ".*",
+            "run-on": "receive"
+        }
+    },
     "widgets": [
         "title",
         "dnd",

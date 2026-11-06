@@ -3,7 +3,8 @@
 #   winshell-ctl switch next|prev|commit|cancel
 #   winshell-ctl qs [toggle|wifi|bluetooth|hide]
 #   winshell-ctl menu [hide] | search <text> | calendar [hide] | osd volume|brightness
-#   winshell-ctl tray [menu]   hidden-icons flyout / menu of the first tray icon
+#   winshell-ctl tray [menu | hide <id> | show <id>]   hidden-icons flyout, first icon menu, hide/show an icon
+#   winshell-ctl notified <id> <urgency>   (swaync script: keeps at most 3 popups)
 #   winshell-ctl start | restart
 #   winshell-ctl supervise   keep winshell (and so the taskbar) running, restart
 #                            it if it ever crashes (Hyprland autostart)

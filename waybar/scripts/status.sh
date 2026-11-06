@@ -39,7 +39,7 @@ bat() {
     cls="bat-$(( (cap + 5) / 10 * 10 ))"
     case "$st" in
         Charging)      cls="$cls-charging"; tip="Battery: $cap% (charging)" ;;
-        Full|"Not charging") cls="$cls-charging"; tip="Battery: $cap% (plugged in)" ;;
+        Full|"Not charging") cls="$cls-plugged"; tip="Battery: $cap% (plugged in)" ;;
         *)             tip="Battery: $cap% remaining" ;;
     esac
     [ "$cap" -le 10 ] && [ "$st" = Discharging ] && cls="$cls critical"

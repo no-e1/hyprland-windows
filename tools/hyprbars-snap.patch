@@ -1,5 +1,5 @@
 diff --git a/hyprbars/barDeco.cpp b/hyprbars/barDeco.cpp
-index e57f77b..4eb4392 100644
+index e57f77b..58f1cd5 100644
 --- a/hyprbars/barDeco.cpp
 +++ b/hyprbars/barDeco.cpp
 @@ -29,6 +29,20 @@
@@ -127,7 +127,7 @@ index e57f77b..4eb4392 100644
      }
      return false;
  }
-@@ -367,30 +403,28 @@ void CHyprBar::renderBarButtons(Render::CRenderContext& ctx, CBox* barBox, const
+@@ -367,30 +403,43 @@ void CHyprBar::renderBarButtons(Render::CRenderContext& ctx, CBox* barBox, const
      const auto visibleCount    = getVisibleButtonCount(BARBUTTONPADDING, BARPADDING, Vector2D{barBox->w, barBox->h}, scale);
      const bool INVALIDATEICONS = m_bButtonsDirty || m_bWindowSizeChanged;
  
@@ -154,7 +154,22 @@ index e57f77b..4eb4392 100644
 +            color.a *= a;
 +            CBox buttonBox = {barBox->x + (BUTTONSRIGHT ? barBox->w - offset - scaledButtonSize : offset), barBox->y, scaledButtonSize, barBox->h};
 +            buttonBox.round();
-+            g_pHyprOpenGL->renderRect(ctx, buttonBox, color, {});
++            // The rightmost button sits in the window's rounded top-right
++            // corner: give that corner the window's rounding (only that one),
++            // so the red never pokes out past the window.
++            const auto  PWINDOW = m_pWindow.lock();
++            const float R       = (BUTTONSRIGHT && i == 0 && PWINDOW) ? PWINDOW->presentation().rounding() * scale : 0.F;
++            if (R >= 1.F && R * 2 < buttonBox.w) {
++                g_pHyprOpenGL->scissor(ctx, *barBox);                       // cut off below the bar
++                CBox square = {buttonBox.x, buttonBox.y, buttonBox.w - R, buttonBox.h};
++                CBox corner = {buttonBox.x + buttonBox.w - 2 * R, buttonBox.y, 2 * R, buttonBox.h + 2 * R};
++                square.round();
++                corner.round();
++                g_pHyprOpenGL->renderRect(ctx, square, color, {});
++                g_pHyprOpenGL->renderRect(ctx, corner, color,
++                                          {.round = sc<int>(std::round(R)), .roundingPower = PWINDOW->presentation().roundingPower()});
++            } else
++                g_pHyprOpenGL->renderRect(ctx, buttonBox, color, {});
          }
  
 -        color.a *= a;
@@ -173,7 +188,7 @@ index e57f77b..4eb4392 100644
  }
  
  void CHyprBar::renderBarButtonsText(Render::CRenderContext& ctx, CBox* barBox, const float scale, const float a) {
-@@ -407,19 +441,19 @@ void CHyprBar::renderBarButtonsText(Render::CRenderContext& ctx, CBox* barBox, c
+@@ -407,19 +456,19 @@ void CHyprBar::renderBarButtonsText(Render::CRenderContext& ctx, CBox* barBox, c
      const auto visibleCount = getVisibleButtonCount(BARBUTTONPADDING, BARPADDING, Vector2D{barBox->w, barBox->h}, scale);
      const auto COORDS       = cursorRelativeToBar();
  
@@ -200,7 +215,7 @@ index e57f77b..4eb4392 100644
  
          const bool NEEDICON = !button.icon.empty() &&
              (!button.iconTex || button.iconTex->m_texID == 0 || !button.m_fIconScale.has_value() || std::abs(button.m_fIconScale.value_or(0.F) - scale) > 1e-6);
-@@ -428,7 +462,7 @@ void CHyprBar::renderBarButtonsText(Render::CRenderContext& ctx, CBox* barBox, c
+@@ -428,7 +477,7 @@ void CHyprBar::renderBarButtonsText(Render::CRenderContext& ctx, CBox* barBox, c
              auto fgcol = button.userfg ? button.fgcol : (button.bgcol.r + button.bgcol.g + button.bgcol.b < 1) ? CHyprColor(0xFFFFFFFF) : CHyprColor(0xFF000000);
  
              button.iconTex =
@@ -209,7 +224,7 @@ index e57f77b..4eb4392 100644
              button.m_fIconScale = scale;
          }
  
-@@ -703,27 +737,25 @@ void CHyprBar::updateRules() {
+@@ -703,27 +752,25 @@ void CHyprBar::updateRules() {
  }
  
  void CHyprBar::damageOnButtonHover() {
@@ -257,10 +272,10 @@ index e57f77b..4eb4392 100644
      }
  }
 diff --git a/hyprbars/main.cpp b/hyprbars/main.cpp
-index 3d88b57..93ff626 100644
+index 3d88b57..7368f6b 100644
 --- a/hyprbars/main.cpp
 +++ b/hyprbars/main.cpp
-@@ -14,6 +14,11 @@
+@@ -14,6 +14,13 @@
  #include <hyprland/src/config/lua/bindings/LuaBindingsInternal.hpp>
  #include <hyprland/src/config/lua/types/LuaConfigColor.hpp>
  #include <hyprland/src/state/MonitorState.hpp>
@@ -269,10 +284,12 @@ index 3d88b57..93ff626 100644
 +#include <hyprland/src/managers/input/InputManager.hpp>
 +#include <hyprland/src/desktop/state/FocusState.hpp>
 +#include <hyprland/src/config/supplementary/executor/Executor.hpp>
++#include <hyprland/src/desktop/view/window/WindowBackend.hpp>
++#include <hyprland/src/plugins/HookSystem.hpp>
  
  #include <algorithm>
  
-@@ -153,6 +158,41 @@ int setLuaTitle(lua_State* L) {
+@@ -153,6 +160,65 @@ int setLuaTitle(lua_State* L) {
      return 0;
  }
  
@@ -311,15 +328,40 @@ index 3d88b57..93ff626 100644
 +    Config::Supplementary::executor()->spawn("$HOME/.config/hypr/scripts/winctl.sh drag-end " + edge);
 +}
 +
++// ── App minimize buttons ──
++// Hyprland drops an app's own "minimize" request (xdg_toplevel.set_minimized,
++// the – button of Brave, Discord, Steam, …). Catch it where the request
++// arrives and minimize the window like the title bar button does.
++using onUpdateStateFn            = void (*)(Desktop::View::CWindow*, const Desktop::View::SBackendStateRequest&);
++inline CFunctionHook* g_pStateHook = nullptr;
++
++static void hkOnUpdateState(Desktop::View::CWindow* self, const Desktop::View::SBackendStateRequest& request) {
++    if (request.minimized.value_or(false))
++        Config::Supplementary::executor()->spawn(std::format("$HOME/.config/hypr/scripts/winctl.sh minimize-window 0x{:x}", (uintptr_t)self));
++    ((onUpdateStateFn)g_pStateHook->m_original)(self, request);
++}
++
++static void hookMinimizeRequests() {
++    for (const auto& fn : HyprlandAPI::findFunctionsByName(PHANDLE, "onUpdateState")) {
++        if (fn.demangled.find("CWindow::onUpdateState") == std::string::npos)
++            continue;
++        g_pStateHook = HyprlandAPI::createFunctionHook(PHANDLE, fn.address, (void*)&hkOnUpdateState);
++        if (g_pStateHook && g_pStateHook->hook())
++            return;
++    }
++    HyprlandAPI::addNotification(PHANDLE, "[hyprbars] could not hook app minimize requests", CHyprColor{1.0, 0.5, 0.2, 1.0}, 6000);
++}
++
  APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
      PHANDLE = handle;
  
-@@ -222,6 +262,8 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
+@@ -222,6 +288,9 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
  
      static auto P4 = Event::bus()->m_events.config.preReload.listen([&] { onPreConfigReload(); });
      static auto P5 = Event::bus()->m_events.config.reloaded.listen([&] { onConfigReloaded(); });
 +    static auto P6 = g_layoutManager->dragController()->m_events.motion.listen([] { onDragMotion(); });
 +    static auto P7 = g_layoutManager->dragController()->m_events.ended.listen([] { onDragEnded(); });
++    hookMinimizeRequests();
  
      // add deco to existing windows
      for (auto& w : Desktop::windowState()->windows()) {

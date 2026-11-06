@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Window actions used by the title bar buttons and drag-to-edge snapping.
-#   winctl.sh close | maximize | unmaximize | minimize
+#   winctl.sh close | maximize | unmaximize | minimize | minimize-window <address>
 #   winctl.sh snap top|left|right
 S="$HOME/.config/hypr/scripts"
 echo "$(date +%T) $*" >> "${XDG_RUNTIME_DIR:-/tmp}/winctl.log"
@@ -32,6 +32,8 @@ case "$1" in
             *)          hyprctl eval "WinClamp()" >/dev/null ;;
         esac ;;
     minimize)   hyprctl eval "HideWindow()" >/dev/null ;;
+    # an app's own "–" button (sent by the hyprbars plugin with the window)
+    minimize-window) hyprctl eval "HideWindow(\"$2\")" >/dev/null ;;
     snap)
         case "$2" in
             top)        max max ;;
