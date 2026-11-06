@@ -29,7 +29,7 @@ hl.monitor({
 ---------------------------------------------------------------------
 hl.env("XCURSOR_SIZE", "24")
 hl.env("HYPRCURSOR_SIZE", "24")
-hl.env("XCURSOR_THEME", "Fluent-dark-cursors")
+hl.env("XCURSOR_THEME", "Fluent-cursors")   -- white pointer like Windows 11
 hl.env("GDK_BACKEND", "wayland,x11,*")
 hl.env("QT_QPA_PLATFORM", "wayland;xcb")
 hl.env("QT_WAYLAND_DISABLE_WINDOWDECORATION", "1")
@@ -145,12 +145,18 @@ hl.config({
         -- Scrolling still goes to the window under the cursor.
         follow_mouse = 2,
         float_switch_override_focus = 0,
-        sensitivity  = 0,
+        -- Windows default pointer speed (10/20, "enhance pointer precision"):
+        -- libinput's adaptive profile at 0 is noticeably faster, so slow it down
+        accel_profile = "adaptive",
+        sensitivity  = -0.3,
         touchpad = {
             natural_scroll = true,
         },
     },
 })
+
+-- The touchpad keeps libinput's default speed (close to Windows' default)
+hl.device({ name = "syna8018:00-06cb:ce67-touchpad", sensitivity = 0 })
 
 -- Touchpad: 4-finger swipe switches virtual desktops (like Windows)
 hl.gesture({ fingers = 4, direction = "horizontal", action = "workspace" })
@@ -185,7 +191,6 @@ hl.window_rule({
 })
 
 -- Mica/Acrylic blur for taskbar, start menu, flyouts and Alt+Tab
-hl.layer_rule({ name = "blur-taskbar",   match = { namespace = "^waybar$" },                    blur = true, ignore_alpha = 0.2 })
 hl.layer_rule({ name = "blur-startmenu", match = { namespace = "^rofi$" },                      blur = true, ignore_alpha = 0.2 })
 hl.layer_rule({ name = "blur-swaync",    match = { namespace = "^swaync-.*$" },                 blur = true, ignore_alpha = 0.2 })
 hl.layer_rule({ name = "blur-winshell",  match = { namespace = "^winshell-(qs|switcher)$" },    blur = true, ignore_alpha = 0.2 })
@@ -219,7 +224,8 @@ end)
 -- Shell access: hyprctl eval 'WinMax("toggle" | "max" | "restore")'
 ---------------------------------------------------------------------
 local BAR_HEIGHT = 32
-local OWN_TITLEBAR = { "^brave%-browser$", "^discord$", "^code$", "^code%-oss$", "^org%.gnome%." }
+local OWN_TITLEBAR = { "^brave%-browser$", "^discord$", "^firefox$", "^org%.mozilla%.firefox$",
+                       "^code$", "^code%-oss$", "^org%.gnome%." }
 local saved_geometry = {}
 
 local function has_bar(w)
@@ -242,6 +248,13 @@ local function set_geometry(addr, x, y, w, h)
     hl.dispatch(hl.dsp.window.move({ x = x, y = y, window = sel }))
 end
 
+-- Tell the app it is maximized (no shadow margins, "restore" button) while
+-- Hyprland keeps treating it as a normal window (normal stacking order).
+local function client_maximized(addr, on)
+    hl.dispatch(hl.dsp.window.fullscreen_state({ internal = 0, client = on and 1 or 0,
+                                                 window = "address:" .. addr }))
+end
+
 function WinMax(action, w)
     w = w or hl.get_active_window()
     if not w or not w.mapped then return end
@@ -262,10 +275,12 @@ function WinMax(action, w)
             end
             saved_geometry[a] = g
         end
-        set_geometry(a, x + 1, y + bar + 1, ww - 2, hh - bar - 2)
+        client_maximized(a, true)
+        set_geometry(a, x, y + bar, ww, hh - bar)
     elseif action == "restore" and saved_geometry[a] then
         local g = saved_geometry[a]
         saved_geometry[a] = nil
+        client_maximized(a, false)
         set_geometry(a, g[1], g[2], g[3], g[4])
     end
 end
@@ -278,6 +293,7 @@ function WinDragStart()
     local g = saved_geometry[w.address]
     if not g then return end
     saved_geometry[w.address] = nil
+    client_maximized(w.address, false)
     local c = hl.get_cursor_pos()
     local rel = (c.x - w.at.x) / math.max(1, w.size.x)
     set_geometry(w.address, math.floor(c.x - g[3] * rel), w.at.y, g[3], g[4])
@@ -287,9 +303,12 @@ end
 -- their title bar) get the Windows-style maximize instead.
 hl.on("window.fullscreen", function(ev)
     local w = (type(ev) == "table" and ev.address and ev) or hl.get_active_window()
-    if w and w.fullscreen == 1 then
+    if not w then return end
+    if w.fullscreen == 1 then
         hl.dispatch(hl.dsp.window.fullscreen({ mode = "maximized", action = "unset", window = "address:" .. w.address }))
         WinMax("toggle", w)
+    elseif w.fullscreen == 0 and w.fullscreen_client == 0 and saved_geometry[w.address] then
+        WinMax("restore", w)          -- the app's own "restore" button
     end
 end)
 
@@ -367,7 +386,7 @@ if f then
         -- apps that draw their own title bar (with X/□/–) don't get a second one
         hl.window_rule({
             name  = "own-titlebar",
-            match = { class = "^(brave-browser|discord|code|code-oss|org\\.gnome\\..*)$" },
+            match = { class = "^(brave-browser|discord|firefox|org\\.mozilla\\.firefox|code|code-oss|org\\.gnome\\..*)$" },
             ["hyprbars:no_bar"] = true,
         })
     elseif not ok then
@@ -421,32 +440,11 @@ local function winshell_send(cmd)
     hl.exec_cmd(winshell .. " " .. cmd)
 end
 
--- Alt+Tab: hold Alt, press Tab to move through the windows, release Alt to switch
-local function switch(cmd)
-    return function()
-        winshell_send("switch " .. cmd)
-        hl.dispatch(hl.dsp.submap("alttab"))
-    end
-end
-local function switch_end(cmd)
-    return function()
-        winshell_send("switch " .. cmd)
-        hl.dispatch(hl.dsp.submap("reset"))
-    end
-end
-hl.bind("ALT + Tab",         switch("next"))
-hl.bind("ALT + SHIFT + Tab", switch("prev"))
-hl.define_submap("alttab", function()
-    hl.bind("ALT + Tab",         switch("next"), { repeating = true })
-    hl.bind("ALT + SHIFT + Tab", switch("prev"), { repeating = true })
-    hl.bind("ALT + Right",       switch("next"))
-    hl.bind("ALT + Left",        switch("prev"))
-    hl.bind("ALT + Alt_L",       switch_end("commit"), { release = true, transparent = true })
-    hl.bind("Alt_L",             switch_end("commit"), { release = true, ignore_mods = true })
-    hl.bind("ALT + Return",      switch_end("commit"))
-    hl.bind("ALT + Escape",      switch_end("cancel"))
-    hl.bind("Escape",            switch_end("cancel"))
-end)
+-- Alt+Tab: hold Alt, press Tab to move through the windows, release Alt to
+-- switch. The switcher grabs the keyboard while open and notices the Alt
+-- release itself (Hyprland release binds don't fire reliably for this).
+hl.bind("ALT + Tab",         function() winshell_send("switch next") end, { repeating = true })
+hl.bind("ALT + SHIFT + Tab", function() winshell_send("switch prev") end, { repeating = true })
 
 -- Snap: Win + arrow keys
 hl.bind(win .. " + Left",  hl.dsp.exec_cmd(scripts .. "/snap.sh left"))

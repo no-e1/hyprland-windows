@@ -16,10 +16,11 @@
 }
 
 window#waybar {
-    background: rgba(28, 28, 28, 0.80);
-    border-top: 1px solid rgba(255, 255, 255, 0.08);
+    background: transparent;
     color: @fg;
 }
+/* keep labels readable on bright wallpapers */
+label { text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6); }
 
 tooltip {
     background: rgba(43, 43, 43, 0.97);
@@ -86,15 +87,6 @@ tooltip label { color: @fg; padding: 2px 4px; }
 #taskbar button image { margin: 0; padding: 0; }
 #taskbar button box { margin: 0; padding: 0; }
 
-/* ── Left: weather ──────────────────────────────────────────────── */
-#custom-weather {
-    margin: 4px 8px;
-    padding: 0 12px;
-    font-size: 13px;
-    border-radius: 4px;
-}
-#custom-weather:hover { background-color: @hover; }
-
 /* ── Right: tray, quick settings, clock ─────────────────────────── */
 #tray { margin: 0 6px; padding: 0 6px; }
 #tray > .needs-attention { background-color: rgba(255, 99, 99, 0.3); border-radius: 4px; }
@@ -107,12 +99,12 @@ tooltip label { color: @fg; padding: 2px 4px; }
 #quick:hover { background-color: @hover; }
 
 #custom-net, #custom-vol, #custom-bat {
-    min-width: 26px;
+    min-width: 32px;
     padding: 0;
     background-repeat: no-repeat;
     background-position: center;
 }
-#custom-bat { min-width: 30px; }
+#custom-bat { min-width: 36px; }
 
 #clock {
     margin: 4px 2px;

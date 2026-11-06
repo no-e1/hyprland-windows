@@ -7,17 +7,10 @@
     "exclusive": true,
     "reload_style_on_change": true,
 
-    "modules-left":   ["custom/weather"],
+    "modules-left":   [],
     "modules-center": ["custom/start", "custom/pin-explorer", "custom/pin-browser", "custom/pin-terminal", "wlr/taskbar"],
     "modules-right":  ["tray", "group/quick", "clock", "custom/peek"],
 
-    "custom/weather": {
-        "exec": "curl -sf --max-time 8 'https://wttr.in/?format=%c+%t' | sed 's/+//'",
-        "interval": 1800,
-        "format": "{}",
-        "tooltip-format": "Weather – click for the forecast",
-        "on-click": "xdg-open https://wttr.in"
-    },
 
     "custom/start": {
         "format": " ",
@@ -95,7 +88,8 @@
     },
 
     "clock": {
-        "format": "{:%H:%M\n%d.%m.%Y}",
+        "format": "{:%H:%M:%S\n%d.%m.%Y}",
+        "interval": 1,
         "justify": "right",
         "tooltip-format": "<tt><small>{calendar}</small></tt>",
         "locale": "en_GB.UTF-8",

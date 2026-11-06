@@ -198,7 +198,47 @@ class Switcher:
         panel.add_css_class("switcher")
         panel.append(self.flow)
         self.win.set_child(panel)
+        keys = Gtk.EventControllerKey()
+        keys.connect("key-pressed", self.on_key)
+        keys.connect("key-released", self.on_key_released)
+        self.win.add_controller(keys)
+        self.poll = None
         threading.Thread(target=self.watch_events, daemon=True).start()
+
+    # While the switcher is open it owns the keyboard, so it can tell the
+    # moment Alt is let go – then it switches, exactly like Windows.
+    def alt_down(self):
+        seat = Gdk.Display.get_default().get_default_seat()
+        kb = seat.get_keyboard() if seat else None
+        return bool(kb and kb.get_modifier_state() & Gdk.ModifierType.ALT_MASK)
+
+    def poll_alt(self):
+        if not self.visible:
+            self.poll = None
+            return False
+        if not self.alt_down():
+            self.poll = None
+            self.commit()
+            return False
+        return True
+
+    def on_key(self, _c, keyval, _code, state):
+        if keyval == Gdk.KEY_Escape:
+            self.hide()
+        elif keyval in (Gdk.KEY_Return, Gdk.KEY_KP_Enter, Gdk.KEY_space):
+            self.commit()
+        elif keyval in (Gdk.KEY_Right, Gdk.KEY_Down):
+            self.step(1)
+        elif keyval in (Gdk.KEY_Left, Gdk.KEY_Up):
+            self.step(-1)
+        elif keyval in (Gdk.KEY_Tab, Gdk.KEY_ISO_Left_Tab):
+            back = keyval == Gdk.KEY_ISO_Left_Tab or state & Gdk.ModifierType.SHIFT_MASK
+            self.step(-1 if back else 1)
+        return True
+
+    def on_key_released(self, _c, keyval, _code, _state):
+        if keyval in (Gdk.KEY_Alt_L, Gdk.KEY_Alt_R, Gdk.KEY_Meta_L, Gdk.KEY_Meta_R):
+            self.commit()
 
     # windows of the current desktop (plus minimized ones), most recent first
     def collect(self):
@@ -218,7 +258,10 @@ class Switcher:
             self.sel = (1 if delta > 0 else -1) % len(self.items)
             self.visible = True
             self.update_selection()
+            LS.set_keyboard_mode(self.win, LS.KeyboardMode.EXCLUSIVE)
             self.win.present()
+            if not self.poll:
+                self.poll = GLib.timeout_add(100, self.start_poll)
             for c in self.items:
                 self.capture(c)
         else:
@@ -279,14 +322,38 @@ class Switcher:
         if not self.visible:
             return
         target = self.items[self.sel]
-        print(f"winshell: switch to {target['class']} {target['address']}", file=sys.stderr, flush=True)
-        self.hide()
-        dispatch(f'hl.dsp.focus({{ window = "address:{target["address"]}" }})')
+        self.visible = False
+        # 1. give the keyboard back while still on screen (Hyprland refocuses
+        #    the previous window right then), 2. focus the target, 3. hide
+        LS.set_keyboard_mode(self.win, LS.KeyboardMode.NONE)
+
+        def finish():
+            self.focus(target["address"], target["class"], tries=4)
+            GLib.timeout_add(30, lambda: self.hide() and False)
+            return False
+        GLib.timeout_add(50, finish)
+
+    def focus(self, addr, cls, tries):
+        """Focus a window and make sure it really ended up active and on top."""
+        dispatch(f'hl.dsp.focus({{ window = "address:{addr}" }})')
+        dispatch(f'hl.dsp.window.alter_zorder({{ mode = "top", window = "address:{addr}" }})')
+
+        def check():
+            active = (hypr_json("activewindow") or {}).get("address")
+            print(f"winshell: switch to {cls} {addr} -> active {active}", file=sys.stderr, flush=True)
+            if active != addr and tries > 1:
+                self.focus(addr, cls, tries - 1)
+            return False
+        GLib.timeout_add(120, check)
+
+    def start_poll(self):
+        self.poll = GLib.timeout_add(30, self.poll_alt) if self.visible else None
+        return False
 
     def hide(self):
         self.visible = False
         self.win.set_visible(False)
-        dispatch('hl.dsp.submap("reset")')
+        LS.set_keyboard_mode(self.win, LS.KeyboardMode.NONE)
 
     # previews ------------------------------------------------------------
     def capture(self, c, update=True):
