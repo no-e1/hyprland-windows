@@ -537,6 +537,12 @@ class QuickSettings:
         self.stack.add_named(self.build_main(), "main")
         self.stack.add_named(self.build_wifi(), "wifi")
         self.stack.add_named(self.build_bt(), "bluetooth")
+        # A layer surface grows with its content but never shrinks back: after
+        # leaving the (taller) Wi-Fi page the window kept its old height and
+        # showed an empty grey area below the footer. Fit it again once the
+        # page slide is done.
+        self.stack.connect("notify::transition-running",
+                           lambda s, _p: None if s.get_transition_running() else self.fit())
         panel.append(self.stack)
         panel.append(self.build_footer())
         self.win.set_child(panel)
@@ -752,8 +758,14 @@ class QuickSettings:
             return True
         return False
 
+    def fit(self):
+        self.win.set_default_size(1, 1)
+        self.win.queue_resize()
+
     def open_page(self, name):
         self.stack.set_visible_child_name(name)
+        if self.stack.get_transition_type() == Gtk.StackTransitionType.NONE:
+            self.fit()
         if name == "wifi":
             self.load_wifi(rescan=True)
         elif name == "bluetooth":
@@ -2492,7 +2504,7 @@ class WinShell(Gtk.Application):
         elif what == "qs":
             if arg == "hide":
                 self.qs.hide()
-            elif arg in ("wifi", "bluetooth"):
+            elif arg in ("main", "wifi", "bluetooth"):
                 self.qs.show(arg)
             else:
                 self.qs.toggle()
