@@ -37,7 +37,7 @@ if [ -z "${1:-}" ]; then
 fi
 
 case "$1" in
-    "Lock")             run sh -c 'sleep 0.2; pidof hyprlock || hyprlock' ;;
+    "Lock")             run sh -c 'sleep 0.2; ~/.config/hypr/scripts/lock.sh' ;;
     "Sign out")         run hyprctl dispatch 'hl.dsp.exit()' ;;
     "Sleep")            run sh -c 'sleep 0.2; systemctl suspend' ;;
     "Restart")          run systemctl reboot ;;

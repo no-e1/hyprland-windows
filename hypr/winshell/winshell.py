@@ -11,6 +11,7 @@ Runs as a background daemon. Control it with winshell-ctl:
 """
 import fcntl
 import json
+import math
 import os
 import re
 import socket
@@ -24,7 +25,9 @@ import gi
 gi.require_version("Gtk", "4.0")
 gi.require_version("Gdk", "4.0")
 gi.require_version("Gtk4LayerShell", "1.0")
-from gi.repository import Gdk, Gio, GLib, GObject, Gtk  # noqa: E402
+gi.require_version("Gsk", "4.0")
+gi.require_version("Graphene", "1.0")
+from gi.repository import Gdk, Gio, GLib, GObject, Graphene, Gsk, Gtk  # noqa: E402
 from gi.repository import Gtk4LayerShell as LS  # noqa: E402
 try:                                    # GLib >= 2.86 moved it to GioUnix
     gi.require_version("GioUnix", "2.0")
@@ -118,7 +121,18 @@ def hypr_json(what):
 
 
 def dispatch(lua):
-    subprocess.run(["hyprctl", "dispatch", lua], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    """Hyprland dispatch straight over its socket (no hyprctl process)."""
+    try:
+        hypr("dispatch " + lua)
+    except OSError:
+        subprocess.run(["hyprctl", "dispatch", lua], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def hypr_eval(lua):
+    try:
+        hypr("eval " + lua)
+    except OSError:
+        subprocess.run(["hyprctl", "eval", lua], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 # Window events that change what the pinned taskbar buttons show. Waybar
@@ -205,6 +219,179 @@ def layer_window(app, namespace, layer, anchors=(), margins=None,
     return w
 
 
+class SlideBox(Gtk.Widget):
+    """A row (or a grid with `columns`) of icons that glide to their new
+    place whenever the order changes – like the Windows 11 taskbar, where the
+    other icons smoothly make room while one is dragged."""
+    TAU = 0.045                 # seconds; about 150 ms until an icon has arrived
+
+    def __init__(self, columns=0, css=None):
+        super().__init__()
+        self.columns = columns
+        self.items = []
+        self.collapsed = set()  # in the box but take no room (dragged elsewhere)
+        self.pos = {}           # widget -> (x, y) where it is drawn now
+        self.target = {}
+        self.tick_id = 0
+        self.last = 0
+        self.floating = None    # the dragged icon: drawn where the pointer is
+        self.float_pos = (0, 0)
+        if css:
+            self.add_css_class(css)
+
+    def item_at(self, x, y):
+        w = self.pick(x, y, Gtk.PickFlags.DEFAULT)
+        while w is not None and w.get_parent() is not self:
+            w = w.get_parent()
+        return w if w in self.items else None
+
+    def set_float(self, w, x, y):
+        """Draw `w` at (x, y) (it follows the pointer); its slot stays free."""
+        self.floating, self.float_pos = w, (x, y)
+        self.queue_allocate()
+
+    def drop_float(self):
+        """Let the dragged icon glide from the pointer into its slot."""
+        if self.floating is not None:
+            self.pos[self.floating] = self.float_pos
+            self.floating = None
+            self.queue_resize()
+
+    def set_items(self, widgets):
+        widgets = list(widgets)
+        for w in self.items:
+            if w not in widgets:
+                w.unparent()
+                self.pos.pop(w, None)
+                self.collapsed.discard(w)
+                if w is self.floating:
+                    self.floating = None
+        for w in widgets:
+            if w.get_parent() is not self:
+                w.set_parent(self)
+        self.items = widgets
+        self.queue_resize()
+
+    def move_item(self, w, index):
+        rest = [x for x in self.items if x is not w]
+        rest.insert(max(0, min(index, len(rest))), w)
+        if rest != self.items:
+            self.items = rest
+            self.queue_resize()
+
+    def set_collapsed(self, w, on):
+        if (w in self.collapsed) != on:
+            (self.collapsed.add if on else self.collapsed.discard)(w)
+            self.queue_resize()
+
+    def visible_items(self):
+        return [w for w in self.items if w.get_visible()]
+
+    def cell(self):
+        ws = [w.measure(Gtk.Orientation.HORIZONTAL, -1)[1] for w in self.visible_items()] or [0]
+        hs = [w.measure(Gtk.Orientation.VERTICAL, -1)[1] for w in self.visible_items()] or [0]
+        return max(ws), max(hs)
+
+    def layout(self, height=None):
+        """Target place of every item: {widget: (x, y, w, h)} and total size."""
+        out, items = {}, self.visible_items()
+        if self.columns:
+            cw, ch = self.cell()
+            n = len([w for w in items if w not in self.collapsed])
+            cols = max(1, min(self.columns, n))
+            i = 0
+            for w in items:
+                out[w] = ((i % cols) * cw, (i // cols) * ch, cw, ch)
+                if w not in self.collapsed:
+                    i += 1
+            rows = max(1, -(-i // cols)) if i else 0
+            return out, cols * cw if i else 0, rows * ch
+        x = 0
+        hmax = max([w.measure(Gtk.Orientation.VERTICAL, -1)[1] for w in items] or [0])
+        for w in items:
+            ww = w.measure(Gtk.Orientation.HORIZONTAL, -1)[1]
+            out[w] = (x, 0, ww, height or hmax)
+            if w not in self.collapsed:
+                x += ww
+        return out, x, hmax
+
+    def index_at(self, x, y, exclude=None):
+        """Where an icon dropped at (x, y) goes, counted without `exclude`."""
+        slots, _w, _h = self.layout()
+        others = [w for w in self.visible_items() if w is not exclude and w not in self.collapsed]
+        if self.columns:
+            cw, ch = self.cell()
+            n = len(others) + 1
+            cols = max(1, min(self.columns, n))
+            if not cw or not ch:
+                return len(others)
+            col = max(0, min(cols - 1, int(x // cw)))
+            row = max(0, int(y // ch))
+            return max(0, min(len(others), row * cols + col))
+        for i, w in enumerate(others):
+            sx, _sy, sw, _sh = slots[w]
+            if x < sx + sw / 2:
+                return i
+        return len(others)
+
+    def do_measure(self, orientation, for_size):
+        _slots, w, h = self.layout()
+        size = w if orientation == Gtk.Orientation.HORIZONTAL else h
+        return size, size, -1, -1
+
+    def do_size_allocate(self, width, height, baseline):
+        slots, _w, _h = self.layout(None if self.columns else height)
+        self.target = {w: (x, y) for w, (x, y, _ww, _hh) in slots.items()}
+        moving = False
+        for w, (x, y, ww, hh) in slots.items():
+            if w is self.floating:
+                fx, fy = self.float_pos
+                fx = max(0, min(fx, width - ww))
+                fy = max(0, min(fy, max(0, height - hh))) if self.columns else y
+                self.pos[w] = (fx, fy)
+                w.allocate(ww, hh, -1, Gsk.Transform().translate(Graphene.Point().init(fx, fy)))
+                continue
+            px, py = self.pos.get(w, (x, y))
+            if w not in self.pos:
+                self.pos[w] = (x, y)
+            if abs(px - x) > 0.5 or abs(py - y) > 0.5:
+                moving = True
+            t = Gsk.Transform().translate(Graphene.Point().init(px, py))
+            w.allocate(ww, hh, -1, t)
+        if moving and not self.tick_id:
+            self.last = 0
+            self.tick_id = self.add_tick_callback(self.on_tick)
+
+    def do_snapshot(self, snapshot):
+        for w in self.items:                    # the dragged icon on top
+            if w is not self.floating:
+                self.snapshot_child(w, snapshot)
+        if self.floating is not None and self.floating.get_parent() is self:
+            self.snapshot_child(self.floating, snapshot)
+
+    def on_tick(self, _w, clock):
+        now = clock.get_frame_time() / 1e6
+        dt = min(0.05, now - self.last) if self.last else 1 / 60
+        self.last = now
+        k = 1 - math.exp(-dt / self.TAU)
+        done = True
+        for w, (tx, ty) in self.target.items():
+            if w is self.floating:
+                continue
+            px, py = self.pos.get(w, (tx, ty))
+            nx, ny = px + (tx - px) * k, py + (ty - py) * k
+            if abs(tx - nx) < 0.5 and abs(ty - ny) < 0.5:
+                nx, ny = tx, ty
+            else:
+                done = False
+            self.pos[w] = (nx, ny)
+        self.queue_allocate()
+        if done:
+            self.tick_id = 0
+            return False
+        return True
+
+
 class AppIcons:
     """Maps window classes to desktop-entry icons."""
 
@@ -242,17 +429,31 @@ class Switcher:
     def __init__(self, app, icons):
         self.icons = icons
         self.thumbs = {}            # address -> Gdk.Texture
+        self.thumb_time = {}        # address -> when it was taken
+        self.cap_queue = []         # windows waiting for a new preview
+        self.geo = {}               # address -> (geometry, since when): grim crashes
+                                    # on windows that change size mid-capture
+        self.cap_busy = 0           # grims running
+        GLib.timeout_add_seconds(2, self.warm_thumbs)
+        self.live = None            # renews the previews while the switcher is open
         self.items, self.cards = [], []
         self.sel, self.visible = 0, False
         self.task_view = False
+        self.gesture = False        # opened by a 3-finger swipe
         self.paused_until = 0.0
         self.win = layer_window(app, "winshell-switcher", LS.Layer.OVERLAY)
         self.flow = Gtk.FlowBox(selection_mode=Gtk.SelectionMode.NONE, homogeneous=True,
                                 max_children_per_line=6, min_children_per_line=1,
                                 column_spacing=6, row_spacing=6)
+        # cards wrap into rows that fit the screen (like Windows); with very
+        # many windows the rows scroll
+        self.scroll = Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.NEVER,
+                                         vscrollbar_policy=Gtk.PolicyType.AUTOMATIC,
+                                         propagate_natural_width=True, propagate_natural_height=True)
+        self.scroll.set_child(self.flow)
         panel = Gtk.Box()
         panel.add_css_class("switcher")
-        panel.append(self.flow)
+        panel.append(self.scroll)
         self.win.set_child(panel)
         keys = Gtk.EventControllerKey()
         keys.connect("key-pressed", self.on_key)
@@ -283,17 +484,26 @@ class Switcher:
             self.hide()
         elif keyval in (Gdk.KEY_Return, Gdk.KEY_KP_Enter, Gdk.KEY_space):
             self.commit()
-        elif keyval in (Gdk.KEY_Right, Gdk.KEY_Down):
-            self.step(1)
-        elif keyval in (Gdk.KEY_Left, Gdk.KEY_Up):
-            self.step(-1)
+        elif keyval == Gdk.KEY_Right:
+            self.move(1, 0)
+        elif keyval == Gdk.KEY_Left:
+            self.move(-1, 0)
+        elif keyval == Gdk.KEY_Down:
+            self.move(0, 1)
+        elif keyval == Gdk.KEY_Up:
+            self.move(0, -1)
         elif keyval in (Gdk.KEY_Tab, Gdk.KEY_ISO_Left_Tab):
             back = keyval == Gdk.KEY_ISO_Left_Tab or state & Gdk.ModifierType.SHIFT_MASK
             self.step(-1 if back else 1)
         return True
 
+    def alt_released(self):
+        """Hyprland saw Alt go up (see hyprland.lua)."""
+        if self.visible and not self.task_view and not self.gesture:
+            self.commit()
+
     def on_key_released(self, _c, keyval, _code, _state):
-        if not self.task_view and keyval in (Gdk.KEY_Alt_L, Gdk.KEY_Alt_R):
+        if not self.task_view and not self.gesture and keyval in (Gdk.KEY_Alt_L, Gdk.KEY_Alt_R):
             self.commit()
 
     # every open window – all desktops, minimized ones too – most recent first.
@@ -341,20 +551,75 @@ class Switcher:
             self.update_selection()
             LS.set_keyboard_mode(self.win, LS.KeyboardMode.EXCLUSIVE)
             self.win.present()
-            if not self.poll and not self.task_view:
+            if not self.poll and not self.task_view and not self.gesture:
                 self.poll = GLib.timeout_add(100, self.start_poll)
-            for c in self.items:
-                self.capture(c)
+            # renew only old previews, one after the other: a grim per window
+            # all at once made the switcher (and the swipe) stutter
+            now = time.monotonic()
+            order = [self.items[self.sel]] + [c for i, c in enumerate(self.items) if i != self.sel]
+            for c in order:
+                if now - self.thumb_time.get(c["address"], 0) > self.THUMB_FRESH:
+                    self.capture(c)
+            if not self.live:
+                self.live = GLib.timeout_add(600, self.live_thumbs)
         else:
             self.sel = (self.sel + delta) % len(self.items)
             self.update_selection()
 
+    # 3-finger swipe left/right on the touchpad (hyprland.lua): like Windows
+    # the switcher shows up with the previous window selected, moving the
+    # fingers moves the selection, lifting them switches.
+    def swipe_begin(self):
+        if self.visible:
+            self.hide()
+        self.gesture = True
+        self.step(1)
+        if not self.visible:
+            self.gesture = False
+
+    def swipe_step(self, dx, dy=0):
+        if self.visible and self.gesture:
+            self.move(dx, dy)
+
+    def move(self, dx, dy):
+        """Move the selection by columns/rows without wrapping around:
+        left/right stay in the row (they stop at its ends), only up/down
+        change the row."""
+        n = len(self.items)
+        if not n:
+            return
+        per = max(1, getattr(self, "per_line", n))
+        row_start = (self.sel // per) * per
+        row_end = min(n - 1, row_start + per - 1)
+        sel = max(row_start, min(row_end, self.sel + dx))
+        if dy:
+            row = sel // per + dy
+            last_row = (n - 1) // per
+            row = max(0, min(last_row, row))
+            sel = min(n - 1, row * per + sel % per)
+        if sel != self.sel:
+            self.sel = sel
+            self.update_selection()
+
+    def swipe_end(self, cancelled=False):
+        if self.visible and self.gesture:
+            if cancelled:
+                self.hide()
+            else:
+                self.commit()
+
     def build(self):
         self.cards = []
         clear(self.flow)
-        per_line = max(1, min(6, len(self.items)))
+        mon_w, mon_h = self.monitor_size()
+        card_w = self.W + 24 + 6                # card padding + border, column spacing
+        card_h = self.H + 70
+        fit = max(1, int((mon_w * 0.92 - 28) // card_w))
+        per_line = max(1, min(fit, len(self.items)))
+        self.per_line = per_line
         self.flow.set_min_children_per_line(per_line)
         self.flow.set_max_children_per_line(per_line)
+        self.scroll.set_max_content_height(max(card_h, int(mon_h * 0.8)))
         for i, c in enumerate(self.items):
             card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
             card.add_css_class("card")
@@ -391,9 +656,37 @@ class Switcher:
             self.flow.append(card)
             self.cards.append(card)
 
+    def monitor_size(self):
+        disp = Gdk.Display.get_default()
+        mon = None
+        surf = self.win.get_surface()
+        if surf is not None:
+            mon = disp.get_monitor_at_surface(surf)
+        if mon is None:
+            mons = disp.get_monitors()
+            mon = mons.get_item(0) if mons.get_n_items() else None
+        if mon is None:
+            return 1920, 1080
+        g = mon.get_geometry()
+        return g.width, g.height
+
     def update_selection(self):
         for i, card in enumerate(self.cards):
             (card.add_css_class if i == self.sel else card.remove_css_class)("selected")
+        GLib.idle_add(self.scroll_to_selection)
+
+    def scroll_to_selection(self):
+        if not self.cards or not self.visible:
+            return False
+        ok_, r = self.cards[self.sel].compute_bounds(self.flow)
+        adj = self.scroll.get_vadjustment()
+        if ok_ and adj:
+            top, bottom = r.get_y(), r.get_y() + r.get_height()
+            if top < adj.get_value():
+                adj.set_value(top)
+            elif bottom > adj.get_value() + adj.get_page_size():
+                adj.set_value(bottom - adj.get_page_size())
+        return False
 
     def pick(self, i):
         self.sel = i
@@ -412,13 +705,12 @@ class Switcher:
             self.focus(target["address"], target["class"], tries=4)
             GLib.timeout_add(30, lambda: self.hide() and False)
             return False
-        GLib.timeout_add(50, finish)
+        GLib.timeout_add(20, finish)
 
     def focus(self, addr, cls, tries):
         """Focus a window and make sure it really ended up active and on top.
         ShowWindow (hyprland.lua) restores a minimized window before focusing it."""
-        subprocess.run(["hyprctl", "eval", f'ShowWindow("{addr}")'],
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        hypr_eval(f'ShowWindow("{addr}")')
         dispatch(f'hl.dsp.window.alter_zorder({{ mode = "top", window = "address:{addr}" }})')
 
         def check():
@@ -436,19 +728,83 @@ class Switcher:
     def hide(self):
         self.visible = False
         self.task_view = False
+        self.gesture = False
         self.win.set_visible(False)
         LS.set_keyboard_mode(self.win, LS.KeyboardMode.NONE)
 
     # previews ------------------------------------------------------------
+    def stable(self, c):
+        """True once a window has kept its place and size for a second."""
+        key = (tuple(c.get("at") or ()), tuple(c.get("size") or ()))
+        now = time.monotonic()
+        prev = self.geo.get(c["address"])
+        if not prev or prev[0] != key:
+            self.geo[c["address"]] = (key, now)
+            return False
+        return now - prev[1] >= 1.0
+
+    def fresh(self, c):
+        """The window as Hyprland sees it right now (or None if it is gone)."""
+        return next((x for x in hypr_json("clients") or [] if x.get("address") == c["address"]), None)
+
     def capture(self, c, update=True):
         if time.monotonic() < self.paused_until:
+            return
+        c = self.fresh(c)
+        if not c or not self.stable(c):
             return
         if c["workspace"].get("name", "").startswith("special:"):
             return                      # hidden windows are not rendered
         addr, sid = c["address"], c.get("stableId")
         if not sid:
             return
-        factor = min(1.0, 2 * self.W / max(1, c["size"][0]))
+        factor = min(1.0, 3 * self.W / max(1, c["size"][0]))
+        if any(q[0]["address"] == addr for q in self.cap_queue):
+            return
+        self.cap_queue.append((c, update, sid, factor))
+        self.next_capture()
+
+    THUMB_FRESH = 2             # s: a preview this young is shown as it is
+    CAP_PARALLEL = 3
+
+    def live_thumbs(self):
+        """While the switcher is open: the selected window's preview every
+        0.6 s, the others in turn – so they look live, like on Windows."""
+        if not self.visible or not self.items:
+            self.live = None
+            return False
+        if time.monotonic() < self.paused_until:
+            return True
+        sel = self.items[self.sel]
+        self.capture(sel)
+        others = [c for c in self.items if c is not sel]
+        if others:
+            oldest = min(others, key=lambda c: self.thumb_time.get(c["address"], 0))
+            self.capture(oldest)
+        return True
+
+    def warm_thumbs(self):
+        """Every few seconds, while the switcher is closed, renew the oldest
+        preview of a visible window – so they are ready when it opens."""
+        if not self.visible and not self.cap_queue and time.monotonic() >= self.paused_until:
+            now = time.monotonic()
+            wins = [c for c in self.collect()
+                    if not c["workspace"].get("name", "").startswith("special:")]
+            calm = [c for c in wins if self.stable(c)]     # also keeps track of who moves
+            stale = [c for c in calm if now - self.thumb_time.get(c["address"], 0) > self.THUMB_FRESH]
+            if stale:
+                self.capture(min(stale, key=lambda c: self.thumb_time.get(c["address"], 0)), update=False)
+        return True
+
+    def next_capture(self):
+        while self.cap_busy < self.CAP_PARALLEL and self.cap_queue:
+            self.start_capture()
+        return False
+
+    def start_capture(self):
+        self.cap_busy += 1
+        c, update, sid, factor = self.cap_queue.pop(0)
+        addr = c["address"]
 
         def grab():
             try:
@@ -459,8 +815,11 @@ class Switcher:
                 return None
 
         def done(tex):
+            self.cap_busy -= 1
+            GLib.idle_add(self.next_capture)
             if tex:
                 self.thumbs[addr] = tex
+                self.thumb_time[addr] = time.monotonic()
                 if update and self.visible:
                     for item, card in zip(self.items, self.cards):
                         if item["address"] == addr:
@@ -483,6 +842,8 @@ class Switcher:
                     GLib.idle_add(self.schedule_capture, "0x" + data)
                 elif ev == "closewindow" and data:
                     self.thumbs.pop("0x" + data, None)
+                    self.geo.pop("0x" + data, None)
+                    self.thumb_time.pop("0x" + data, None)
         except Exception as e:
             print("winshell: event socket:", e, file=sys.stderr)
 
@@ -969,7 +1330,7 @@ class QuickSettings:
 
     def lock(self):
         self.hide()
-        spawn("pidof hyprlock || hyprlock")
+        spawn(f"{SCRIPTS}/lock.sh")
 
     def set_brightness(self, v):
         self.debounce("bright", lambda: ok(f"brightnessctl -q set {max(1, v)}%"))
@@ -1975,6 +2336,265 @@ class OSD:
 
 
 
+# ── Snap preview (dragging a window to a screen edge) ──────────────────────
+class SnapPreview:
+    """The translucent area that shows where a dragged window will snap
+    (hyprland.lua sends "snap show x y w h cursor_x cursor_y" / "snap hide").
+    It grows out of the cursor into the area, like on Windows 11, and lets
+    every click and the drag itself pass through."""
+    ANIM = 0.18                 # seconds
+    INSET = 8                   # px inside the snap area
+    RADIUS = 8
+
+    def __init__(self, app):
+        self.win = layer_window(app, "winshell-snap", LS.Layer.TOP,
+                                anchors=(LS.Edge.TOP, LS.Edge.BOTTOM, LS.Edge.LEFT, LS.Edge.RIGHT),
+                                exclusive=-1)
+        self.win.add_css_class("snap-window")
+        self.area = Gtk.DrawingArea(hexpand=True, vexpand=True)
+        self.area.set_draw_func(self.draw)
+        self.win.set_child(self.area)
+        self.win.connect("realize", lambda w: self.passthrough())
+        self.rect = None                # drawn now (x, y, w, h)
+        self.start = self.target = None
+        self.t0 = 0
+        self.alpha = 0.0
+        self.alpha_from = self.alpha_to = 0.0
+        self.tick = 0
+
+    def passthrough(self):
+        import cairo
+        surf = self.win.get_surface()
+        if surf:
+            surf.set_input_region(cairo.Region())
+
+    def show(self, x, y, w, h, cx, cy):
+        target = (x + self.INSET, y + self.INSET, w - 2 * self.INSET, h - 2 * self.INSET)
+        if not self.win.get_visible() or self.alpha_to == 0:
+            self.rect = (cx - 30, cy - 30, 60, 60)      # grows out of the cursor
+            self.alpha = 0.0
+            self.win.present()
+            self.passthrough()
+        self.start, self.target = self.rect, target
+        self.alpha_from, self.alpha_to = self.alpha, 1.0
+        self.animate()
+
+    def hide(self):
+        if not self.win.get_visible():
+            return
+        self.start = self.target = self.rect
+        self.alpha_from, self.alpha_to = self.alpha, 0.0
+        self.animate()
+
+    def animate(self):
+        self.t0 = 0
+        if not self.tick:
+            self.tick = self.area.add_tick_callback(self.on_tick)
+
+    def on_tick(self, _w, clock):
+        now = clock.get_frame_time() / 1e6
+        if not self.t0:
+            self.t0 = now
+        t = min(1.0, (now - self.t0) / self.ANIM)
+        e = 1 - (1 - t) ** 3                            # ease out
+        if self.start and self.target:
+            self.rect = tuple(a + (b - a) * e for a, b in zip(self.start, self.target))
+        self.alpha = self.alpha_from + (self.alpha_to - self.alpha_from) * e
+        self.area.queue_draw()
+        if t >= 1:
+            self.tick = 0
+            if self.alpha_to == 0:
+                self.win.set_visible(False)
+            return False
+        return True
+
+    def draw(self, _area, cr, _w, _h):
+        if not self.rect or self.alpha <= 0:
+            return
+        x, y, w, h = self.rect
+        r = min(self.RADIUS, w / 2, h / 2)
+        import math as m
+        cr.new_sub_path()
+        cr.arc(x + w - r, y + r, r, -m.pi / 2, 0)
+        cr.arc(x + w - r, y + h - r, r, 0, m.pi / 2)
+        cr.arc(x + r, y + h - r, r, m.pi / 2, m.pi)
+        cr.arc(x + r, y + r, r, m.pi, 3 * m.pi / 2)
+        cr.close_path()
+        a = self.alpha
+        cr.set_source_rgba(0.55, 0.62, 0.75, 0.22 * a)  # frosted, slightly cool tint
+        cr.fill_preserve()
+        cr.set_source_rgba(1, 1, 1, 0.45 * a)
+        cr.set_line_width(1.5)
+        cr.stroke()
+
+
+# ── Show desktop animation (Win + D, 3-finger swipe down / up) ─────────────
+class DeskCanvas(Gtk.Widget):
+    """Draws the window pictures while they fly to / from the taskbar."""
+
+    def __init__(self):
+        super().__init__()
+        self.items = []         # dicts: tex, bar, a (from rect), b (to rect)
+        self.t = 0.0
+        self.rising = False
+
+    def do_snapshot(self, snap):
+        t = self.t
+        if self.rising:                                  # out of the taskbar
+            e = 1 - (1 - t) ** 3
+            alpha = min(1.0, t / 0.35)
+        else:                                            # into the taskbar
+            e = t * t * (3 - 2 * t)
+            alpha = 1.0 - max(0.0, (t - 0.25) / 0.75) ** 1.5
+        for it in self.items:
+            ax, ay, aw, ah = it["a"]
+            bx, by, bw, bh = it["b"]
+            x, y = ax + (bx - ax) * e, ay + (by - ay) * e
+            w, h = aw + (bw - aw) * e, ah + (bh - ah) * e
+            bar = it["bar"] * (h / ah if ah else 1)
+            rect = Graphene.Rect().init(x, y - bar, w, h + bar)
+            radius = 8 * min(1.0, w / max(1.0, aw)) + 2
+            snap.push_opacity(max(0.0, min(1.0, alpha)))
+            clip = Gsk.RoundedRect()        # (init_from_rect's return value is unusable in Python)
+            clip.init_from_rect(rect, radius)
+            snap.push_rounded_clip(clip)
+            if bar:
+                c = Gdk.RGBA()
+                c.parse("#202020")
+                snap.append_color(c, Graphene.Rect().init(x, y - bar, w, bar))
+            if it["tex"]:
+                snap.append_texture(it["tex"], Graphene.Rect().init(x, y, w, h))
+            else:
+                c = Gdk.RGBA()
+                c.parse("#2b2b2b")
+                snap.append_color(c, Graphene.Rect().init(x, y, w, h))
+            snap.pop()
+            snap.pop()
+
+
+class DesktopAnim:
+    """Like Windows: on "show desktop" every window shrinks into its taskbar
+    button while it fades, and grows back out of it when it returns.
+    Hyprland can't scale windows, so pictures of them do it on a full-screen
+    layer above everything (the windows themselves are hidden meanwhile).
+
+    hyprland.lua:  desk out <gen> <window>…   → DesktopOutNow(gen) once shown
+                   desk in  <gen> <window>…   → DesktopInNow(gen) at the end
+                   desk stop
+    <window> = address|x|y|width|height|title bar height|class"""
+    OUT = 0.24                  # seconds
+    IN = 0.28
+
+    def __init__(self, app, shell):
+        self.shell = shell
+        self.win = layer_window(app, "winshell-desk", LS.Layer.OVERLAY,
+                                anchors=(LS.Edge.TOP, LS.Edge.BOTTOM, LS.Edge.LEFT, LS.Edge.RIGHT),
+                                exclusive=-1)
+        self.win.add_css_class("snap-window")           # transparent
+        self.canvas = DeskCanvas()
+        self.canvas.set_hexpand(True)
+        self.canvas.set_vexpand(True)
+        self.win.set_child(self.canvas)
+        self.win.connect("realize", lambda *_: self.passthrough())
+        self.tick = 0
+        self.t0 = 0
+        self.dur = self.OUT
+        self.done = None
+        self.gen = 0
+
+    def passthrough(self):
+        import cairo
+        surf = self.win.get_surface()
+        if surf:
+            surf.set_input_region(cairo.Region())
+
+    def target(self, cls, mon_h):
+        """The taskbar button of that app (screen coordinates)."""
+        tb = self.shell.taskbar
+        if tb:
+            key = tb.key_for({"class": cls})
+            b = tb.buttons.get(key)
+            if b and b.get_mapped():
+                ok_, r = b.compute_bounds(tb.win)
+                if ok_:
+                    top = mon_h - tb.win.get_height()
+                    cx, cy = r.get_x() + r.get_width() / 2, top + r.get_y() + r.get_height() / 2
+                    return (cx - 20, cy - 14, 40, 28)
+        return (self.win.get_width() / 2 - 20, mon_h - 34, 40, 28)
+
+    def parse(self, tokens):
+        items = []
+        mon_h = self.win.get_height() or self.shell.switcher.monitor_size()[1]
+        thumbs = self.shell.switcher.thumbs if self.shell.switcher else {}
+        for tok in tokens:
+            p = tok.split("|", 6)
+            if len(p) < 7:
+                continue
+            addr, x, y, w, h, bar, cls = p[0], *map(float, p[1:6]), p[6]
+            items.append({"tex": thumbs.get(addr), "bar": bar,
+                          "win": (x, y, w, h), "icon": self.target(cls, mon_h)})
+        return items
+
+    def run(self, kind, gen, tokens):
+        self.gen = gen
+        items = self.parse(tokens)
+        if not items:
+            self.finish_now(kind, gen)
+            return
+        rising = kind == "in"
+        for it in items:
+            it["a"], it["b"] = (it["icon"], it["win"]) if rising else (it["win"], it["icon"])
+        self.canvas.items = items
+        self.canvas.rising = rising
+        self.canvas.t = 0.0
+        self.dur = self.IN if rising else self.OUT
+        self.done = None
+        self.win.present()
+        self.passthrough()
+        self.canvas.queue_draw()
+        if not rising:
+            # the pictures cover the windows now: hide the real ones
+            GLib.timeout_add(34, lambda: (hypr_eval(f"DesktopOutNow({gen})"), False)[1])
+        else:
+            self.done = lambda: hypr_eval(f"DesktopInNow({gen})")
+        self.t0 = 0
+        if not self.tick:
+            self.tick = self.canvas.add_tick_callback(self.on_tick)
+
+    def finish_now(self, kind, gen):
+        hypr_eval(f"DesktopOutNow({gen})" if kind == "out" else f"DesktopInNow({gen})")
+
+    def on_tick(self, _w, clock):
+        now = clock.get_frame_time() / 1e6
+        if not self.t0:
+            self.t0 = now
+        t = min(1.0, (now - self.t0) / self.dur)
+        self.canvas.t = t
+        self.canvas.queue_draw()
+        if t < 1.0:
+            return True
+        self.tick = 0
+        if self.done:                   # windows come back right under the pictures
+            done, self.done = self.done, None
+            done()
+            GLib.timeout_add(140, self.close)
+        else:
+            self.close()
+        return False
+
+    def close(self):
+        self.canvas.items = []
+        self.win.set_visible(False)
+        return False
+
+    def stop(self):
+        self.done = None
+        if self.tick:
+            self.canvas.remove_tick_callback(self.tick)
+            self.tick = 0
+        self.close()
+
+
 # ── Taskbar (replaces Waybar) ───────────────────────────────────────────────
 TASKBAR_CONFIG = os.path.join(os.environ.get("XDG_CONFIG_HOME", os.path.expanduser("~/.config")),
                               "winshell", "taskbar.json")
@@ -2040,6 +2660,8 @@ class Taskbar:
         self.shell = shell
         self.app = app
         self.dragging_tray = False
+        self.drag_key = None                          # app icon being dragged
+        self.tdrag = None                             # tray icon being dragged
         self.apps = AppIndex()
         self.cfg = self.load_config()
         pinned = []
@@ -2065,11 +2687,11 @@ class Taskbar:
         self.start_btn = button(icon("win11-start", 26), "tb-start", tooltip="Start",
                                 on_click=lambda: self.shell.start.toggle())
         center.append(self.start_btn)
-        self.app_box = Gtk.Box()
+        self.app_box = SlideBox()
         center.append(self.app_box)
-        drop = Gtk.DropTarget.new(GObject.TYPE_STRING, Gdk.DragAction.MOVE)
-        drop.connect("drop", self.on_app_drop)
-        self.app_box.add_controller(drop)
+        # drag an icon to reorder: it follows the pointer inside the taskbar
+        # and the others make room right away, like on Windows
+        self.drag_gesture(self.app_box, "app")
         bar.set_center_widget(center)
         bar.set_end_widget(self.build_right())
         self.win.set_child(bar)
@@ -2123,12 +2745,11 @@ class Taskbar:
                 self.order.append(k)
         pinned = set(self.cfg["pinned"])
         keys = [k for k in self.order if k in pinned or k in groups]
-        if keys != self.shown:
-            clear(self.app_box)
+        if keys != self.shown and not self.drag_key:
             for k in keys:
                 if k not in self.buttons:
                     self.buttons[k] = self.make_app_button(k)
-                self.app_box.append(self.buttons[k])
+            self.app_box.set_items([self.buttons[k] for k in keys])
             self.shown = keys
         for k in keys:
             b, wins = self.buttons[k], groups.get(k, [])
@@ -2162,12 +2783,72 @@ class Taskbar:
             g = Gtk.GestureClick(button=num)
             g.connect("released", lambda *_a, f=fn: f())
             b.add_controller(g)
-        src = Gtk.DragSource(actions=Gdk.DragAction.MOVE)
-        src.connect("prepare", lambda *_: Gdk.ContentProvider.new_for_value(
-            GObject.Value(GObject.TYPE_STRING, "app:" + key)))
-        src.connect("drag-begin", lambda s, _d: s.set_icon(Gtk.WidgetPaintable.new(img), 12, 12))
-        b.add_controller(src)
         return b
+
+    # ── dragging icons (apps in the middle, tray icons, hidden icons) ──
+    # Own dragging instead of Wayland drag and drop: Hyprland sometimes
+    # cancels a drag right away, and on Windows the icon stays in the
+    # taskbar anyway. While the button is held, all pointer events go to the
+    # surface where the drag started, even outside of it.
+    DRAG_THRESHOLD = 6
+
+    def drag_gesture(self, box, kind):
+        g = Gtk.GestureDrag(button=Gdk.BUTTON_PRIMARY)
+        g.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
+        g.connect("drag-begin", lambda g_, x, y: self.drag_begin(g_, box, kind, x, y))
+        g.connect("drag-update", lambda g_, dx, dy: self.drag_update(g_, dx, dy))
+        g.connect("drag-end", lambda *_: self.drag_finish(True))
+        g.connect("cancel", lambda *_: self.drag_finish(False))
+        box.add_controller(g)
+
+    def drag_begin(self, g, box, kind, x, y):
+        w = box.item_at(x, y)
+        if w is None or (kind != "app" and not getattr(w, "ident", None)):
+            self.idrag = None
+            return
+        px, py = box.pos.get(w, (0, 0))
+        self.idrag = {"kind": kind, "box": box, "w": w, "sx": x, "sy": y,
+                      "grab": (x - px, y - py), "active": False}
+
+    def drag_update(self, g, dx, dy):
+        st = getattr(self, "idrag", None)
+        if not st:
+            return
+        x, y = st["sx"] + dx, st["sy"] + dy
+        if not st["active"]:
+            if math.hypot(dx, dy) < self.DRAG_THRESHOLD:
+                return
+            st["active"] = True
+            g.set_state(Gtk.EventSequenceState.CLAIMED)   # no click on release
+            if st["kind"] == "app":
+                self.drag_key = st["w"].key
+            else:
+                self.tray_drag_start(st)
+        if st["kind"] == "app":
+            box, w = st["box"], st["w"]
+            box.set_float(w, x - st["grab"][0], 0)
+            box.move_item(w, box.index_at(x, y, exclude=w))
+        else:
+            self.tray_drag_move(st, x, y)
+
+    def drag_finish(self, ok_):
+        st, self.idrag = getattr(self, "idrag", None), None
+        if not st or not st["active"]:
+            return
+        if st["kind"] == "app":
+            self.drag_key = None
+            st["box"].drop_float()
+            keys = [w.key for w in self.app_box.items]
+            if ok_:
+                self.order = keys + [k for k in self.order if k not in keys]
+                self.cfg["pinned"] = [k for k in self.order if k in self.cfg["pinned"]]
+                self.save_config()
+                self.shown = keys
+            else:
+                self.app_box.set_items([self.buttons[k] for k in self.shown])
+            self.refresh()
+        else:
+            self.tray_drag_end(st, ok_)
 
     def on_app_click(self, key):
         wins = self.groups.get(key, [])
@@ -2219,25 +2900,6 @@ class Taskbar:
         self.save_config()
         self.refresh()
 
-    def on_app_drop(self, _target, value, x, _y):
-        if not isinstance(value, str) or not value.startswith("app:"):
-            return False
-        key = value[4:]
-        keys = [k for k in self.shown if k != key]
-        idx = len(keys)
-        for i, k in enumerate(keys):
-            ok_, r = self.buttons[k].compute_bounds(self.app_box)
-            if ok_ and x < r.get_x() + r.get_width() / 2:
-                idx = i
-                break
-        keys.insert(idx, key)
-        self.order = keys + [k for k in self.order if k not in keys]
-        self.cfg["pinned"] = [k for k in self.order if k in self.cfg["pinned"]]
-        self.save_config()
-        self.shown = []                 # force re-adding in the new order
-        self.refresh()
-        return True
-
     def set_start_open(self, on):
         (self.start_btn.add_css_class if on else self.start_btn.remove_css_class)("open")
 
@@ -2251,20 +2913,13 @@ class Taskbar:
         self.tray_arrow = button(icon("win11-chevron-up", 12), "tb-tray-arrow",
                                  tooltip="Show hidden icons", on_click=self.toggle_overflow)
         self.tray_arrow.set_visible(False)
-        drop = Gtk.DropTarget.new(GObject.TYPE_STRING, Gdk.DragAction.MOVE)
-        drop.connect("drop", lambda _t, v, _x, _y: self.move_tray(v, hidden=True))
-        drop.connect("enter", lambda *_: (self.open_overflow(), Gdk.DragAction.MOVE)[1])
-        self.tray_arrow.add_controller(drop)
         right.append(self.tray_arrow)
 
-        self.tray_box = Gtk.Box()
-        self.tray_box.add_css_class("tb-tray")
+        self.tray_box = SlideBox(css="tb-tray")
         right.append(self.tray_box)
-        # dropping an icon anywhere on the right side (not on "^") shows it in
-        # the taskbar – also when no icon is shown there yet
-        drop = Gtk.DropTarget.new(GObject.TYPE_STRING, Gdk.DragAction.MOVE)
-        drop.connect("drop", self.on_right_drop)
-        right.add_controller(drop)
+        # drag icons to reorder them, or up into the hidden-icons flyout (and
+        # back); dropping anywhere on the taskbar shows an icon there
+        self.drag_gesture(self.tray_box, "bar")
         self.build_overflow()
 
         # Wi-Fi / volume / battery, like Windows' quick settings button
@@ -2350,18 +3005,14 @@ class Taskbar:
                 order.append(it.ident)
         items.sort(key=lambda it: order.index(it.ident))
         hidden = set(self.cfg["tray_hidden"])
-        clear(self.tray_box)
-        clear(self.overflow_grid)
+        if self.tdrag:                  # rebuilt once the drag is over
+            return False
+        bar, ov = [], []
         for it in items:
-            btn = self.tray_button(it)
-            if it.ident in hidden:
-                self.overflow_grid.append(btn)
-            else:
-                self.tray_box.append(btn)
-        any_hidden = any(it.ident in hidden for it in items)
-        n = sum(it.ident in hidden for it in items)
-        self.overflow_grid.set_min_children_per_line(max(1, min(5, n)))
-        self.overflow_grid.set_max_children_per_line(max(1, min(5, n)))
+            (ov if it.ident in hidden else bar).append(self.tray_button(it))
+        self.tray_box.set_items(bar)
+        self.overflow_grid.set_items(ov)
+        any_hidden = bool(ov)
         self.overflow_empty.set_visible(not any_hidden)
         self.overflow_grid.set_visible(any_hidden)
         self.tray_arrow.set_visible(any_hidden or self.dragging_tray)
@@ -2381,6 +3032,7 @@ class Taskbar:
         b = Gtk.Button(child=img)
         b.add_css_class("tb-tray-item")
         b.set_tooltip_text(item.title)
+        b.ident = item.ident
         tray = self.shell.tray
         b.connect("clicked", lambda *_: tray.activate(item, b))
         for num, fn in ((Gdk.BUTTON_SECONDARY, lambda: tray.menu(item, b)),
@@ -2392,56 +3044,169 @@ class Taskbar:
                                        Gtk.EventControllerScrollFlags.DISCRETE)
         sc.connect("scroll", lambda _c, _dx, dy: (tray.scroll(item, -dy), True)[1])
         b.add_controller(sc)
-        src = Gtk.DragSource(actions=Gdk.DragAction.MOVE)
-        src.connect("prepare", lambda *_: Gdk.ContentProvider.new_for_value(
-            GObject.Value(GObject.TYPE_STRING, "tray:" + item.ident)))
-        src.connect("drag-begin", lambda s, _d: (s.set_icon(Gtk.WidgetPaintable.new(img), 8, 8),
-                                                 self.tray_drag(True)))
-        src.connect("drag-end", lambda *_: self.tray_drag(False))
-        b.add_controller(src)
         return b
 
-    def tray_drag(self, on):
-        """While a tray icon is dragged: "^" is there to drop it on, and the
-        click catcher is out of the way so the taskbar takes drops."""
-        self.dragging_tray = on
-        if on:
-            self.tray_arrow.set_visible(True)
-            self.shell.qs.backdrop.set_visible(False)
+    # Tray dragging. Two places: "bar" (taskbar) and "ov" (hidden-icons
+    # flyout, its own surface). The pointer position is turned into taskbar
+    # coordinates to tell which one it is over.
+    def tray_box_of(self, where):
+        return self.tray_box if where == "bar" else self.overflow_grid
+
+    def ov_origin(self):
+        """Top-left corner of the flyout in taskbar coordinates (the flyout
+        sits on top of the taskbar, anchored bottom right)."""
+        x = self.win.get_width() - LS.get_margin(self.ov_win, LS.Edge.RIGHT) - self.ov_win.get_width()
+        y = -(LS.get_margin(self.ov_win, LS.Edge.BOTTOM) + self.ov_win.get_height())
+        return x, y
+
+    @staticmethod
+    def point(src, dst, x, y):
+        ok_, p = src.compute_point(dst, Graphene.Point().init(x, y))
+        return (p.x, p.y) if ok_ else (x, y)
+
+    def tray_drag_start(self, st):
+        btn = st["w"]
+        item = next((it for it in self.shell.tray.items.values() if it.ident == btn.ident), None)
+        src = "bar" if st["box"] is self.tray_box else "ov"
+        self.dragging_tray = True
+        self.tdrag = {"btn": btn, "src": src, "target": src, "index": 0, "item": item,
+                      "ghost": {"bar": None, "ov": None}}
+        self.tray_arrow.set_visible(True)
+
+    def ghost(self, where):
+        """The dragged icon shown in the other place while it hovers there."""
+        d = self.tdrag
+        if d["ghost"][where] is None and d["item"]:
+            g = self.tray_button(d["item"])
+            g.set_can_target(False)
+            g.set_opacity(0.75)
+            d["ghost"][where] = g
+        return d["ghost"][where]
+
+    def tray_drag_move(self, st, x, y):
+        d = self.tdrag
+        if not d:
+            return
+        # pointer in taskbar coordinates
+        if d["src"] == "bar":
+            tx, ty = self.point(self.tray_box, self.win, x, y)
         else:
-            if self.ov_win.get_visible():
-                self.shell.qs.backdrop.present()
+            fx, fy = self.point(self.overflow_grid, self.ov_win, x, y)
+            ox, oy = self.ov_origin()
+            tx, ty = fx + ox, fy + oy
+        where, lx, ly = None, 0, 0
+        ok_, ar = self.tray_arrow.compute_bounds(self.win)
+        over_arrow = ok_ and self.tray_arrow.get_visible() and ar.contains_point(Graphene.Point().init(tx, ty))
+        if over_arrow and not self.ov_win.get_visible():
+            self.open_overflow()
+        if self.ov_win.get_visible():
+            ox, oy = self.ov_origin()
+            fx, fy = tx - ox, ty - oy
+            if over_arrow or (0 <= fx <= self.ov_win.get_width() and 0 <= fy <= self.ov_win.get_height()):
+                where = "ov"
+                lx, ly = (10 ** 6, 10 ** 6) if over_arrow else self.point(self.ov_win, self.overflow_grid, fx, fy)
+        if where is None and ty >= 0:
+            where = "bar"
+            lx, ly = self.point(self.win, self.tray_box, tx, ty)
+        if where:
+            box = self.tray_box_of(where)
+            moving = d["btn"] if d["src"] == where else self.ghost(where)
+            d["index"] = box.index_at(lx, ly, exclude=moving) if lx < 10 ** 6 else 10 ** 6
+        self.tray_preview(where, d["index"])
+        # the dragged icon follows the pointer while it is over its own place
+        src_box = self.tray_box_of(d["src"])
+        if where == d["src"]:
+            gx, gy = st["grab"]
+            src_box.set_float(d["btn"], x - gx, y - gy)
+            d["btn"].set_opacity(1)
+        else:
+            src_box.drop_float()
+            d["btn"].set_opacity(0 if where else 0.4)
+
+    def tray_preview(self, where, index=0):
+        """Show where the dragged icon would land: there the others glide
+        aside; where it came from, its place closes while it hovers over the
+        other place."""
+        d = self.tdrag
+        if not d:
+            return
+        d["target"] = where
+        for name in ("bar", "ov"):
+            box, btn = self.tray_box_of(name), d["btn"]
+            ghost = d["ghost"][name]
+            items = [w for w in box.items if w is not ghost]
+            if where == name:
+                moving = btn if d["src"] == name else self.ghost(name)
+                if moving is None:
+                    continue
+                items = [w for w in items if w is not moving]
+                items.insert(max(0, min(index, len(items))), moving)
+                box.set_items(items)
+                if d["src"] == name:
+                    box.set_collapsed(btn, False)
+            else:
+                box.set_items(items)
+                if d["src"] == name:
+                    box.set_collapsed(btn, where is not None)
+        has_ov = any(w.get_visible() and w not in self.overflow_grid.collapsed for w in self.overflow_grid.items)
+        self.overflow_empty.set_visible(not has_ov)
+        self.overflow_grid.set_visible(has_ov)
+        if self.ov_win.get_visible():
+            GLib.idle_add(self.place_overflow)
+
+    def tray_drag_end(self, st, ok_):
+        d, self.tdrag = self.tdrag, None
+        self.dragging_tray = False
+        if not d:
+            return
+        self.tray_box_of(d["src"]).drop_float()
+        d["btn"].set_opacity(1)
+        if self.ov_win.get_visible():           # clicking outside closes it again
+            self.shell.qs.catcher_for("tray")
+        where = d["target"] if ok_ else None
+        if where:
+            ident, row = d["btn"].ident, []
+            for w in self.tray_box_of(where).items:
+                if w is d["ghost"][where] or (w is d["btn"] and d["src"] == where):
+                    row.append(ident)
+                elif getattr(w, "ident", None) and w.ident != ident and w not in self.tray_box_of(where).collapsed:
+                    row.append(w.ident)
+            if ident not in row:
+                row.append(ident)
+            self.place_tray(ident, where == "ov", row)
+        else:
             GLib.idle_add(self.tray_changed)
 
-    def on_right_drop(self, _target, value, x, _y):
-        ok_, r = self.tray_box.compute_bounds(self.right)
-        return self.move_tray(value, hidden=False, x=(x - r.get_x()) if ok_ else None)
-
-    def move_tray(self, value, hidden, x=None):
-        if not isinstance(value, str) or not value.startswith("tray:"):
-            return False
-        ident = value[5:]
+    def place_tray(self, ident, hidden, row):
+        """Hide/show a tray icon; `row` = icons of that place in their new order."""
         hid = [i for i in self.cfg["tray_hidden"] if i != ident]
         if hidden:
             hid.append(ident)
         self.cfg["tray_hidden"] = hid
-        if x is not None:                       # dropped in the bar: put it where it was dropped
-            order = [i for i in self.cfg["tray_order"] if i != ident]
-            pos = len(order)
-            child, i = self.tray_box.get_first_child(), 0
-            while child:
-                ok_, r = child.compute_bounds(self.tray_box)
-                if ok_ and x < r.get_x() + r.get_width() / 2:
-                    tip = child.get_tooltip_text()
-                    match = next((it.ident for it in self.shell.tray.items.values() if it.title == tip), None)
-                    if match in order:
-                        pos = order.index(match)
-                    break
-                child = child.get_next_sibling()
-            order.insert(pos, ident)
-            self.cfg["tray_order"] = order
+        order = [i for i in self.cfg["tray_order"] if i != ident]
+        if row:
+            pos = row.index(ident)
+            after = next((i for i in row[pos + 1:] if i in order), None)
+            before = next((i for i in reversed(row[:pos]) if i in order), None)
+            if after is not None:
+                order.insert(order.index(after), ident)
+            elif before is not None:
+                order.insert(order.index(before) + 1, ident)
+            else:
+                order.append(ident)
+        else:
+            order.append(ident)
+        self.cfg["tray_order"] = order
         self.save_config()
         GLib.idle_add(self.tray_changed)
+
+    def move_tray(self, value, hidden, x=None):
+        """winshell-ctl tray hide|show <id>"""
+        if not isinstance(value, str) or not value.startswith("tray:"):
+            return False
+        ident = value[5:]
+        box = self.overflow_grid if hidden else self.tray_box
+        self.place_tray(ident, hidden, [w.ident for w in box.items if getattr(w, "ident", None)] + [ident])
         return True
 
     # hidden-icons flyout: its own layer surface (a Gtk.Popover grabs the
@@ -2454,18 +3219,16 @@ class Taskbar:
         panel.add_css_class("tray-flyout")
         panel.add_css_class("flyout")
         self.ov_panel = panel
-        self.overflow_grid = Gtk.FlowBox(selection_mode=Gtk.SelectionMode.NONE, homogeneous=True,
-                                         min_children_per_line=1, max_children_per_line=5)
-        self.overflow_empty = label("Drop here to hide", "overflow-empty", xalign=0.5)
+        self.overflow_grid = SlideBox(columns=5)
+        self.overflow_empty = label("Drop here to hide", "overflow-empty", xalign=0.5, ellipsize=False)
         panel.append(self.overflow_grid)
         panel.append(self.overflow_empty)
-        drop = Gtk.DropTarget.new(GObject.TYPE_STRING, Gdk.DragAction.MOVE)
-        drop.connect("drop", lambda _t, v, _x, _y: self.move_tray(v, hidden=True))
-        panel.add_controller(drop)
+        self.drag_gesture(self.overflow_grid, "ov")
         self.ov_win.set_child(panel)
 
     def place_overflow(self):
         """Center the flyout above the "^" button."""
+        self.ov_win.set_default_size(1, 1)      # shrink with its content again
         ok_, r = self.tray_arrow.compute_bounds(self.win)
         if ok_:
             width = self.ov_panel.measure(Gtk.Orientation.HORIZONTAL, -1)[1]
@@ -2548,6 +3311,8 @@ class WinShell(Gtk.Application):
         self.switcher = Switcher(self, icons)
         self.qs = QuickSettings(self)
         self.osd = OSD(self)
+        self.snap = SnapPreview(self)
+        self.desk = DesktopAnim(self, self)
         self.start = StartMenu(self, self)
         self.calendar = CalendarFlyout(self, self)
         self.taskbar = Taskbar(self, self)
@@ -2625,6 +3390,11 @@ class WinShell(Gtk.Application):
             if self.start.visible:
                 self.start.hide()
             {"next": lambda: self.switcher.step(1), "prev": lambda: self.switcher.step(-1),
+             "release": self.switcher.alt_released,
+             "swipe-begin": self.switcher.swipe_begin,
+             "swipe-next": lambda: self.switcher.swipe_step(1), "swipe-prev": lambda: self.switcher.swipe_step(-1),
+             "swipe-down": lambda: self.switcher.swipe_step(0, 1), "swipe-up": lambda: self.switcher.swipe_step(0, -1),
+             "swipe-end": self.switcher.swipe_end, "swipe-cancel": lambda: self.switcher.swipe_end(True),
              "view": self.switcher.view,
              "commit": self.switcher.commit,
              "cancel": lambda: self.switcher.visible and self.switcher.hide()}.get(arg, lambda: None)()
@@ -2635,6 +3405,16 @@ class WinShell(Gtk.Application):
                 self.qs.show(arg)
             else:
                 self.qs.toggle()
+        elif what == "desk":                    # hyprland.lua: show desktop animation
+            if arg in ("out", "in") and len(args) > 2 and args[2].isdigit():
+                self.desk.run(arg, int(args[2]), args[3:])
+            else:
+                self.desk.stop()
+        elif what == "snap":                    # hyprland.lua, while a window is dragged
+            if arg == "show" and len(args) >= 8:
+                self.snap.show(*(float(v) for v in args[2:8]))
+            else:
+                self.snap.hide()
         elif what == "osd":
             self.osd.show("brightness" if arg == "brightness" else "volume")
             if self.qs.visible:
@@ -2647,7 +3427,7 @@ class WinShell(Gtk.Application):
             if arg in ("hide", "show") and len(args) > 2:
                 self.taskbar.move_tray("tray:" + args[2], hidden=arg == "hide")
             elif arg == "menu":
-                child = self.taskbar.tray_box.get_first_child()
+                child = (self.taskbar.tray_box.items or [None])[0]
                 items = [it for it in self.tray.items.values() if it.title == (child.get_tooltip_text() if child else None)]
                 if child and items:
                     self.tray.menu(items[0], child)

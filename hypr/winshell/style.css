@@ -232,6 +232,7 @@ scrollbar slider { min-width: 3px; background: rgba(255, 255, 255, 0.35); border
 /* click catcher behind flyouts: must not be 100% transparent, or GTK
    never hands the compositor a buffer and the surface never appears */
 window.catcher { background: rgba(0, 0, 0, 0.004); }
+window.snap-window { background: transparent; }
 
 /* ── Start menu ──────────────────────────────────────────────────── */
 .start {

@@ -109,6 +109,9 @@ hl.config({
         force_default_wallpaper = 0,
         disable_hyprland_logo   = true,
         focus_on_activate       = true,
+        -- if the lock screen ever crashes, another one (hyprlock, see
+        -- scripts/lock.sh) may take over the lock instead of a red screen
+        allow_session_lock_restore = true,
     },
 })
 
@@ -130,6 +133,9 @@ hl.animation({ leaf = "border",        enabled = true, speed = 4,   bezier = "sm
 hl.animation({ leaf = "fadeIn",        enabled = true, speed = 1.8, bezier = "smooth" })
 hl.animation({ leaf = "fadeOut",       enabled = true, speed = 2,   bezier = "linear" })
 hl.animation({ leaf = "fade",          enabled = true, speed = 3,   bezier = "smooth" })
+-- window opacity changes: only "show desktop" uses them – instant, winshell
+-- animates pictures of the windows instead
+hl.animation({ leaf = "fadeSwitch",    enabled = false })
 -- start menu and quick settings slide in from the bottom
 hl.animation({ leaf = "layersIn",      enabled = true, speed = 3,   bezier = "winOut", style = "slide bottom" })
 hl.animation({ leaf = "layersOut",     enabled = true, speed = 1.8, bezier = "winIn",  style = "slide bottom" })
@@ -156,6 +162,9 @@ hl.config({
         sensitivity  = -0.3,
         touchpad = {
             natural_scroll = true,
+            -- two-finger scrolling: a bit slower than Linux' default; browsers
+            -- scroll much further per step, they get their own factor below
+            scroll_factor  = 0.7,
         },
     },
 })
@@ -188,6 +197,13 @@ hl.window_rule({
     size  = "760 560",
 })
 
+-- Browsers scroll much further per touchpad step than other apps
+hl.window_rule({
+    name  = "browser-touchpad-scroll",
+    match = { class = "^(brave-browser|chromium|google-chrome|firefox)$" },
+    scroll_touchpad = 0.25,
+})
+
 -- XWayland drag fix from the default config
 hl.window_rule({
     name  = "fix-xwayland-drags",
@@ -216,13 +232,43 @@ local hidden_maximized = {}     -- address -> true: was maximized when it got mi
 
 -- Tell the app it is maximized (no shadow margins, "restore" button) while
 -- Hyprland keeps treating it as a normal window (normal stacking order).
+-- Like Windows 11, a maximized window has square corners and no border;
+-- otherwise the normal rounding / border apply again.
+local function square_corners(addr, on)
+    for _, p in ipairs({ "rounding", "border_size" }) do
+        hl.dispatch(hl.dsp.window.set_prop({ prop = p, value = on and "0" or "unset", window = "address:" .. addr }))
+    end
+end
+
 local function client_maximized(addr, on)
     hl.dispatch(hl.dsp.window.fullscreen_state({ internal = 0, client = on and 1 or 0,
                                                  window = "address:" .. addr }))
+    square_corners(addr, on)
+end
+-- windows that are maximized already (config reload, login)
+for _, w in ipairs(hl.get_windows() or {}) do
+    if w.fullscreen_client == 1 then square_corners(w.address, true) end
+end
+
+-- the window an event is about (Hyprland passes the window object itself)
+local function event_window(ev)
+    local t = type(ev)
+    if (t == "table" or t == "userdata") and ev.address then return ev end
+    return nil
 end
 
 local function later(ms, fn)
     hl.timer(fn, { timeout = ms, type = "oneshot" })
+end
+
+-- Show desktop (Win + D, 3-finger swipe): the windows shrink into their
+-- taskbar buttons and grow back out (drawn by winshell, see hide_all). The
+-- real windows don't move, so Win + D works at any moment – pressed mid-way,
+-- it turns around.
+local function set_alpha(addr, v)
+    for _, p in ipairs({ "opacity", "opacity_inactive", "opacity_fullscreen" }) do
+        hl.dispatch(hl.dsp.window.set_prop({ prop = p, value = tostring(v), window = "address:" .. addr }))
+    end
 end
 
 -- Bring a hidden window back to a desktop.
@@ -233,8 +279,10 @@ end
 -- and the window grows by a pixel on every restore.
 function RestoreWindow(w, ws_id)
     local a, sel = w.address, "address:" .. w.address
+    local x, y = w.at.x, w.at.y     -- numbers: the window object reads live values
     hl.dispatch(hl.dsp.window.move({ workspace = ws_id, follow = false, window = sel }))
-    hl.dispatch(hl.dsp.window.move({ x = w.at.x, y = w.at.y, window = sel }))
+    set_alpha(a, 1)                 -- faded out by "show desktop": fades back in
+    hl.dispatch(hl.dsp.window.move({ x = x, y = y, window = sel }))
     if hidden_maximized[a] then
         hidden_maximized[a] = nil
         fs_hook_paused[a] = true
@@ -245,6 +293,8 @@ function RestoreWindow(w, ws_id)
         hl.dispatch(hl.dsp.window.resize({ x = sx + 1, y = sy, window = sel }))
         later(60, function()
             hl.dispatch(hl.dsp.window.resize({ x = sx, y = sy, window = sel }))
+            -- shrinking back moves the window 1 px to the right: put it back
+            hl.dispatch(hl.dsp.window.move({ x = x, y = y, window = sel }))
         end)
     end
 end
@@ -261,6 +311,7 @@ end
 --    restore hook below must ignore that for a moment.
 local restore_blocked = false
 local MAX_HIDE_DELAY = 250      -- ms
+local hide_cancel = {}          -- address -> true: its pending (delayed) hide is off
 local function focus_next_visible(except)
     local ws = hl.get_active_workspace()
     local best
@@ -284,6 +335,7 @@ function HideWindow(addr, keep_focus)
     restore_blocked = true
     later(MAX_HIDE_DELAY + 400, function() restore_blocked = false end)
     local function hide()
+        if hide_cancel[addr] then hide_cancel[addr] = nil return end
         hl.dispatch(hl.dsp.window.move({ workspace = "special:minimized", follow = false,
                                          window = "address:" .. addr }))
     end
@@ -421,41 +473,10 @@ function WinForget()
     end
 end
 
--- Called when a dragged window is dropped somewhere other than a screen
--- edge: it may not stick out past the top (its title bar stays reachable),
--- past the left edge, or below the screen / under the taskbar. A window
--- taller than the free space keeps its title bar at the top.
-function WinClamp()
-    local w = hl.get_active_window()
-    if not w or not w.floating or saved_geometry[w.address] then return end
-    local x, y, _, hh = work_area(w.monitor or hl.get_active_monitor())
-    local top = y + (has_bar(w) and BAR_HEIGHT or 0)
-    local bottom = y + hh                       -- top of the taskbar
-    local nx = math.max(w.at.x, x)
-    local ny = math.max(math.min(w.at.y, bottom - w.size.y), top)
-    if nx ~= w.at.x or ny ~= w.at.y then
-        hl.dispatch(hl.dsp.window.move({ x = nx, y = ny, window = "address:" .. w.address }))
-    end
-end
-
--- Called by the title bar when a drag starts: a maximized window shrinks back
--- to its normal size and stays under the cursor at the same relative spot.
-function WinDragStart()
-    local w = hl.get_active_window()
-    if not w then return end
-    local g = saved_geometry[w.address]
-    if not g then return end
-    saved_geometry[w.address] = nil
-    client_maximized(w.address, false)
-    local c = hl.get_cursor_pos()
-    local rel = (c.x - w.at.x) / math.max(1, w.size.x)
-    set_geometry(w.address, math.floor(c.x - g[3] * rel), w.at.y, g[3], g[4])
-end
-
 -- Apps asking to be maximized (their own maximize button, double click on
 -- their title bar) get the Windows-style maximize instead.
 hl.on("window.fullscreen", function(ev)
-    local w = (type(ev) == "table" and ev.address and ev) or hl.get_active_window()
+    local w = event_window(ev) or hl.get_active_window()
     if not w or fs_hook_paused[w.address] then return end
     if w.fullscreen == 1 then
         -- Undo Hyprland's own maximize, then maximize Windows-style once it
@@ -475,13 +496,14 @@ hl.on("window.fullscreen", function(ev)
 end)
 
 hl.on("window.close", function(ev)
-    if type(ev) == "table" and ev.address then saved_geometry[ev.address] = nil end
+    local w = event_window(ev)
+    if w then saved_geometry[w.address] = nil end
 end)
 
 -- Apps with their own title bar (Brave, Discord, …) ask to be minimized;
 -- Hyprland ignores that by default, so hide them like the "–" button does.
 hl.on("window.minimize", function(ev)
-    local w = (type(ev) == "table" and ev.address and ev) or hl.get_active_window()
+    local w = event_window(ev) or hl.get_active_window()
     if w and w.workspace and w.workspace.name ~= "special:minimized" then
         HideWindow(w.address)
     end
@@ -491,7 +513,7 @@ end)
 -- open maximized, like on Windows; windows sticking out at the top are moved
 -- down so their title bar can always be grabbed.
 hl.on("window.open", function(ev)
-    local w = (type(ev) == "table" and ev.address and ev) or hl.get_active_window()
+    local w = event_window(ev) or hl.get_active_window()
     if not w or not w.floating then return end
     local x, y, ww, hh = work_area(w.monitor or hl.get_active_monitor())
     local bar = has_bar(w) and BAR_HEIGHT or 0
@@ -572,7 +594,7 @@ hl.bind(win .. " + I", hl.dsp.exec_cmd(scripts .. "/settings.sh"))           -- 
 hl.bind(win .. " + A", hl.dsp.exec_cmd(winshell .. " qs"))                   -- quick settings
 hl.bind(win .. " + N", hl.dsp.exec_cmd("swaync-client -t -sw"))              -- notifications
 hl.bind(win .. " + X", hl.dsp.exec_cmd(scripts .. "/powermenu.sh --menu"))   -- power menu
-hl.bind(win .. " + L", hl.dsp.exec_cmd("pidof hyprlock || hyprlock"))        -- lock
+hl.bind(win .. " + L", hl.dsp.exec_cmd(scripts .. "/lock.sh"))               -- lock (Windows-style)
 hl.bind(win .. " + V", hl.dsp.exec_cmd(scripts .. "/clipboard.sh"))          -- clipboard history
 hl.bind(win .. " + W", hl.dsp.exec_cmd(scripts .. "/wallpaper.sh pick"))     -- pick background
 hl.bind(win .. " + T", hl.dsp.exec_cmd(terminal))                            -- terminal
@@ -603,10 +625,231 @@ local function winshell_send(cmd)
     hl.exec_cmd(winshell .. " " .. cmd)
 end
 
+---------------------------------------------------------------------
+-- Dragging windows like on Windows 11 (Snap)
+--  * windows may be pushed partly off the screen and under the taskbar;
+--    when dropped, only the title bar is kept reachable
+--  * touching the top edge with the cursor shows a preview of the maximized
+--    window, the left/right edge (after a moment, like Windows) one of the
+--    half, the corners one of a quarter – leave the edge and it goes away;
+--    letting go while it shows snaps the window there
+--  * a snapped (or maximized) window dragged away gets its old size back
+-- The hyprbars plugin reports when any window starts and stops moving
+-- (winctl.sh drag-start / drag-end); the cursor is watched in between.
+---------------------------------------------------------------------
+local SNAP_POLL_MS    = 16
+local SNAP_SIDE_DWELL = 140     -- ms at the left/right edge before it offers the half
+local SNAP_CORNER     = 80      -- px from the top/bottom that count as a corner
+local snap_saved = {}           -- address -> geometry before it was snapped
+local snapped_to = {}           -- address -> the zone it is snapped to
+local drag = nil                -- the move in progress
+
+local function mon_box(mon)
+    return mon.x, mon.y, math.floor(mon.width / mon.scale), math.floor(mon.height / mon.scale)
+end
+
+-- which snap area the cursor points at; true = only after a moment there
+local function snap_zone(c, mon)
+    local mx, my, mw, mh = mon_box(mon)
+    local _, wy, _, wh = work_area(mon)
+    local left, right = c.x <= mx + 1, c.x >= mx + mw - 2
+    if left or right then
+        local side = left and "left" or "right"
+        if c.y <= wy + SNAP_CORNER then return "top" .. side, false end
+        if c.y >= wy + wh - SNAP_CORNER then return "bottom" .. side, false end
+        return side, true
+    end
+    if c.y <= my + 1 then return "max", false end
+    return nil, false
+end
+
+-- the screen area of a snap zone (title bar included)
+local function zone_rect(zone, mon)
+    local x, y, ww, hh = work_area(mon)
+    local hw, hh2 = math.floor(ww / 2), math.floor(hh / 2)
+    local r = {
+        max         = { x, y, ww, hh },
+        left        = { x, y, hw, hh },
+        right       = { x + hw, y, ww - hw, hh },
+        topleft     = { x, y, hw, hh2 },
+        bottomleft  = { x, y + hh2, hw, hh - hh2 },
+        topright    = { x + hw, y, ww - hw, hh2 },
+        bottomright = { x + hw, y + hh2, ww - hw, hh - hh2 },
+    }
+    return r[zone]
+end
+
+function WinSnap(zone, w)
+    w = w or hl.get_active_window()
+    if not w or not w.mapped then return end
+    local a = w.address
+    local mon = w.monitor or hl.get_active_monitor()
+    if zone == "max" then
+        if snap_saved[a] and not saved_geometry[a] then
+            saved_geometry[a] = snap_saved[a]          -- un-maximize: the size before snapping
+        end
+        snap_saved[a], snapped_to[a] = nil, nil
+        WinMax("max", w)
+        return
+    end
+    local r = zone_rect(zone, mon)
+    if not r then return end
+    if saved_geometry[a] then                         -- maximized: remember its normal size
+        snap_saved[a] = saved_geometry[a]
+        saved_geometry[a] = nil
+        client_maximized(a, false)
+    elseif not snap_saved[a] then
+        snap_saved[a] = { w.at.x, w.at.y, w.size.x, w.size.y }
+    end
+    local bar = has_bar(w) and BAR_HEIGHT or 0
+    set_geometry(a, r[1], r[2] + bar, r[3], r[4] - bar)
+    snapped_to[a] = zone
+end
+
+-- a snapped window back to the size and place it had before (Win + Down)
+function WinUnsnap(w)
+    w = w or hl.get_active_window()
+    if not w then return false end
+    local a = w.address
+    if not snapped_to[a] then return false end
+    local g = snap_saved[a]
+    snap_saved[a], snapped_to[a] = nil, nil
+    if not g then
+        local x, y, ww, hh = work_area(w.monitor or hl.get_active_monitor())
+        g = { x + math.floor(ww * 0.2), y + math.floor(hh * 0.15), math.floor(ww * 0.6), math.floor(hh * 0.7) }
+    end
+    set_geometry(a, g[1], g[2], g[3], g[4])
+    return true
+end
+
+-- Win + Left/Right like Windows: towards the other side a snapped window
+-- first comes loose, otherwise it snaps to that half
+function WinSnapKey(side)
+    local w = hl.get_active_window()
+    if not w then return end
+    local z = snapped_to[w.address]
+    local other = side == "left" and "right" or "left"
+    if z and z:find(other) then
+        WinUnsnap(w)
+    else
+        WinSnap(side, w)
+    end
+end
+
+local function snap_preview(zone, mon, c)
+    if not zone then
+        winshell_send("snap hide")
+        return
+    end
+    local mx, my = mon_box(mon)
+    local r = zone_rect(zone, mon)
+    winshell_send(string.format("snap show %d %d %d %d %d %d",
+        r[1] - mx, r[2] - my, r[3], r[4], math.floor(c.x - mx), math.floor(c.y - my)))
+end
+
+-- the window really moves (not just a click on its title bar – apps like
+-- Brave start a "move" on every click): a maximized or snapped one gets its
+-- normal size back and stays under the cursor at the same relative spot
+local DRAG_MOVE_PX = 8
+local function drag_moved(c)
+    drag.moved = true
+    local w = hl.get_window("address:" .. drag.addr)
+    if not w then return end
+    local a = w.address
+    local g = saved_geometry[a] or snap_saved[a]
+    if not g then return end
+    if saved_geometry[a] then client_maximized(a, false) end
+    saved_geometry[a], snap_saved[a], snapped_to[a] = nil, nil, nil
+    local rel = (drag.c0.x - w.at.x) / math.max(1, w.size.x)
+    set_geometry(a, math.floor(c.x - g[3] * rel), w.at.y, g[3], g[4])
+end
+
+local function drag_poll()
+    if not drag then return end
+    drag.ticks = drag.ticks + 1
+    if drag.ticks * SNAP_POLL_MS > 60000 then        -- never got a drag-end
+        WinDragEnd()
+        return
+    end
+    local c = hl.get_cursor_pos()
+    if not c then return end
+    if not drag.moved then
+        if math.abs(c.x - drag.c0.x) + math.abs(c.y - drag.c0.y) < DRAG_MOVE_PX then return end
+        drag_moved(c)
+    end
+    local mon = hl.get_monitor_at(c.x, c.y) or hl.get_active_monitor()
+    local zone, wait = snap_zone(c, mon)
+    if zone ~= drag.candidate then
+        drag.candidate, drag.since = zone, drag.ticks
+    end
+    local shown = zone
+    if zone and wait and (drag.ticks - drag.since) * SNAP_POLL_MS < SNAP_SIDE_DWELL then
+        shown = nil
+    end
+    if shown ~= drag.zone then
+        drag.zone = shown
+        snap_preview(shown, mon, c)
+    end
+end
+
+-- a window started moving: a maximized or snapped one gets its normal size
+-- back and stays under the cursor at the same relative spot
+function WinDragStart()
+    local w = hl.get_active_window()
+    if not w then return end
+    if drag and drag.timer then drag.timer:set_enabled(false) end
+    local c = hl.get_cursor_pos() or { x = 0, y = 0 }
+    drag = { addr = w.address, ticks = 0, since = 0, c0 = { x = c.x, y = c.y }, moved = false }
+    drag.timer = hl.timer(drag_poll, { timeout = SNAP_POLL_MS, type = "repeat" })
+end
+
+-- dropped without snapping: it may stick out, but never vanish – a third of
+-- it (at least 200 px across / 120 px down) stays on screen at the sides and
+-- above the taskbar, and the title bar never goes above the top.
+-- Otherwise it stays exactly where it was dropped.
+local function keep_reachable(w)
+    if not w or not w.floating or saved_geometry[w.address] then return end
+    local x, y, ww, hh = work_area(w.monitor or hl.get_active_monitor())
+    local bar = has_bar(w) and BAR_HEIGHT or 0
+    local fw, fh = w.size.x, w.size.y + bar         -- the whole frame
+    local keep_x = math.min(fw, math.max(200, math.floor(fw / 3)))
+    local keep_y = math.min(fh, math.max(120, math.floor(fh / 3)))
+    local top = w.at.y - bar                        -- top of the title bar
+    local ntop = math.max(y, math.min(top, y + hh - keep_y))
+    local nx = math.max(x - fw + keep_x, math.min(w.at.x, x + ww - keep_x))
+    if nx ~= w.at.x or ntop ~= top then
+        hl.dispatch(hl.dsp.window.move({ x = nx, y = ntop + bar, window = "address:" .. w.address }))
+    end
+end
+
+function WinDragEnd()
+    local d = drag
+    drag = nil
+    if d and d.timer then d.timer:set_enabled(false) end
+    winshell_send("snap hide")
+    if d and not d.moved then return end            -- just a click on the title bar
+    local w = d and hl.get_window("address:" .. d.addr) or hl.get_active_window()
+    if d and d.zone then
+        WinSnap(d.zone, w)
+    else
+        keep_reachable(w)
+    end
+end
+WinClamp = function() keep_reachable(hl.get_active_window()) end
+
+hl.on("window.close", function(ev)
+    local w = event_window(ev)
+    if w then snap_saved[w.address], snapped_to[w.address] = nil, nil end
+end)
+
 -- Alt+Tab: hold Alt, press Tab to move through the windows, release Alt to
 -- switch. The switcher grabs the keyboard while open and notices the Alt
 -- release itself (Hyprland release binds don't fire reliably for this).
 hl.bind("ALT + Tab",         function() winshell_send("switch next") end, { repeating = true })
+-- letting go of Alt switches – told by Hyprland as well, the switcher can
+-- miss it when it did not get the keyboard in time
+hl.bind("ALT + Alt_L", function() winshell_send("switch release") end, { release = true, non_consuming = true })
+hl.bind("ALT + Alt_R", function() winshell_send("switch release") end, { release = true, non_consuming = true })
 hl.bind("ALT + SHIFT + Tab", function() winshell_send("switch prev") end, { repeating = true })
 
 -- Windows key alone (on release) = start menu; Win + S = search.
@@ -630,42 +873,204 @@ local function windows_here()
     table.sort(list, function(a, b) return (a.focus_history_id or 0) > (b.focus_history_id or 0) end)
     return list
 end
+-- The show-desktop state is kept in a file too: a config reload starts Lua
+-- afresh, and Win + D must still bring the windows back afterwards.
+local DESK_STATE = runtime .. "/hypr-show-desktop"
+local function save_desktop()
+    if not desktop_hidden then
+        os.remove(DESK_STATE)
+        return
+    end
+    local f = io.open(DESK_STATE, "w")
+    if not f then return end
+    f:write("active ", desktop_hidden.active or "-", "\n")
+    for _, a in ipairs(desktop_hidden.windows) do f:write("win ", a, "\n") end
+    f:close()
+end
+local function load_desktop()
+    local f = io.open(DESK_STATE, "r")
+    if not f then return end
+    local saved = { windows = {} }
+    for line in f:lines() do
+        local kind, a = line:match("^(%S+) (%S+)")
+        if kind == "active" and a ~= "-" then
+            saved.active = a
+        elseif kind == "win" then
+            table.insert(saved.windows, a)
+        end
+    end
+    f:close()
+    if #saved.windows > 0 then desktop_hidden = saved end
+end
+load_desktop()
+
+local desk_gen = 0              -- a newer Win + D cancels what an older one planned
+local desk_out = nil            -- windows waiting to be hidden: { gen, windows }
+local desk_in = nil             -- windows waiting to come back: { gen, windows, active }
+
+-- "address|x|y|w|h|title bar|class" for winshell's animation
+local function desk_tokens(list)
+    local t = {}
+    for _, w in ipairs(list) do
+        table.insert(t, string.format("%s|%d|%d|%d|%d|%d|%s", w.address, w.at.x, w.at.y,
+            w.size.x, w.size.y, has_bar(w) and BAR_HEIGHT or 0, (w.class or "?"):gsub("[|%s]", "_")))
+    end
+    return table.concat(t, " ")
+end
+
+-- Like Windows: every window shrinks into its taskbar button. winshell draws
+-- that (pictures of the windows on a layer above everything) and calls
+-- DesktopOutNow() as soon as they cover the windows – then they are hidden.
 local function hide_all()
+    desk_gen = desk_gen + 1
+    local gen = desk_gen
     local active = hl.get_active_window()
     local saved = { windows = {}, active = active and active.address }
-    for _, w in ipairs(windows_here()) do
-        table.insert(saved.windows, w.address)
-        HideWindow(w.address, true)
+    local list = windows_here()             -- back to front
+    for _, w in ipairs(list) do table.insert(saved.windows, w.address) end
+    if #list > 0 then
+        desk_out = { gen = gen, windows = saved.windows }
+        winshell_send("desk out " .. gen .. " " .. desk_tokens(list))
+        later(400, function() DesktopOutNow(gen) end)    -- winshell didn't answer
     end
-    return #saved.windows > 0 and saved or nil
+    desktop_hidden = #list > 0 and saved or nil
+    save_desktop()
 end
+function DesktopOutNow(gen)
+    local d = desk_out
+    if not d or d.gen ~= gen or desk_gen ~= gen then return end
+    desk_out = nil
+    for _, a in ipairs(d.windows) do
+        set_alpha(a, 0)                     -- gone at once (the pictures fly on)
+        HideWindow(a, true)
+    end
+end
+
+-- A window that is still on screen (being hidden right now): stop that.
+local function cancel_hide(a)
+    local w = hl.get_window("address:" .. a)
+    if not w or not w.workspace or w.workspace.name == "special:minimized" then return false end
+    set_alpha(a, 1)
+    if hidden_maximized[a] then     -- told "not maximized" already, its hide still pending
+        hide_cancel[a] = true
+        hidden_maximized[a] = nil
+        fs_hook_paused[a] = true
+        client_maximized(a, true)
+        later(300, function() fs_hook_paused[a] = nil end)
+    end
+    return true
+end
+
+-- ... and they grow back out of their taskbar buttons; DesktopInNow() puts
+-- the real windows right under the pictures at the end.
 local function restore_hidden()
     local saved = desktop_hidden
     desktop_hidden = nil
+    save_desktop()
+    desk_gen = desk_gen + 1                 -- whatever is still on its way out stays
+    local gen = desk_gen
+    desk_out = nil
     if not saved then return end
-    local ws = hl.get_active_workspace()
-    local by_addr = {}
-    for _, w in ipairs(hl.get_windows() or {}) do by_addr[w.address] = w end
+    local todo, still_here = {}, false
     for _, a in ipairs(saved.windows) do
-        local w = by_addr[a]
-        if w and w.workspace and w.workspace.name == "special:minimized" then
-            RestoreWindow(w, ws.id)
-            hl.dispatch(hl.dsp.window.alter_zorder({ mode = "top", window = "address:" .. a }))
+        if cancel_hide(a) then
+            still_here = true
+        else
+            local w = hl.get_window("address:" .. a)
+            if w and w.workspace and w.workspace.name == "special:minimized" then
+                table.insert(todo, w)
+            end
         end
     end
-    if saved.active and by_addr[saved.active] then
-        hl.dispatch(hl.dsp.focus({ window = "address:" .. saved.active }))
+    if still_here then winshell_send("desk stop") end
+    desk_in = { gen = gen, windows = todo, active = saved.active }
+    if #todo == 0 then
+        DesktopInNow(gen)
+        return
+    end
+    winshell_send("desk in " .. gen .. " " .. desk_tokens(todo))
+    later(700, function() DesktopInNow(gen) end)        -- winshell didn't answer
+end
+function DesktopInNow(gen)
+    local d = desk_in
+    if not d or d.gen ~= gen then return end
+    desk_in = nil
+    local ws = hl.get_active_workspace()
+    for _, w in ipairs(d.windows) do        -- back ones first: the stacking order comes back
+        local cur = hl.get_window("address:" .. w.address)
+        if cur and cur.workspace and cur.workspace.name == "special:minimized" then
+            RestoreWindow(cur, ws.id)
+            hl.dispatch(hl.dsp.window.alter_zorder({ mode = "top", window = "address:" .. w.address }))
+        end
+    end
+    if d.active and hl.get_window("address:" .. d.active) then
+        hl.dispatch(hl.dsp.focus({ window = "address:" .. d.active }))
     end
 end
+
+-- the desktop is shown: everything Win + D hid is hidden or on its way
+local function desktop_shown()
+    if not desktop_hidden then return false end
+    local mine = {}
+    for _, a in ipairs(desktop_hidden.windows) do mine[a] = true end
+    for _, w in ipairs(windows_here()) do
+        if not mine[w.address] then return false end
+    end
+    return true
+end
 function ShowDesktop()
-    if desktop_hidden and #windows_here() == 0 then
+    if desktop_shown() then
         restore_hidden()
     else
-        desktop_hidden = hide_all()
+        hide_all()
     end
 end
 hl.bind(win .. " + D",         ShowDesktop)
-hl.bind(win .. " + M",         function() desktop_hidden = hide_all() end)
+
+-- Touchpad, 3 fingers like Windows: down shows the desktop (everything is
+-- minimized), up brings back exactly those windows.
+hl.gesture({ fingers = 3, direction = "down", action = function()
+    if not desktop_shown() and #windows_here() > 0 then hide_all() end
+end })
+hl.gesture({ fingers = 3, direction = "up", action = function() restore_hidden() end })
+
+-- 3 fingers left/right: the Alt+Tab switcher follows the fingers – every
+-- SWIPE_STEP of movement selects the next/previous window (up/down: the
+-- row above/below), it stops at the edges; lifting the fingers switches to
+-- it (swipe back and forth to flip between apps).
+-- The first step comes after a short way (it reacts right away), every
+-- further one needs a longer way, and one movement moves at most one window
+-- (a fast swipe must not race through several).
+local SWIPE_FIRST, SWIPE_STEP, SWIPE_STEP_Y = 30, 60, 50
+local swipe_acc, swipe_acc_y, swipe_steps = 0, 0, 0
+local function swipe_axis(acc, step, plus, minus)
+    local need = swipe_steps == 0 and SWIPE_FIRST or step
+    if acc >= need then
+        swipe_steps = swipe_steps + 1
+        winshell_send("switch " .. plus)
+        return 0
+    elseif acc <= -need then
+        swipe_steps = swipe_steps + 1
+        winshell_send("switch " .. minus)
+        return 0
+    end
+    return acc
+end
+hl.gesture({ fingers = 3, direction = "horizontal", action = {
+    start = function()
+        swipe_acc, swipe_acc_y, swipe_steps = 0, 0, 0
+        winshell_send("switch swipe-begin")
+    end,
+    update = function(e)
+        local d = e.delta or {}
+        swipe_acc = swipe_axis(swipe_acc + (d.x or 0), SWIPE_STEP, "swipe-next", "swipe-prev")
+        swipe_acc_y = swipe_axis(swipe_acc_y + (d.y or 0), SWIPE_STEP_Y, "swipe-down", "swipe-up")
+    end,
+    finish = function(e)
+        winshell_send((e and e.cancelled) and "switch swipe-cancel" or "switch swipe-end")
+    end,
+} })
+hl.bind(win .. " + M",         function() hide_all() end)
 hl.bind(win .. " + SHIFT + M", restore_hidden)
 
 -- Win + Home: minimize everything except the active window
@@ -690,15 +1095,17 @@ hl.bind(win .. " + Tab", function() winshell_send("switch view") end)
 hl.bind(win .. " + Print", hl.dsp.exec_cmd(scripts .. "/screenshot.sh full"))
 
 -- Snap: Win + arrow keys
-hl.bind(win .. " + Left",  hl.dsp.exec_cmd(scripts .. "/winctl.sh snap left"))
-hl.bind(win .. " + Right", hl.dsp.exec_cmd(scripts .. "/winctl.sh snap right"))
-hl.bind(win .. " + Up",    function() WinMax("max") end)
+hl.bind(win .. " + Left",  function() WinSnapKey("left") end)
+hl.bind(win .. " + Right", function() WinSnapKey("right") end)
+hl.bind(win .. " + Up",    function() WinSnap("max") end)
+-- like Windows: maximized -> normal size, snapped -> loose again (its
+-- size and place from before), otherwise minimize
 hl.bind(win .. " + Down",  function()
     local w = hl.get_active_window()
     if not w then return end
     if saved_geometry[w.address] then
         WinMax("restore", w)
-    else
+    elseif not WinUnsnap(w) then
         HideWindow()
     end
 end)

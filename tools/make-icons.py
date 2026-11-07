@@ -55,7 +55,7 @@ BODY = '<rect x="2.6" y="7.6" width="16.8" height="8.8" rx="2.4" stroke="{c}" st
 NUB = '<path d="M20.6 10.3h.6a1 1 0 0 1 1 1v1.4a1 1 0 0 1-1 1h-.6z" fill="{c}"/>'
 FILL_X, FILL_W = 4.4, 13.9
 BOLT = "M12.2 8.3L9.4 12.5h2.3l-.6 3.3 2.8-4.5h-2.3z"
-PLUG = "M9.9 10.1v-1.1M12.1 10.1v-1.1M9.1 10.1h3.8v1.3a1.9 1.9 0 0 1-3.8 0zM11 13.3v1.7"
+PLUG = "M9.5 8.8V6.3M12.5 8.8V6.3M8.1 8.8h5.8v2.2a2.9 2.9 0 0 1-5.8 0zM11 14v3.6"
 GREEN, RED = "#6ccb5f", "#ff6363"
 for pct in range(0, 101, 10):
     for kind in ("", "-charging", "-plugged"):
@@ -68,8 +68,8 @@ for pct in range(0, 101, 10):
             gap = f'<path d="{BOLT}" fill="black" stroke="black" stroke-width="1.8" stroke-linejoin="round"/>'
             glyph = f'<path d="{BOLT}" fill="{W}"/>'
         elif kind == "-plugged":
-            gap = f'<path d="{PLUG}" fill="black" stroke="black" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>'
-            glyph = f'<path d="{PLUG}" fill="{W}" stroke="{W}" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round"/>'
+            gap = f'<path d="{PLUG}" fill="black" stroke="black" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/>'
+            glyph = f'<path d="{PLUG}" fill="{W}" stroke="{W}" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>'
         else:
             gap = glyph = ""
         if gap:

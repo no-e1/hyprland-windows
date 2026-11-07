@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Window actions used by the title bar buttons and drag-to-edge snapping.
-#   winctl.sh close | maximize | unmaximize | minimize | minimize-window <address>
-#   winctl.sh snap top|left|right
+#   winctl.sh close | maximize | unmaximize | minimize
+#   winctl.sh minimize-window <address>
+#   winctl.sh snap top|left|right|topleft|…
 S="$HOME/.config/hypr/scripts"
 echo "$(date +%T) $*" >> "${XDG_RUNTIME_DIR:-/tmp}/winctl.log"
 d() { hyprctl dispatch "$1" >/dev/null; }
@@ -23,20 +24,11 @@ case "$1" in
     maximize)   max toggle ;;
     unmaximize) max restore ;;
     drag-start) hyprctl eval "WinDragStart()" >/dev/null ;;
-    # a window was dropped (any window, sent by the hyprbars plugin):
-    # top edge = maximize, left/right edge = half, else keep it on screen
-    drag-end)
-        case "$2" in
-            top)        max max ;;
-            left|right) hyprctl eval "WinForget()" >/dev/null; "$S/snap.sh" "$2" ;;
-            *)          hyprctl eval "WinClamp()" >/dev/null ;;
-        esac ;;
+    # a window was dropped (any window, sent by the hyprbars plugin): it
+    # snaps only if the snap preview was showing (see hyprland.lua)
+    drag-end)   hyprctl eval "WinDragEnd()" >/dev/null ;;
     minimize)   hyprctl eval "HideWindow()" >/dev/null ;;
     # an app's own "–" button (sent by the hyprbars plugin with the window)
     minimize-window) hyprctl eval "HideWindow(\"$2\")" >/dev/null ;;
-    snap)
-        case "$2" in
-            top)        max max ;;
-            left|right) hyprctl eval "WinForget()" >/dev/null; "$S/snap.sh" "$2" ;;
-        esac ;;
+    snap)       hyprctl eval "WinSnap(\"${2/top/max}\")" >/dev/null ;;
 esac
