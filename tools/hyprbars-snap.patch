@@ -1,5 +1,5 @@
 diff --git a/hyprbars/barDeco.cpp b/hyprbars/barDeco.cpp
-index e57f77b..58f1cd5 100644
+index e57f77b..a4c5acd 100644
 --- a/hyprbars/barDeco.cpp
 +++ b/hyprbars/barDeco.cpp
 @@ -29,6 +29,20 @@
@@ -127,7 +127,7 @@ index e57f77b..58f1cd5 100644
      }
      return false;
  }
-@@ -367,30 +403,43 @@ void CHyprBar::renderBarButtons(Render::CRenderContext& ctx, CBox* barBox, const
+@@ -367,30 +403,48 @@ void CHyprBar::renderBarButtons(Render::CRenderContext& ctx, CBox* barBox, const
      const auto visibleCount    = getVisibleButtonCount(BARBUTTONPADDING, BARPADDING, Vector2D{barBox->w, barBox->h}, scale);
      const bool INVALIDATEICONS = m_bButtonsDirty || m_bWindowSizeChanged;
  
@@ -159,13 +159,18 @@ index e57f77b..58f1cd5 100644
 +            // so the red never pokes out past the window.
 +            const auto  PWINDOW = m_pWindow.lock();
 +            const float R       = (BUTTONSRIGHT && i == 0 && PWINDOW) ? PWINDOW->presentation().rounding() * scale : 0.F;
-+            if (R >= 1.F && R * 2 < buttonBox.w) {
-+                g_pHyprOpenGL->scissor(ctx, *barBox);                       // cut off below the bar
++            if (R >= 1.F && R * 2 < buttonBox.w && R * 2 <= buttonBox.h) {
++                // Everything stays inside the bar (red must not show below
++                // it): the button minus its right edge, the right edge below
++                // the corner, and a round 2R square for the corner itself.
 +                CBox square = {buttonBox.x, buttonBox.y, buttonBox.w - R, buttonBox.h};
-+                CBox corner = {buttonBox.x + buttonBox.w - 2 * R, buttonBox.y, 2 * R, buttonBox.h + 2 * R};
++                CBox edge   = {buttonBox.x + buttonBox.w - R, buttonBox.y + R, R, buttonBox.h - R};
++                CBox corner = {buttonBox.x + buttonBox.w - 2 * R, buttonBox.y, 2 * R, 2 * R};
 +                square.round();
++                edge.round();
 +                corner.round();
 +                g_pHyprOpenGL->renderRect(ctx, square, color, {});
++                g_pHyprOpenGL->renderRect(ctx, edge, color, {});
 +                g_pHyprOpenGL->renderRect(ctx, corner, color,
 +                                          {.round = sc<int>(std::round(R)), .roundingPower = PWINDOW->presentation().roundingPower()});
 +            } else
@@ -188,7 +193,7 @@ index e57f77b..58f1cd5 100644
  }
  
  void CHyprBar::renderBarButtonsText(Render::CRenderContext& ctx, CBox* barBox, const float scale, const float a) {
-@@ -407,19 +456,19 @@ void CHyprBar::renderBarButtonsText(Render::CRenderContext& ctx, CBox* barBox, c
+@@ -407,19 +461,19 @@ void CHyprBar::renderBarButtonsText(Render::CRenderContext& ctx, CBox* barBox, c
      const auto visibleCount = getVisibleButtonCount(BARBUTTONPADDING, BARPADDING, Vector2D{barBox->w, barBox->h}, scale);
      const auto COORDS       = cursorRelativeToBar();
  
@@ -215,7 +220,7 @@ index e57f77b..58f1cd5 100644
  
          const bool NEEDICON = !button.icon.empty() &&
              (!button.iconTex || button.iconTex->m_texID == 0 || !button.m_fIconScale.has_value() || std::abs(button.m_fIconScale.value_or(0.F) - scale) > 1e-6);
-@@ -428,7 +477,7 @@ void CHyprBar::renderBarButtonsText(Render::CRenderContext& ctx, CBox* barBox, c
+@@ -428,7 +482,7 @@ void CHyprBar::renderBarButtonsText(Render::CRenderContext& ctx, CBox* barBox, c
              auto fgcol = button.userfg ? button.fgcol : (button.bgcol.r + button.bgcol.g + button.bgcol.b < 1) ? CHyprColor(0xFFFFFFFF) : CHyprColor(0xFF000000);
  
              button.iconTex =
@@ -224,7 +229,7 @@ index e57f77b..58f1cd5 100644
              button.m_fIconScale = scale;
          }
  
-@@ -703,27 +752,25 @@ void CHyprBar::updateRules() {
+@@ -703,27 +757,25 @@ void CHyprBar::updateRules() {
  }
  
  void CHyprBar::damageOnButtonHover() {

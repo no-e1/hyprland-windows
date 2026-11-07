@@ -39,6 +39,7 @@ RUNTIME = os.environ.get("XDG_RUNTIME_DIR", "/tmp")
 FIFO = os.path.join(RUNTIME, "winshell.fifo")
 READY = os.path.join(RUNTIME, "winshell.ready")
 LOCK = os.path.join(RUNTIME, "winshell.lock")
+AIRPLANE = os.path.join(RUNTIME, "winshell-airplane.json")   # radios that were on before airplane mode
 SCRIPTS = os.path.expanduser("~/.config/hypr/scripts")
 
 
@@ -57,6 +58,16 @@ def ok(cmd, timeout=30):
                               timeout=timeout).returncode == 0
     except Exception:
         return False
+
+
+def run_out(cmd, timeout=30):
+    """(succeeded?, stdout + stderr)"""
+    try:
+        r = subprocess.run(cmd, shell=isinstance(cmd, str), capture_output=True,
+                           text=True, timeout=timeout)
+        return r.returncode == 0, r.stdout + r.stderr
+    except Exception as e:
+        return False, str(e)
 
 
 # environment only winshell itself needs (see winshell-ctl); apps and tools
@@ -563,9 +574,11 @@ class QuickSettings:
 
     # ── main page ──
     def build_main(self):
-        page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=20)
+        # Windows 11 layout: the tiles, a divider line, then the sliders
+        page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         page.add_css_class("qs-main")
-        grid = Gtk.Grid(column_spacing=12, row_spacing=14, column_homogeneous=True)
+        grid = Gtk.Grid(column_spacing=13, row_spacing=6, column_homogeneous=True)
+        grid.add_css_class("qs-tiles")
         self.tiles = {}
         specs = [
             ("wifi", "win11-wifi-4", "Wi-Fi", self.toggle_wifi, lambda: self.open_page("wifi")),
@@ -584,57 +597,77 @@ class QuickSettings:
         self.bright_row, self.bright = self.slider("win11-sun", self.set_brightness)
         self.vol_row, self.vol = self.slider("win11-volume-3", self.set_volume,
                                              on_icon=self.toggle_mute,
-                                             on_more=lambda: (self.hide(), spawn("pavucontrol")))
-        sliders = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14)
+                                             on_more=lambda: (self.hide(), spawn("pavucontrol")),
+                                             more_icon="win11-sound-output")
+        sliders = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        sliders.add_css_class("qs-sliders")
         sliders.append(self.bright_row)
         sliders.append(self.vol_row)
         page.append(sliders)
         return page
 
     def tile(self, ic, text, on_toggle, on_more):
-        outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=7)
+        outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=9)
         row = Gtk.Box()
         row.add_css_class("tile")
-        img = icon(ic, 16)
+        img = icon(ic, 20)
         main = button(img, "tile-main", on_click=on_toggle)
         main.set_hexpand(True)
         row.append(main)
         if on_more:
-            row.append(button(icon("win11-chevron-right", 12), "tile-more", on_click=on_more))
+            row.append(button(icon("win11-chevron-right", 16), "tile-more", on_click=on_more))
         lbl = label(text, "tile-label", xalign=0.5)
+        lbl.set_wrap(True)
+        lbl.set_lines(2)
+        lbl.set_justify(Gtk.Justification.CENTER)
+        lbl.set_yalign(0.0)
+        lbl.set_width_chars(1)              # wrap inside the tile's width
         outer.append(row)
         outer.append(lbl)
         return outer, row, lbl, img
 
-    def slider(self, ic, on_change, on_icon=None, on_more=None):
+    def slider(self, ic, on_change, on_icon=None, on_more=None, more_icon=None):
         row = Gtk.Box(spacing=10)
         row.add_css_class("slider-row")
-        img = icon(ic, 18)
-        row.append(button(img, "flat-btn", on_click=on_icon) if on_icon else img)
+        img = icon(ic, 22)
+        lead = button(img, "flat-btn", on_click=on_icon)    # same size in both rows
+        if not on_icon:
+            lead.set_can_target(False)
+            lead.set_can_focus(False)
+        row.append(lead)
         scale = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0, 100, 1)
         scale.set_hexpand(True)
         scale.set_draw_value(False)
         scale.connect("value-changed", lambda s: None if self.updating else on_change(int(s.get_value())))
         row.append(scale)
-        if on_more:
-            row.append(button(icon("win11-chevron-right", 12), "flat-btn", on_click=on_more))
+        # Like Windows, both sliders are equally long: the brightness row gets
+        # an invisible stand-in for the volume row's ">" (output devices)
+        # "select a sound output": output icon + ">", one button like Windows
+        more_box = Gtk.Box(spacing=4)
+        more_box.append(icon(more_icon or "win11-sound-output", 22))
+        more_box.append(icon("win11-chevron-right", 16))
+        more = button(more_box, "flat-btn", "slider-more", on_click=on_more,
+                      tooltip="Select a sound output" if on_more else None)
+        if not on_more:
+            more.set_opacity(0)
+            more.set_can_target(False)
+            more.set_can_focus(False)
+        row.append(more)
         row.img = img
         return row, scale
 
     def build_footer(self):
         foot = Gtk.Box(spacing=8)
         foot.add_css_class("qs-footer")
-        self.bat_img = icon("win11-battery-100", 18)
+        self.bat_img = icon("win11-battery-100", 24)
         self.bat_lbl = label("", "footer-text")
         foot.append(self.bat_img)
         foot.append(self.bat_lbl)
         spacer = Gtk.Box()
         spacer.set_hexpand(True)
         foot.append(spacer)
-        foot.append(button(icon("win11-settings", 16), "flat-btn", tooltip="All settings",
+        foot.append(button(icon("win11-settings", 20), "flat-btn", tooltip="All settings",
                            on_click=lambda: (self.hide(), spawn(f"{SCRIPTS}/settings.sh"))))
-        foot.append(button(icon("win11-power", 16), "flat-btn", tooltip="Power",
-                           on_click=lambda: (self.hide(), spawn(f"{SCRIPTS}/powermenu.sh --menu"))))
         return foot
 
     # ── sub pages ──
@@ -886,10 +919,44 @@ class QuickSettings:
         bg(run, lambda _r: (self.refresh(), self.load_bt()
                             if self.stack.get_visible_child_name() == "bluetooth" else None))
 
+    # Like Windows, airplane mode remembers which radios were on and turns
+    # exactly those back on afterwards. Unblocking Bluetooth makes bluez
+    # power it on by itself, so it is switched off again if it was off.
     def toggle_airplane(self):
         on = not self.state.get("airplane")
         self.want("airplane", on)
-        bg(lambda: ok(f"rfkill {'block' if on else 'unblock'} all"), lambda _r: self.later(self.refresh))
+        if on:
+            before = {"wifi": bool(self.state.get("wifi", True)), "bt": bool(self.state.get("bt"))}
+            try:
+                with open(AIRPLANE, "w") as f:
+                    json.dump(before, f)
+            except OSError:
+                pass
+            bg(lambda: ok("rfkill block all"), lambda _r: self.later(self.refresh))
+            return
+        try:
+            with open(AIRPLANE) as f:
+                before = json.load(f)
+        except (OSError, ValueError):
+            before = {"wifi": True, "bt": False}
+        self.want("wifi", before.get("wifi", True))
+        self.want("bt", before.get("bt", False))
+
+        def run():
+            ok("rfkill unblock all")
+            ok(f"nmcli radio wifi {'on' if before.get('wifi', True) else 'off'}")
+            if before.get("bt"):
+                ok(["bluetoothctl", "power", "on"], timeout=5)
+            else:
+                for _ in range(12):         # bluez may power it on a moment later
+                    if "Powered: yes" in sh(["bluetoothctl", "show"], timeout=3):
+                        ok(["bluetoothctl", "power", "off"], timeout=5)
+                    time.sleep(0.25)
+            try:
+                os.unlink(AIRPLANE)
+            except OSError:
+                pass
+        bg(run, lambda _r: self.refresh())
 
     def toggle_dnd(self):
         on = not self.state.get("dnd")
@@ -1019,6 +1086,17 @@ class QuickSettings:
         detail.append(msg)
         actions = Gtk.Box(halign=Gtk.Align.END)
 
+        def ask_key():
+            """A saved network whose key no longer works: ask for it again,
+            like Windows does, instead of retrying the old one forever."""
+            nonlocal entry
+            if entry or user:
+                return
+            entry = Gtk.PasswordEntry(show_peek_icon=True, placeholder_text="Enter the network security key")
+            entry.connect("activate", connect)
+            detail.insert_child_after(entry, None)
+            entry.grab_focus()
+
         def connect(*_):
             pw = entry.get_text() if entry else ""
             name = user.get_text().strip() if user else ""
@@ -1041,8 +1119,14 @@ class QuickSettings:
                                "802-1x.password-flags", "0"], timeout=15):
                         return False
                     return ok(["nmcli", "connection", "up", "id", n["ssid"]], timeout=60)
+                if n["known"] and pw:
+                    # saved Wi-Fi, key typed in again: replace the saved one
+                    if not ok(["nmcli", "connection", "modify", "id", n["ssid"],
+                               "wifi-sec.psk", pw, "wifi-sec.psk-flags", "0"], timeout=15):
+                        return False
+                    return run_out(["nmcli", "connection", "up", "id", n["ssid"]], timeout=45)
                 if n["known"]:
-                    return ok(["nmcli", "connection", "up", "id", n["ssid"]], timeout=45)
+                    return run_out(["nmcli", "connection", "up", "id", n["ssid"]], timeout=45)
                 if user:
                     dev = wifi_device()
                     added = ok(["nmcli", "connection", "add", "type", "wifi", "con-name", n["ssid"],
@@ -1057,17 +1141,33 @@ class QuickSettings:
                 cmd = ["nmcli", "device", "wifi", "connect", n["ssid"]]
                 if pw:
                     cmd += ["password", pw]
-                return ok(cmd, timeout=45)
+                res = run_out(cmd, timeout=45)
+                if not res[0]:
+                    # nmcli keeps the new profile even when the key was wrong;
+                    # the network would then count as "saved" and never ask
+                    # for the key again. Remove it, it never worked.
+                    ok(["nmcli", "connection", "delete", "id", n["ssid"]])
+                return res
 
-            def done(success):
+            def done(res):
+                success, out = res if isinstance(res, tuple) else (res, "")
                 btn.set_sensitive(True)
                 btn.get_child().set_text("Connect")
                 if success:
                     self.refresh()
                     self.load_wifi()
+                    return
+                wrong_key = n["secure"] and not user and re.search(
+                    r"[Ss]ecrets were required|password|psk|802-1X supplicant|4-way|key", out)
+                if wrong_key or (n["known"] and n["secure"] and not user):
+                    msg.set_text("The network security key isn't correct. Please try again.")
+                    ask_key()
+                    if entry:
+                        entry.set_text("")
+                        entry.grab_focus()
                 else:
                     msg.set_text("Can't connect to this network")
-                    msg.set_visible(True)
+                msg.set_visible(True)
             bg(run, done)
 
         def disconnect(*_):
@@ -1809,11 +1909,38 @@ class OSD:
         self.img = icon("win11-volume-3", 18)
         self.bar = Gtk.ProgressBar(hexpand=True, valign=Gtk.Align.CENTER)
         self.lbl = label("", "osd-value", xalign=1.0, ellipsize=False)
-        self.lbl.set_width_chars(3)
+        self.lbl.set_width_chars(4)          # "100", "High": same width
         box.append(self.img)
         box.append(self.bar)
         box.append(self.lbl)
         self.win.set_child(box)
+        self.watch_kbd_backlight()
+
+    # The laptop switches its keyboard light itself (Fn+Space) – no key
+    # reaches Hyprland. UPower reports every change on D-Bus; show the same
+    # flyout as for volume then.
+    def watch_kbd_backlight(self):
+        try:
+            bus = Gio.bus_get_sync(Gio.BusType.SYSTEM, None)
+            r = bus.call_sync("org.freedesktop.UPower", "/org/freedesktop/UPower/KbdBacklight",
+                              "org.freedesktop.UPower.KbdBacklight", "GetMaxBrightness",
+                              None, GLib.VariantType("(i)"), Gio.DBusCallFlags.NONE, 2000, None)
+            self.kbd_max = r.unpack()[0]
+        except GLib.Error:
+            return                          # no keyboard light (or no UPower)
+        if self.kbd_max <= 0:
+            return
+        bus.signal_subscribe("org.freedesktop.UPower", "org.freedesktop.UPower.KbdBacklight",
+                             "BrightnessChangedWithSource", "/org/freedesktop/UPower/KbdBacklight",
+                             None, Gio.DBusSignalFlags.NONE,
+                             lambda *a: self.show_kbd(a[5].unpack()[0]))
+        self.kbd_bus = bus
+
+    def show_kbd(self, level):
+        steps = {0: "Off"} if self.kbd_max != 2 else {0: "Off", 1: "Low", 2: "High"}
+        pct = round(100 * level / self.kbd_max)
+        self.update(("win11-keyboard-light" if level else "win11-keyboard-light-off",
+                     pct, level == 0), text=steps.get(level, str(pct)))
 
     @staticmethod
     def read(kind):
@@ -1830,12 +1957,12 @@ class OSD:
     def show(self, kind):
         bg(lambda: self.read(kind), self.update)
 
-    def update(self, res):
+    def update(self, res, text=None):
         name, value, muted = res
         self.img.set_from_icon_name(name)
         self.bar.set_fraction(max(0, min(100, value)) / 100)
         (self.bar.add_css_class if muted else self.bar.remove_css_class)("muted")
-        self.lbl.set_text(str(value))
+        self.lbl.set_text(text if text is not None else str(value))
         self.win.present()
         if self.timer:
             GLib.source_remove(self.timer)

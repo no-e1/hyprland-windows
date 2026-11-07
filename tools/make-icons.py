@@ -46,30 +46,30 @@ for lvl in range(4):            # 0 = no wave ... 3 = three waves
     save(f"volume-{lvl}", b)
 save("volume-mute", spk + f'<path d="M15 9.5l5 5M20 9.5l-5 5" stroke="{W}" stroke-width="{SW}"/>')
 
-# ── Battery (Windows 11 / Segoe Fluent style) ─────────────────────────
-# Rounded body with a thin outline, a rounded terminal on the right and an
-# inset fill. Charging: a bolt in the middle, cut out of outline and fill by
-# a transparent gap (so it works on any background). Plugged in but not
-# charging (full): a plug instead of the bolt.
-BODY = '<rect x="2.6" y="7.1" width="17" height="9.8" rx="2.4" stroke="{c}" stroke-width="1.3"/>'
-NUB = '<rect x="20.3" y="10.1" width="1.6" height="3.8" rx="0.8" fill="{c}"/>'
-BOLT = "M12.9 4.9L8.3 12.5h3.4l-1.1 6.6 4.9-8h-3.5z"
-PLUG = ("M9.3 9.2v-2.2M12.7 9.2v-2.2M8 9.2h6v2.4a3 3 0 0 1-3 3 3 3 0 0 1-3-3zM11 14.6v2.6")
+# ── Battery (Windows 11 taskbar style) ───────────────────────────────
+# Wide, flat body with a thin outline and a small terminal on the right;
+# the level fills almost the whole inside (thin gap to the outline).
+# Charging: the level turns green with a bolt cut into the middle.
+# Plugged in but not charging (full): a small plug instead of the bolt.
+BODY = '<rect x="2.6" y="7.6" width="16.8" height="8.8" rx="2.4" stroke="{c}" stroke-width="1.2"/>'
+NUB = '<path d="M20.6 10.3h.6a1 1 0 0 1 1 1v1.4a1 1 0 0 1-1 1h-.6z" fill="{c}"/>'
+FILL_X, FILL_W = 4.4, 13.9
+BOLT = "M12.2 8.3L9.4 12.5h2.3l-.6 3.3 2.8-4.5h-2.3z"
+PLUG = "M9.9 10.1v-1.1M12.1 10.1v-1.1M9.1 10.1h3.8v1.3a1.9 1.9 0 0 1-3.8 0zM11 13.3v1.7"
+GREEN, RED = "#6ccb5f", "#ff6363"
 for pct in range(0, 101, 10):
     for kind in ("", "-charging", "-plugged"):
-        low = pct <= 10 and not kind
-        col = "#ff6363" if low else W
-        fill = ""
-        w = 13.6 * pct / 100
-        if w > 0.3:
-            fill = f'<rect x="4.7" y="9.2" width="{w:.2f}" height="5.6" rx="1.1" fill="{col}"/>'
+        col = GREEN if kind == "-charging" else RED if pct <= 10 and not kind else W
+        w = FILL_W * pct / 100
+        fill = (f'<rect x="{FILL_X}" y="9.4" width="{w:.2f}" height="5.2" rx="{min(1, w / 2):.2f}" fill="{col}"/>'
+                if w > 0.3 else "")
         shape = BODY.format(c=W) + NUB.format(c=W) + fill
         if kind == "-charging":
-            gap = f'<path d="{BOLT}" fill="black" stroke="black" stroke-width="2.6" stroke-linejoin="round"/>'
+            gap = f'<path d="{BOLT}" fill="black" stroke="black" stroke-width="1.8" stroke-linejoin="round"/>'
             glyph = f'<path d="{BOLT}" fill="{W}"/>'
         elif kind == "-plugged":
-            gap = f'<path d="{PLUG}" fill="black" stroke="black" stroke-width="3.6" stroke-linecap="round" stroke-linejoin="round"/>'
-            glyph = f'<path d="{PLUG}" fill="{W}" stroke="{W}" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>'
+            gap = f'<path d="{PLUG}" fill="black" stroke="black" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>'
+            glyph = f'<path d="{PLUG}" fill="{W}" stroke="{W}" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round"/>'
         else:
             gap = glyph = ""
         if gap:
@@ -80,6 +80,16 @@ for pct in range(0, 101, 10):
 
 # ── Quick settings and switcher glyphs ───────────────────────────────
 st = f'stroke="{W}" stroke-width="{SW}"'
+# keyboard light: a keyboard with light rays above it (off: no rays)
+kbd = (f'<rect x="3" y="11" width="18" height="9.5" rx="1.5" {st}/>'
+       f'<path d="M6.5 14.2h.01M9.5 14.2h.01M12.5 14.2h.01M15.5 14.2h.01M17.5 14.2h.01M8 17.3h8" {st}/>')
+save("keyboard-light", kbd + f'<path d="M12 3.5v2.5M6.3 5.3l1.4 2M17.7 5.3l-1.4 2" {st}/>')
+save("keyboard-light-off", kbd)
+# "select a sound output": two slider lines, the lower one ends in a speaker
+save("sound-output", f'<path d="M3 7.5h9.5M18.5 7.5H21M3 14.5h2.5" {st}/>'
+                     f'<circle cx="15.5" cy="7.5" r="2.25" {st}/><circle cx="8.5" cy="14.5" r="2.25" {st}/>'
+                     f'<path d="M13 13.5h1.6l2.6-2.2v8.4l-2.6-2.2H13z" {st}/>'
+                     + arc(17.2, 15.5, 2.6, 45, 135, W) + arc(17.2, 15.5, 5, 45, 135, W))
 save("bluetooth", f'<path d="M7 7.5l10 9-5 4.5V3l5 4.5-10 9" {st}/>')
 save("airplane", f'<path d="M21 15.5v-1.8l-7.5-4.7V4.2a1.5 1.5 0 0 0-3 0V9L3 13.7v1.8l7.5-2.3v4.9l-2 1.5V21l3.5-1 3.5 1v-1.4l-2-1.5v-4.9z" {st}/>')
 save("moon", f'<path d="M19.5 14.5A8 8 0 0 1 9.5 4.5a8 8 0 1 0 10 10z" {st}/>')

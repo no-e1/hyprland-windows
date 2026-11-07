@@ -44,6 +44,7 @@ hl.on("hyprland.start", function()
     hl.exec_cmd(scripts .. "/theme.sh")        -- GTK theme, icons, cursor, font
     hl.exec_cmd(scripts .. "/polkit.sh")       -- password prompts for admin actions
     hl.exec_cmd(scripts .. "/wallpaper.sh restore")
+    hl.exec_cmd(scripts .. "/radios.sh")       -- Wi-Fi on, Bluetooth off
     hl.exec_cmd("swaync")                      -- notifications
     -- winshell: taskbar, start menu, Alt+Tab, quick settings, calendar;
     -- restarts itself if it ever crashes (like explorer.exe)
