@@ -80,6 +80,7 @@ for pct in range(0, 101, 10):
 
 # ── Quick settings and switcher glyphs ───────────────────────────────
 st = f'stroke="{W}" stroke-width="{SW}"'
+save("close", f'<path d="M6.5 6.5l11 11M17.5 6.5l-11 11" {st}/>')
 # keyboard light: a keyboard with light rays above it (off: no rays)
 kbd = (f'<rect x="3" y="11" width="18" height="9.5" rx="1.5" {st}/>'
        f'<path d="M6.5 14.2h.01M9.5 14.2h.01M12.5 14.2h.01M15.5 14.2h.01M17.5 14.2h.01M8 17.3h8" {st}/>')
@@ -120,6 +121,14 @@ save("chevron-up", f'<path d="M6 14.5l6-6 6 6" {st}/>')
 save("chevron-down", f'<path d="M6 9.5l6 6 6-6" {st}/>')
 save("refresh", arc(12, 12, 7.5, 40, 330, W).replace('0 0 1', '0 1 1') + f'<path d="M15.5 4.5l3.5.9-1 3.4" {st}/>')
 save("headphones", f'<path d="M4 15v-3a8 8 0 0 1 16 0v3" {st}/><rect x="3.5" y="14" width="4" height="6.5" rx="1.5" {st}/><rect x="16.5" y="14" width="4" height="6.5" rx="1.5" {st}/>')
+# sound output page: built-in speaker and a monitor (HDMI/DisplayPort)
+save("speaker", f'<rect x="6" y="3" width="12" height="18" rx="2" {st}/><circle cx="12" cy="14.5" r="3" {st}/><path d="M12 7.2h.01" {st}/>')
+save("monitor", f'<rect x="3" y="4.5" width="18" height="12" rx="1.5" {st}/><path d="M9 20h6M12 16.5V20" {st}/>')
+# notification center: "do not disturb" = a bell with a small zZ (Segoe "QuietHours")
+bell = f'<path d="M3.5 17.5h13M5.5 17.5v-6a4.5 4.5 0 0 1 9 0v6M8.5 20.3a1.6 1.6 0 0 0 3 0" {st}/>'
+save("bell-snooze", bell + f'<path d="M16 3.5h3.5L16 8h3.5" stroke="{W}" stroke-width="1.3"/>')
+save("bell-snooze-dark", (bell + f'<path d="M16 3.5h3.5L16 8h3.5" stroke="{W}" stroke-width="1.3"/>')
+     .replace("#ffffff", "#000000"))         # on the blue "on" button
 save("devices", f'<rect x="3" y="5" width="13" height="10" rx="1.5" {st}/><path d="M6 19h7" {st}/><rect x="17.5" y="8" width="4" height="11" rx="1" {st}/>')
 # secured Wi-Fi: small lock in the corner
 for lvl in range(5):

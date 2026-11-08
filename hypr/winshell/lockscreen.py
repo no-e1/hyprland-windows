@@ -143,7 +143,6 @@ class Fingerprint:
             return False
         self.dev = dev
         dev.connect("g-signal", self.on_signal)
-        self.on_message("Scan your finger or enter your password")
         self.verify()
         return False
 
@@ -499,6 +498,13 @@ class App(Gtk.Application):
         self.lock = None
 
     def do_activate(self):
+        st = Gtk.Settings.get_default()   # unhinted text: round tops not cut off (see winshell.crisp_text)
+        try:
+            st.set_property("gtk-font-rendering", Gtk.FontRendering.MANUAL)
+            st.set_property("gtk-xft-hinting", 0)
+            st.set_property("gtk-xft-hintstyle", "hintnone")
+        except (TypeError, AttributeError):
+            pass
         css = Gtk.CssProvider()
         css.load_from_string(CSS)
         Gtk.StyleContext.add_provider_for_display(Gdk.Display.get_default(), css,

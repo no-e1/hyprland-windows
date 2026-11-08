@@ -45,12 +45,14 @@ hl.on("hyprland.start", function()
     hl.exec_cmd(scripts .. "/polkit.sh")       -- password prompts for admin actions
     hl.exec_cmd(scripts .. "/wallpaper.sh restore")
     hl.exec_cmd(scripts .. "/radios.sh")       -- Wi-Fi on, Bluetooth off
-    hl.exec_cmd("swaync")                      -- notifications
+    hl.exec_cmd(scripts .. "/swaync.sh")       -- notifications (placed above the calendar)
     -- winshell: taskbar, start menu, Alt+Tab, quick settings, calendar;
     -- restarts itself if it ever crashes (like explorer.exe)
     hl.exec_cmd(winshell .. " supervise")
     hl.exec_cmd("hypridle")                    -- lock / screen off when idle
-    hl.exec_cmd("sh -c 'command -v cliphist >/dev/null && wl-paste --watch cliphist store'")
+    -- clipboard history for Win + V (winshell/clipstore.py keeps the last 25)
+    hl.exec_cmd("wl-paste --type text --watch python3 -I " .. home .. "/.config/hypr/winshell/clipstore.py text")
+    hl.exec_cmd("wl-paste --type image/png --watch python3 -I " .. home .. "/.config/hypr/winshell/clipstore.py image")
 end)
 
 ---------------------------------------------------------------------
@@ -219,7 +221,7 @@ hl.window_rule({
 -- Mica/Acrylic blur for taskbar, start menu, flyouts and Alt+Tab
 hl.layer_rule({ name = "blur-startmenu", match = { namespace = "^rofi$" },                      blur = true, ignore_alpha = 0.2 })
 hl.layer_rule({ name = "blur-swaync",    match = { namespace = "^swaync-.*$" },                 blur = true, ignore_alpha = 0.2 })
-hl.layer_rule({ name = "blur-winshell",  match = { namespace = "^winshell-(qs|switcher|start|calendar)$" }, blur = true, ignore_alpha = 0.2 })
+hl.layer_rule({ name = "blur-winshell",  match = { namespace = "^winshell-(qs|switcher|start|calendar|clipboard)$" }, blur = true, ignore_alpha = 0.2 })
 hl.layer_rule({ name = "blur-osd",        match = { namespace = "^winshell-osd$" },             blur = true, ignore_alpha = 0.2 })
 -- winshell animates its flyouts itself (they glide out of the taskbar)
 hl.layer_rule({ name = "no-anim-winshell", match = { namespace = "^winshell-.*$" }, no_anim = true })
@@ -620,7 +622,7 @@ hl.bind(win .. " + A", hl.dsp.exec_cmd(winshell .. " qs"))                   -- 
 hl.bind(win .. " + N", hl.dsp.exec_cmd("swaync-client -t -sw"))              -- notifications
 hl.bind(win .. " + X", hl.dsp.exec_cmd(scripts .. "/powermenu.sh --menu"))   -- power menu
 hl.bind(win .. " + L", hl.dsp.exec_cmd(scripts .. "/lock.sh"))               -- lock (Windows-style)
-hl.bind(win .. " + V", hl.dsp.exec_cmd(scripts .. "/clipboard.sh"))          -- clipboard history
+hl.bind(win .. " + V", hl.dsp.exec_cmd(winshell .. " clipboard"))           -- clipboard history (like Windows 11)
 hl.bind(win .. " + W", hl.dsp.exec_cmd(scripts .. "/wallpaper.sh pick"))     -- pick background
 hl.bind(win .. " + T", hl.dsp.exec_cmd(terminal))                            -- terminal
 hl.bind(win .. " + B", hl.dsp.exec_cmd(browser))                             -- browser
@@ -977,6 +979,7 @@ end
 load_desktop()
 
 local desk_gen = 0              -- a newer Win + D cancels what an older one planned
+local desk_settling = false     -- Win + D just hid the windows (some may still be on screen)
 local desk_out = nil            -- windows waiting to be hidden: { gen, windows }
 local desk_in = nil             -- windows waiting to come back: { gen, windows, active }
 
@@ -1007,6 +1010,8 @@ local function hide_all()
     end
     desktop_hidden = #list > 0 and saved or nil
     save_desktop()
+    desk_settling = true
+    later(MAX_HIDE_DELAY + 600, function() if desk_gen == gen then desk_settling = false end end)
 end
 function DesktopOutNow(gen)
     local d = desk_out
@@ -1095,6 +1100,7 @@ end
 local function restore_hidden()
     local saved = desktop_hidden
     desktop_hidden = nil
+    desk_settling = false
     save_desktop()
     desk_gen = desk_gen + 1                 -- whatever is still on its way out stays
     local gen = desk_gen
@@ -1138,12 +1144,16 @@ function DesktopInNow(gen)
 end
 
 -- the desktop is shown: everything Win + D hid is hidden or on its way
+-- Only while Win + D is still hiding may its windows be on screen; once it
+-- is done, any window on screen means the desktop is no longer shown (a
+-- window came back through the taskbar, Alt+Tab …). Before, such a stale
+-- list made the 3-finger swipe down do nothing until Win + D was pressed.
 local function desktop_shown()
     if not desktop_hidden then return false end
     local mine = {}
     for _, a in ipairs(desktop_hidden.windows) do mine[a] = true end
     for _, w in ipairs(windows_here()) do
-        if not mine[w.address] then return false end
+        if not mine[w.address] or not desk_settling then return false end
     end
     return true
 end
@@ -1191,7 +1201,7 @@ hl.gesture({ fingers = 3, direction = "vertical", action = {
 -- The first step comes after a short way (it reacts right away), every
 -- further one needs a longer way, and one movement moves at most one window
 -- (a fast swipe must not race through several).
-local SWIPE_FIRST, SWIPE_STEP, SWIPE_STEP_Y = 30, 60, 50
+local SWIPE_FIRST, SWIPE_STEP, SWIPE_STEP_Y = 18, 42, 38
 local swipe_acc, swipe_acc_y, swipe_steps = 0, 0, 0
 local function swipe_axis(acc, step, plus, minus)
     local need = swipe_steps == 0 and SWIPE_FIRST or step

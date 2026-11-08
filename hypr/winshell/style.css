@@ -182,6 +182,8 @@ entry, passwordentry {
     padding: 0 10px;
 }
 
+/* toggle switch like Windows 11: colors fade, the knob grows a little on
+   hover and stretches while pressed; GTK slides it across */
 switch {
     min-width: 38px;
     min-height: 18px;
@@ -189,8 +191,11 @@ switch {
     background: transparent;
     border: 1px solid rgba(255, 255, 255, 0.6);
     box-shadow: none;
+    transition: background-color 180ms ease-out, border-color 180ms ease-out;
 }
+switch:hover { background: rgba(255, 255, 255, 0.06); border-color: rgba(255, 255, 255, 0.75); }
 switch:checked { background: #4cc2ff; border-color: #4cc2ff; }
+switch:checked:hover { background: #48b2e9; border-color: #48b2e9; }
 switch slider {
     min-width: 12px;
     min-height: 12px;
@@ -199,9 +204,30 @@ switch slider {
     background: rgba(255, 255, 255, 0.8);
     border: none;
     box-shadow: none;
+    transition: min-width 160ms cubic-bezier(0.2, 0.8, 0.2, 1.2), min-height 160ms cubic-bezier(0.2, 0.8, 0.2, 1.2),
+                margin 160ms cubic-bezier(0.2, 0.8, 0.2, 1.2), background-color 180ms ease-out;
 }
+switch:hover slider { min-width: 14px; min-height: 14px; margin: 1px; background: #ffffff; }
+switch:active slider { min-width: 17px; min-height: 14px; margin: 1px; }
 switch:checked slider { background: #000000; }
 switch image { opacity: 0; }
+
+/* Wi-Fi / Bluetooth rows glide in one after the other (new ones only) */
+@keyframes row-in {
+    from { opacity: 0; transform: translateY(8px); }
+    to   { opacity: 1; transform: none; }
+}
+.appear { animation: row-in 260ms cubic-bezier(0.2, 0.8, 0.2, 1) both; }
+.appear-1 { animation-delay: 35ms; }
+.appear-2 { animation-delay: 70ms; }
+.appear-3 { animation-delay: 105ms; }
+.appear-4 { animation-delay: 140ms; }
+.appear-5 { animation-delay: 175ms; }
+.appear-6 { animation-delay: 210ms; }
+.appear-7 { animation-delay: 245ms; }
+.appear-8 { animation-delay: 280ms; }
+.net { transition: background-color 140ms ease-out; }
+.btn-spinner { min-width: 14px; min-height: 14px; }
 
 scrollbar { background: transparent; }
 scrollbar slider { min-width: 3px; background: rgba(255, 255, 255, 0.35); border-radius: 2px; }
@@ -328,6 +354,7 @@ menubutton.start-btn > button:hover,
 menubutton.start-btn > button:checked { background: rgba(255, 255, 255, 0.06); }
 menubutton.start-btn arrow { -gtk-icon-source: none; min-width: 0; min-height: 0; }
 .start-user { font-size: 12px; }
+.avatar-pic { border-radius: 9999px; }
 
 popover.start-menu > contents {
     padding: 4px;
@@ -500,3 +527,59 @@ button.tray-menu-item {
 button.tray-menu-item:hover { background: rgba(255, 255, 255, 0.06); }
 button.tray-menu-item:disabled { color: rgba(255, 255, 255, 0.4); }
 .tray-menu-sep { margin: 4px 6px; background: rgba(255, 255, 255, 0.08); min-height: 1px; }
+
+/* ── Clipboard history (Win + V), like Windows 11 ─────────────────── */
+.clip {
+    min-width: 360px;
+    background: rgba(34, 34, 38, 0.92);
+    border: 1px solid rgba(255, 255, 255, 0.09);
+    border-radius: 8px;
+    padding: 12px;
+}
+.clip-head { margin: 2px 2px 10px 4px; }
+.clip-title { font-size: 14px; font-weight: 600; }
+.clip-list { margin: 0 2px; }
+.clip-card {
+    padding: 12px 8px 12px 14px;
+    border-radius: 6px;
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+}
+.clip-card:hover { background: rgba(255, 255, 255, 0.09); }
+.clip-card.selected { border-color: rgba(76, 194, 255, 0.85); }
+.clip-text { font-size: 13px; }
+.clip-card button.clip-del { opacity: 0; transition: opacity 120ms; }
+.clip-card:hover button.clip-del, .clip-card.selected button.clip-del { opacity: 1; }
+.clip-empty { color: rgba(255, 255, 255, 0.6); font-size: 13px; margin: 30px 10px; }
+
+/* Bluetooth "New devices" and the sound output page, like Windows 11 */
+.section-title { font-size: 14px; font-weight: 600; padding: 10px 12px 4px; }
+separator.qs-sep { background: rgba(255, 255, 255, 0.08); min-height: 1px; margin: 6px 0; }
+.empty-small { padding: 14px 0; font-size: 12px; }
+.rescan-btn { transition: opacity 160ms ease-out; }
+.sink { padding: 10px 12px 10px 4px; }
+.sink.selected { background: rgba(255, 255, 255, 0.06); }
+.sel-bar {
+    min-width: 3px;
+    min-height: 16px;
+    border-radius: 2px;
+    background: #4cc2ff;
+    opacity: 0;
+    transition: opacity 140ms ease-out;
+}
+.sink.selected .sel-bar { opacity: 1; }
+
+/* calendar header: date + the fold arrow in a small framed button (Windows 11) */
+.cal-head { padding: 10px 12px 10px 18px; }
+.cal-head.folded { border-bottom-color: transparent; }
+.cal-date { font-size: 13px; font-weight: 400; }
+button.boxed-btn {
+    min-width: 30px;
+    min-height: 30px;
+    padding: 0;
+    border-radius: 4px;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    box-shadow: none;
+}
+button.boxed-btn:hover { background: rgba(255, 255, 255, 0.09); }

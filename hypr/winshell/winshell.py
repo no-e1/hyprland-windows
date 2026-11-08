@@ -13,6 +13,7 @@ import fcntl
 import json
 import math
 import os
+import pwd
 import re
 import socket
 import subprocess
@@ -27,7 +28,7 @@ gi.require_version("Gdk", "4.0")
 gi.require_version("Gtk4LayerShell", "1.0")
 gi.require_version("Gsk", "4.0")
 gi.require_version("Graphene", "1.0")
-from gi.repository import Gdk, Gio, GLib, GObject, Graphene, Gsk, Gtk  # noqa: E402
+from gi.repository import Gdk, Gio, GLib, GObject, Graphene, Gsk, Gtk, Pango  # noqa: E402
 from gi.repository import Gtk4LayerShell as LS  # noqa: E402
 try:                                    # GLib >= 2.86 moved it to GioUnix
     gi.require_version("GioUnix", "2.0")
@@ -37,6 +38,8 @@ except (ValueError, ImportError):
     DesktopAppInfo = Gio.DesktopAppInfo
 
 HERE = os.path.dirname(os.path.realpath(__file__))
+sys.path.insert(0, HERE)
+import ncplace                  # noqa: E402  where the notification center sits
 ICONS = os.path.join(os.path.dirname(os.path.dirname(HERE)), "icons")
 RUNTIME = os.environ.get("XDG_RUNTIME_DIR", "/tmp")
 FIFO = os.path.join(RUNTIME, "winshell.fifo")
@@ -85,6 +88,32 @@ def child_env():
 def spawn(cmd):
     subprocess.Popen(cmd, shell=True, start_new_session=True, env=child_env(),
                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def crisp_text():
+    """Draw text unhinted: with GTK's default, the tops of round letters
+    and digits (2, 3, 8, a, o …) get snapped to the pixel grid and look cut
+    off by a pixel."""
+    s = Gtk.Settings.get_default()
+    if s is None:
+        return
+    try:
+        s.set_property("gtk-font-rendering", Gtk.FontRendering.MANUAL)
+        s.set_property("gtk-xft-hinting", 0)
+        s.set_property("gtk-xft-hintstyle", "hintnone")
+        s.set_property("gtk-xft-antialias", 1)
+    except (TypeError, AttributeError):       # older GTK
+        pass
+
+
+def die_with_parent():
+    """For long-running helpers: end when winshell ends (else every restart
+    left one more behind)."""
+    try:
+        import ctypes
+        ctypes.CDLL("libc.so.6").prctl(1, 15)       # PR_SET_PDEATHSIG, SIGTERM
+    except OSError:
+        pass
 
 
 def bg(fn, done=None):
@@ -167,6 +196,53 @@ def icon(name, size=16):
     img = Gtk.Image.new_from_icon_name(name)
     img.set_pixel_size(size)
     return img
+
+
+# Your profile picture and name – the start menu and the lock screen
+# (lockscreen.py, through scripts/lock.sh) show the same ones.
+# To set your own picture: put an image at ~/.face (square works best).
+def profile_picture():
+    user = pwd.getpwuid(os.getuid()).pw_name
+    for p in (os.path.expanduser("~/.face"), os.path.expanduser("~/.face.icon"),
+              f"/var/lib/AccountsService/icons/{user}"):
+        if os.path.isfile(p):
+            return p
+    return None
+
+
+def display_name():
+    pw = pwd.getpwuid(os.getuid())
+    name = pw.pw_gecos.split(",")[0].strip() or pw.pw_name
+    return name[:1].upper() + name[1:]
+
+
+def avatar(size):
+    """The round profile picture (a person icon if there is none)."""
+    box = Gtk.Box(halign=Gtk.Align.CENTER, valign=Gtk.Align.CENTER)
+    box.add_css_class("avatar-pic")
+    box.set_overflow(Gtk.Overflow.HIDDEN)
+    img = Gtk.Image(pixel_size=size)
+    pic = profile_picture()
+    try:
+        img.set_from_paintable(Gdk.Texture.new_from_filename(pic)) if pic else img.set_from_icon_name("win11-user")
+    except GLib.Error:
+        img.set_from_icon_name("win11-user")
+    box.append(img)
+    return box
+
+
+def busy_button(btn, text, idle_text=None):
+    """A button that shows a spinning circle while it works (text), or its
+    normal label again (text None)."""
+    if text:
+        box = Gtk.Box(spacing=8, halign=Gtk.Align.CENTER)
+        sp = Gtk.Spinner(spinning=True)
+        sp.add_css_class("btn-spinner")
+        box.append(sp)
+        box.append(Gtk.Label(label=text))
+        btn.set_child(box)
+    else:
+        btn.set_child(Gtk.Label(label=idle_text or ""))
 
 
 def label(text, *classes, xalign=0.0, ellipsize=True):
@@ -884,6 +960,68 @@ class Switcher:
         return False
 
 
+# Windows-style "searching" indicator: little dots that run across, slowing
+# down in the middle, one after the other.
+class ScanDots(Gtk.DrawingArea):
+    PERIOD = 2.4                # s for one round
+    DOTS = 5
+
+    def __init__(self):
+        super().__init__()
+        self.set_content_height(6)
+        self.set_hexpand(True)
+        self.set_draw_func(self.draw)
+        self.tick = 0
+        self.t0 = 0
+        self.running = False
+        self.stop_at = 0
+        self.set_opacity(0)
+
+    def start(self, delay=0.3):
+        """Something is loading: show the dots – but only if it takes longer
+        than `delay` (a quick look-up shows nothing)."""
+        self.running = True
+        self.stop_at = 0
+        if self.tick:
+            return
+        GLib.timeout_add(int(delay * 1000), self.appear)
+
+    def appear(self):
+        if self.running and not self.tick:
+            self.set_opacity(1)
+            self.stop_at = time.monotonic() + 0.6       # once shown, not just a flash
+            self.t0 = 0
+            self.tick = self.add_tick_callback(self.on_tick)
+        return False
+
+    def stop(self):
+        self.running = False
+
+    def on_tick(self, _w, clock):
+        now = clock.get_frame_time() / 1e6
+        if not self.t0:
+            self.t0 = now
+        self.t = now - self.t0
+        self.queue_draw()
+        if not self.running and time.monotonic() >= self.stop_at:
+            self.tick = 0
+            self.set_opacity(0)
+            return False
+        return True
+
+    def draw(self, _a, cr, w, h):
+        if not self.tick:
+            return
+        cr.set_source_rgba(0x4c / 255, 0xc2 / 255, 1, 1)
+        for i in range(self.DOTS):
+            p = ((getattr(self, "t", 0) - i * 0.13) % self.PERIOD) / 1.6
+            if not 0 <= p <= 1:
+                continue
+            x = w * (0.5 + 0.5 * (2 * p - 1) ** 3)       # fast at the ends, slow in the middle
+            cr.arc(x, h / 2, 1.8, 0, 2 * math.pi)
+            cr.fill()
+
+
 # ── Quick settings ───────────────────────────────────────────────────────
 class QuickSettings:
     def __init__(self, app):
@@ -927,6 +1065,7 @@ class QuickSettings:
         self.stack.add_named(self.build_main(), "main")
         self.stack.add_named(self.build_wifi(), "wifi")
         self.stack.add_named(self.build_bt(), "bluetooth")
+        self.stack.add_named(self.build_sound(), "sound")
         # A layer surface grows with its content but never shrinks back: after
         # leaving the (taller) Wi-Fi page the window kept its old height and
         # showed an empty grey area below the footer. Fit it again once the
@@ -976,7 +1115,7 @@ class QuickSettings:
         self.bright_row, self.bright = self.slider("win11-sun", self.set_brightness)
         self.vol_row, self.vol = self.slider("win11-volume-3", self.set_volume,
                                              on_icon=self.toggle_mute,
-                                             on_more=lambda: (self.hide(), spawn("pavucontrol")),
+                                             on_more=lambda: self.open_page("sound"),
                                              more_icon="win11-sound-output")
         sliders = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
         sliders.add_css_class("qs-sliders")
@@ -1050,7 +1189,7 @@ class QuickSettings:
         return foot
 
     # ── sub pages ──
-    def page(self, title, on_switch, more_text, more_cmd):
+    def page(self, title, on_switch, more_text, more_cmd, on_rescan=None):
         page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         page.add_css_class("qs-page")
         head = Gtk.Box(spacing=8)
@@ -1059,14 +1198,32 @@ class QuickSettings:
         sp = Gtk.Box()
         sp.set_hexpand(True)
         head.append(sp)
+        rescan = None
+        if on_rescan:                           # search again (a search ends after a while)
+            rescan = button(icon("win11-refresh", 16), "flat-btn", "rescan-btn",
+                            on_click=on_rescan, tooltip="Search again")
+            rescan.set_valign(Gtk.Align.CENTER)
+            head.append(rescan)
         sw = Gtk.Switch(valign=Gtk.Align.CENTER)
-        sw.connect("state-set", lambda s, v: None if self.updating else on_switch(v))
-        head.append(sw)
+        if on_switch:
+            # GTK only reports a click at the end of the knob's slide; a
+            # refresh in between could undo it (knob off, still blue, still
+            # searching). So the click is taken right away and the switch's
+            # colour is set by us (sync_switch), never by GTK.
+            sw.connect("state-set", lambda s, v: True)
+            sw.connect("notify::active", lambda s, _p: None if self.updating else on_switch(s.get_active()))
+            head.append(sw)
         page.append(head)
+        dots = ScanDots()                       # "searching…", like Windows
+        page.append(dots)
 
         scroll = Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.NEVER,
                                     min_content_height=300, max_content_height=300)
         lst = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        lst.dots = dots
+        lst.rescan = rescan
+        self.show_rescan(lst, False)
+        lst.seen = set()                        # rows already shown (they don't animate again)
         scroll.set_child(lst)
         page.append(scroll)
 
@@ -1077,13 +1234,28 @@ class QuickSettings:
 
     def build_wifi(self):
         page, self.wifi_switch, self.wifi_list = self.page(
-            "Wi-Fi", self.set_wifi, "More Wi-Fi settings", "nm-connection-editor")
+            "Wi-Fi", self.set_wifi, "More Wi-Fi settings", "nm-connection-editor",
+            on_rescan=lambda: self.load_wifi(rescan=True))
         return page
 
     def build_bt(self):
         page, self.bt_switch, self.bt_list = self.page(
-            "Bluetooth", self.set_bt, "More Bluetooth settings", "blueman-manager")
+            "Bluetooth", self.set_bt, "More Bluetooth settings", "blueman-manager",
+            on_rescan=self.search_bt)
         return page
+
+    def build_sound(self):
+        page, _sw, self.sound_list = self.page(
+            "Sound output", None, "More volume settings", "pavucontrol")
+        return page
+
+    @staticmethod
+    def show_rescan(lst, show):
+        """The "search again" button: only when the radio is on and no search runs."""
+        if lst.rescan:
+            lst.rescan.set_opacity(1 if show else 0)
+            lst.rescan.set_can_target(show)
+            lst.rescan.set_can_focus(show)
 
     # ── show / hide ──
     def toggle(self, page="main"):
@@ -1123,6 +1295,7 @@ class QuickSettings:
         self.win.set_visible(False)
         self.backdrop.set_visible(False)
         self.backdrop_for = None
+        self.stop_bt_search()
 
     # The start menu (rofi) uses the same click catcher: clicking anywhere
     # outside closes it, like on Windows.
@@ -1158,6 +1331,8 @@ class QuickSettings:
             self.shell.calendar.hide()
         elif self.backdrop_for == "tray":
             self.shell.taskbar.close_overflow()
+        elif self.backdrop_for == "clipboard":
+            self.shell.clip.hide()
         else:
             self.hide()
 
@@ -1175,13 +1350,25 @@ class QuickSettings:
         self.win.queue_resize()
 
     def open_page(self, name):
+        if name != "bluetooth":
+            self.stop_bt_search()
+        if name == "wifi":
+            self.wifi_list.seen.clear()
+        elif name == "bluetooth":
+            self.bt_list.seen.clear()
+        elif name == "sound":
+            self.sound_list.seen.clear()
         self.stack.set_visible_child_name(name)
         if self.stack.get_transition_type() == Gtk.StackTransitionType.NONE:
             self.fit()
         if name == "wifi":
             self.load_wifi(rescan=True)
         elif name == "bluetooth":
+            self.bt_shown = None
             self.load_bt()
+            self.search_bt()
+        elif name == "sound":
+            self.load_sound()
 
     # ── state ──
     def refresh(self):
@@ -1233,8 +1420,8 @@ class QuickSettings:
             self.set_tile("bt", st["bt"], st["bt_dev"] or "Bluetooth")
             self.set_tile("airplane", st["airplane"])
             self.set_tile("dnd", st["dnd"])
-            self.wifi_switch.set_active(st["wifi"])
-            self.bt_switch.set_active(st["bt"])
+            self.sync_switch(self.wifi_switch, st["wifi"])
+            self.sync_switch(self.bt_switch, st["bt"])
             recent = time.monotonic() - self.last_slide < 1.5
             if st["bright"] is None:
                 self.bright_row.set_visible(False)
@@ -1254,9 +1441,19 @@ class QuickSettings:
         finally:
             self.updating = False
 
-    def want(self, key, on):
+    def sync_switch(self, sw, on):
+        """Knob and colour to `on`, without acting on it."""
+        was, self.updating = self.updating, True
+        try:
+            if sw.get_active() != on:
+                sw.set_active(on)
+            sw.set_state(on)
+        finally:
+            self.updating = was
+
+    def want(self, key, on, hold=4):
         """Show a clicked tile's new state right away (before it is applied)."""
-        self.wanted[key] = (on, time.monotonic() + 4)
+        self.wanted[key] = (on, time.monotonic() + hold)
         self.state[key] = on
         self.set_tile(key, on)
 
@@ -1280,23 +1477,88 @@ class QuickSettings:
         self.set_wifi(not self.state.get("wifi"))
 
     def set_wifi(self, on):
-        self.want("wifi", on)
-        bg(lambda: ok(f"nmcli radio wifi {'on' if on else 'off'}"),
-           lambda _r: (self.refresh(), self.later(lambda: self.load_wifi(True), 1500)
-                       if self.stack.get_visible_child_name() == "wifi" else None))
+        self.want("wifi", on, 8)
+        self.sync_switch(self.wifi_switch, on)
+        self.wifi_gen = getattr(self, "wifi_gen", 0) + 1     # a running scan's result is stale now
+        gen = self.wifi_gen
+        self.wifi_list.dots.stop()
+        self.show_rescan(self.wifi_list, False)
+        if self.stack.get_visible_child_name() == "wifi":
+            clear(self.wifi_list)
+            self.wifi_list.append(label("Looking for networks…" if on else "Wi-Fi is turned off",
+                                        "empty-text", xalign=0.5))
+            if on:
+                self.wifi_list.dots.start(delay=0)
+
+        def after(_r):
+            if gen != self.wifi_gen:            # switched again meanwhile
+                return
+            self.refresh()
+            if self.stack.get_visible_child_name() == "wifi":
+                if on:
+                    self.later(lambda: gen == self.wifi_gen and self.load_wifi(True), 1500)
+                else:
+                    self.load_wifi()
+        bg(lambda: ok(f"nmcli radio wifi {'on' if on else 'off'}"), after)
 
     def toggle_bt(self):
         self.set_bt(not self.state.get("bt"))
 
     def set_bt(self, on):
-        self.want("bt", on)
-
-        def run():
+        self.want("bt", on, 10)
+        self.sync_switch(self.bt_switch, on)
+        self.stop_bt_search()
+        self.bt_op = getattr(self, "bt_op", 0) + 1
+        op = self.bt_op
+        self.bt_shown = None
+        self.show_rescan(self.bt_list, False)
+        if self.stack.get_visible_child_name() == "bluetooth":
+            clear(self.bt_list)
+            self.bt_list.append(label("Searching for devices…" if on else "Bluetooth is turned off",
+                                      "empty-text", xalign=0.5))
             if on:
-                ok("rfkill unblock bluetooth")
-            return ok(["bluetoothctl", "power", "on" if on else "off"], timeout=5)
-        bg(run, lambda _r: (self.refresh(), self.load_bt()
-                            if self.stack.get_visible_child_name() == "bluetooth" else None))
+                self.bt_list.dots.start(delay=0)    # searching starts with the switch, not seconds later
+
+        def after(r):
+            if op != self.bt_op:                    # switched again meanwhile: that one decides
+                return
+            if not r:
+                self.wanted.pop("bt", None)         # didn't work: show the real state again
+            self.refresh()
+            if on and r:
+                self.state["bt"] = True
+                if self.stack.get_visible_child_name() == "bluetooth":
+                    self.search_bt()                # just turned on: look for devices right away
+                    return
+            self.bt_list.dots.stop()
+            if self.stack.get_visible_child_name() == "bluetooth":
+                self.load_bt()
+        bg(lambda: self.bt_power(on), after)
+
+    BT_LOCK = threading.Lock()          # one switch at a time: the last click wins
+
+    @staticmethod
+    def bt_power(on):
+        """Switch Bluetooth on/off and wait until it really is. After "rfkill
+        unblock" the controller only shows up a moment later – powering it on
+        right away failed, so it took a second click."""
+        with QuickSettings.BT_LOCK:
+            return QuickSettings._bt_power(on)
+
+    @staticmethod
+    def _bt_power(on):
+        if on:
+            ok("rfkill unblock bluetooth")
+            for _ in range(50):
+                if "Controller" in sh(["bluetoothctl", "list"], timeout=3):
+                    break
+                time.sleep(0.1)
+        for _ in range(6):
+            ok(["bluetoothctl", "power", "on" if on else "off"], timeout=5)
+            if ("Powered: yes" in sh(["bluetoothctl", "show"], timeout=3)) == on:
+                return True
+            time.sleep(0.4)
+        return False
 
     # Like Windows, airplane mode remembers which radios were on and turns
     # exactly those back on afterwards. Unblocking Bluetooth makes bluez
@@ -1377,8 +1639,21 @@ class QuickSettings:
         if self.nets:
             self.show_wifi(self.nets)
         bg(lambda: self.scan_wifi(False), self.show_wifi)
-        if rescan:
-            bg(lambda: self.scan_wifi(True), self.show_wifi)
+        on = self.state.get("wifi", True)
+        if rescan and on:                                   # a real scan takes a few seconds
+            gen = getattr(self, "wifi_gen", 0)
+            self.wifi_list.dots.start()
+            self.show_rescan(self.wifi_list, False)
+
+            def done(nets):
+                if gen != getattr(self, "wifi_gen", 0):     # Wi-Fi switched meanwhile
+                    return
+                self.wifi_list.dots.stop()
+                self.show_wifi(nets)
+                self.show_rescan(self.wifi_list, bool(self.state.get("wifi", True)))
+            bg(lambda: self.scan_wifi(True), done)
+        elif not self.wifi_list.dots.running:
+            self.show_rescan(self.wifi_list, bool(on))
 
     @staticmethod
     def scan_wifi(rescan):
@@ -1429,8 +1704,20 @@ class QuickSettings:
         if not nets:
             self.wifi_list.append(label("Looking for networks…", "empty-text", xalign=0.5))
             return
-        for n in nets:
-            self.wifi_list.append(self.wifi_row(n))
+        self.add_rows(self.wifi_list, [(n["ssid"], self.wifi_row(n)) for n in nets])
+
+    @staticmethod
+    def add_rows(lst, rows):
+        """Rows that weren't there before glide in, one shortly after the
+        other (rows already shown just stay)."""
+        new = 0
+        for key, row in rows:
+            if key not in lst.seen:
+                row.add_css_class("appear")
+                row.add_css_class(f"appear-{min(new, 8)}")
+                new += 1
+                lst.seen.add(key)
+            lst.append(row)
 
     def wifi_row(self, n):
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
@@ -1486,7 +1773,7 @@ class QuickSettings:
                 entry.grab_focus()
                 return
             btn.set_sensitive(False)
-            btn.get_child().set_text("Connecting…")
+            busy_button(btn, "Connecting…")
             msg.set_visible(False)
 
             def run():
@@ -1531,7 +1818,7 @@ class QuickSettings:
             def done(res):
                 success, out = res if isinstance(res, tuple) else (res, "")
                 btn.set_sensitive(True)
-                btn.get_child().set_text("Connect")
+                busy_button(btn, None, "Connect")
                 if success:
                     self.refresh()
                     self.load_wifi()
@@ -1595,33 +1882,106 @@ class QuickSettings:
     def load_bt(self):
         bg(self.scan_bt, self.show_bt)
 
+    BT_SEARCH = 15                  # s
+
+    def search_bt(self):
+        """Look for devices nearby (like Windows when Bluetooth is turned on
+        or its page opens): the dots run, the list fills as they turn up.
+        Turning Bluetooth off, leaving the page or closing stops it."""
+        if getattr(self, "bt_searching", False) or not self.state.get("bt"):
+            return
+        self.bt_searching = True
+        self.bt_search_gen = gen = getattr(self, "bt_search_gen", 0) + 1
+        self.bt_list.dots.start(delay=0)
+        self.show_rescan(self.bt_list, False)
+        self.bt_shown = None
+
+        def tick():
+            if not self.bt_searching or gen != self.bt_search_gen:
+                return False
+            self.load_bt()
+            return True
+        GLib.timeout_add(1500, tick)
+
+        def run():
+            try:
+                p = subprocess.Popen(["bluetoothctl", "--timeout", str(self.BT_SEARCH), "scan", "on"],
+                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            except OSError:
+                return
+            self.bt_proc = p
+            try:
+                p.wait(timeout=self.BT_SEARCH + 5)
+            except subprocess.TimeoutExpired:
+                p.kill()
+
+        def done(_r):
+            if gen != self.bt_search_gen:          # stopped (or a new search) meanwhile
+                return
+            self.bt_proc = None
+            self.bt_searching = False
+            self.bt_list.dots.stop()
+            self.bt_shown = None
+            self.load_bt()
+        bg(run, done)
+
+    def stop_bt_search(self):
+        self.bt_search_gen = getattr(self, "bt_search_gen", 0) + 1
+        self.bt_searching = False
+        self.bt_list.dots.stop()
+        p, self.bt_proc = getattr(self, "bt_proc", None), None
+        if p and p.poll() is None:
+            p.terminate()                           # bluez ends the discovery with it
+
     @staticmethod
     def scan_bt():
         def devs(kind):
             res = []
-            for l in sh(["bluetoothctl", "devices", kind], timeout=4).splitlines():
+            for l in sh(["bluetoothctl", "devices"] + ([kind] if kind else []), timeout=4).splitlines():
                 p = l.split(" ", 2)
                 if len(p) == 3 and p[0] == "Device":
                     res.append((p[1], p[2]))
             return res
         connected = {m for m, _ in devs("Connected")}
+        paired = dict(devs("Paired"))
         out = []
-        for mac, name in devs("Paired"):
+        for mac, name in devs(""):                   # all known, also found while searching
+            if mac not in paired and re.fullmatch(r"([0-9A-F]{2}-){5}[0-9A-F]{2}", name):
+                continue                            # nearby, but no name: skip like Windows
             info = sh(["bluetoothctl", "info", mac], timeout=3)
             ic = re.search(r"Icon: (\S+)", info)
-            out.append({"mac": mac, "name": name, "connected": mac in connected,
+            out.append({"mac": mac, "name": name, "connected": mac in connected, "paired": mac in paired,
                         "audio": bool(ic and "audio" in ic.group(1))})
-        return sorted(out, key=lambda d: (not d["connected"], d["name"].lower()))
+        return sorted(out, key=lambda d: (not d["connected"], not d["paired"], d["name"].lower()))
 
     def show_bt(self, devices):
+        """Like Windows: devices used before first, below them "New devices"
+        found by the search."""
+        on = bool(self.state.get("bt", True))
+        searching = on and getattr(self, "bt_searching", False)
+        if self.stack.get_visible_child_name() == "bluetooth":
+            self.show_rescan(self.bt_list, on and not searching)
+        key = (on, searching, json.dumps(devices, sort_keys=True))
+        if key == getattr(self, "bt_shown", None):
+            return                                  # nothing changed: don't rebuild (no flicker)
+        self.bt_shown = key
         clear(self.bt_list)
-        if not self.state.get("bt", True):
+        if not on:
             self.bt_list.append(label("Bluetooth is turned off", "empty-text", xalign=0.5))
             return
-        if not devices:
-            self.bt_list.append(label("No paired devices", "empty-text", xalign=0.5))
-        for d in devices:
-            self.bt_list.append(self.bt_row(d))
+        known = [d for d in devices if d["paired"]]
+        new = [d for d in devices if not d["paired"]]
+        rows = [(d["mac"], self.bt_row(d)) for d in known]
+        if known:
+            sep = Gtk.Separator()
+            sep.add_css_class("qs-sep")
+            rows.append(("--sep", sep))
+        rows.append(("--new", label("New devices", "section-title")))
+        rows += [(d["mac"], self.bt_row(d)) for d in new]
+        if not new:
+            rows.append(("--none", label("Searching for devices…" if searching else "No new devices found",
+                                         "empty-text", "empty-small", xalign=0.5)))
+        self.add_rows(self.bt_list, rows)
 
     def bt_row(self, d):
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
@@ -1631,19 +1991,33 @@ class QuickSettings:
         txt = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         txt.set_hexpand(True)
         txt.append(label(d["name"], "net-name"))
-        txt.append(label("Connected" if d["connected"] else "Paired", "net-status"))
+        txt.append(label("Connected" if d["connected"] else "Paired" if d.get("paired", True)
+                         else "Ready to pair", "net-status"))
         top.append(txt)
         box.append(top)
 
         rev = Gtk.Revealer(transition_type=Gtk.RevealerTransitionType.SLIDE_DOWN, transition_duration=120)
+        if getattr(self, "bt_open", None) == d["mac"]:     # was open before the list refreshed
+            rev.set_transition_duration(0)
+            rev.set_reveal_child(True)
+            box.add_css_class("expanded")
+            rev.set_transition_duration(120)
         actions = Gtk.Box(halign=Gtk.Align.END)
-        verb = "disconnect" if d["connected"] else "connect"
+        verb = "disconnect" if d["connected"] else "connect" if d.get("paired", True) else "pair"
+
+        def act():
+            if verb != "pair":
+                return ok(["bluetoothctl", verb, d["mac"]], timeout=20)
+            # new device: pair, trust (reconnects by itself later), connect
+            return (ok(["bluetoothctl", "pair", d["mac"]], timeout=30)
+                    and ok(["bluetoothctl", "trust", d["mac"]], timeout=5)
+                    and ok(["bluetoothctl", "connect", d["mac"]], timeout=20))
 
         def run_action(*_):
             btn.set_sensitive(False)
-            btn.get_child().set_text("Disconnecting…" if d["connected"] else "Connecting…")
-            bg(lambda: ok(["bluetoothctl", verb, d["mac"]], timeout=20),
-               lambda _r: (self.refresh(), self.load_bt()))
+            busy_button(btn, {"disconnect": "Disconnecting…", "connect": "Connecting…",
+                              "pair": "Pairing…"}[verb])
+            bg(act, lambda _r: (self.refresh(), self.load_bt()))
         btn = button(verb.capitalize(), "plain-btn" if d["connected"] else "accent-btn", on_click=run_action)
         actions.append(btn)
         rev.set_child(actions)
@@ -1659,10 +2033,68 @@ class QuickSettings:
                     row.remove_css_class("expanded")
             rev.set_reveal_child(opening)
             (box.add_css_class if opening else box.remove_css_class)("expanded")
+            self.bt_open = d["mac"] if opening else None
         click.connect("released", toggle_row)
         top.add_controller(click)
         box.rev = rev
         return box
+
+    # ── Sound output page (the ">" next to the volume, like Windows) ──
+    def load_sound(self):
+        bg(self.scan_sinks, self.show_sinks)
+
+    @staticmethod
+    def scan_sinks():
+        try:
+            sinks = json.loads(sh(["pactl", "-f", "json", "list", "sinks"], timeout=5) or "[]")
+        except ValueError:
+            sinks = []
+        default = sh(["pactl", "get-default-sink"], timeout=3).strip()
+        out = []
+        for s in sinks:
+            p = s.get("properties", {})
+            dev = p.get("device.description") or s.get("description") or s.get("name", "")
+            port = p.get("device.profile.description", "")
+            name = f"{port} ({dev})" if p.get("device.api") == "alsa" and port else (s.get("description") or dev)
+            what = f"{s.get('name', '')} {port} {p.get('device.icon_name', '')} {p.get('device.form_factor', '')}".lower()
+            ic = ("win11-monitor" if "hdmi" in what or "displayport" in what else
+                  "win11-headphones" if any(k in what for k in ("headphone", "headset", "bluez", "hands-free"))
+                  else "win11-speaker")
+            out.append({"name": s.get("name", ""), "label": name, "icon": ic, "default": s.get("name") == default})
+        return out
+
+    def show_sinks(self, sinks):
+        clear(self.sound_list)
+        self.sound_list.append(label("Output device", "section-title"))
+        if not sinks:
+            self.sound_list.append(label("No output devices", "empty-text", xalign=0.5))
+            return
+        rows = []
+        for d in sinks:
+            row = Gtk.Box(spacing=12)
+            row.add_css_class("net")
+            row.add_css_class("sink")
+            if d["default"]:
+                row.add_css_class("selected")
+            bar = Gtk.Box(valign=Gtk.Align.CENTER)
+            bar.add_css_class("sel-bar")
+            row.append(bar)
+            row.append(icon(d["icon"], 20))
+            lbl = label(d["label"], "net-name")
+            lbl.set_hexpand(True)
+            row.append(lbl)
+            click = Gtk.GestureClick()
+            click.connect("released", lambda *_a, d=d, row=row: self.pick_sink(d, row))
+            row.add_controller(click)
+            rows.append((d["name"], row))
+        self.add_rows(self.sound_list, rows)
+
+    def pick_sink(self, d, row):
+        for r in self.iter_children(self.sound_list):
+            r.remove_css_class("selected")
+        row.add_css_class("selected")               # right away, like Windows
+        bg(lambda: ok(["pactl", "set-default-sink", d["name"]], timeout=5),
+           lambda _r: (self.refresh(), self.load_sound()))
 
 
 # ── Calendar flyout (click on the clock, like Windows 11) ──────────────────
@@ -1686,8 +2118,24 @@ class CalendarFlyout:
         panel.add_css_class("flyout")
         panel.set_overflow(Gtk.Overflow.HIDDEN)
         self.panel = panel
-        self.head = label("", "cal-head")
-        panel.append(self.head)
+        # header: the date and, like Windows, an arrow that folds the month away
+        head = Gtk.Box()
+        head.add_css_class("cal-head")
+        self.head = label("", "cal-date")
+        self.head.set_hexpand(True)
+        self.head.set_valign(Gtk.Align.CENTER)
+        head.append(self.head)
+        self.fold_img = icon("win11-chevron-down", 12)
+        fold = button(self.fold_img, "boxed-btn", on_click=self.toggle_fold)
+        fold.set_valign(Gtk.Align.CENTER)
+        head.append(fold)
+        panel.append(head)
+        self.folded = bool(ncplace.load().get("folded"))
+        self.fold_img.set_from_icon_name("win11-chevron-up" if self.folded else "win11-chevron-down")
+        if self.folded:
+            head.add_css_class("folded")
+        self.head_box = head
+        self.placed_for = ncplace.load().get("height")      # swaync was started for this
 
         nav = Gtk.Box()
         nav.add_css_class("cal-nav")
@@ -1696,7 +2144,6 @@ class CalendarFlyout:
         nav.append(self.month_lbl)
         nav.append(button(icon("win11-chevron-up", 12), "flat-btn", on_click=lambda: self.shift(-1)))
         nav.append(button(icon("win11-chevron-down", 12), "flat-btn", on_click=lambda: self.shift(1)))
-        panel.append(nav)
 
         self.grid = Gtk.Grid(column_homogeneous=True, row_homogeneous=True, column_spacing=2, row_spacing=2)
         self.grid.add_css_class("cal-grid")
@@ -1717,7 +2164,16 @@ class CalendarFlyout:
                 cell.set_halign(Gtk.Align.CENTER)
                 self.grid.attach(cell, c + 1, r + 1, 1, 1)
                 self.cells.append(cell)
-        panel.append(self.grid)
+        month = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        month.add_css_class("cal-body")
+        month.append(nav)
+        month.append(self.grid)
+        self.month_box = month
+        self.body = Gtk.Revealer(transition_type=Gtk.RevealerTransitionType.SLIDE_UP,
+                                 transition_duration=200, reveal_child=not self.folded)
+        self.body.set_child(month)
+        self.body.connect("notify::child-revealed", lambda *_: self.folded_done())
+        panel.append(self.body)
         self.win.set_child(panel)
 
         # mouse wheel / touchpad: one notch = one month
@@ -1730,24 +2186,66 @@ class CalendarFlyout:
         # (it opens a moment later); when it closes – Escape, a click
         # outside – the calendar closes with it.
         self.nc_open = False
+        self.nc_empty = None                # notifications there? (panel size)
         threading.Thread(target=self.watch_notification_center, daemon=True).start()
 
     def watch_notification_center(self):
         while True:
             try:
                 proc = subprocess.Popen(["swaync-client", "-s"], stdout=subprocess.PIPE,
-                                        stderr=subprocess.DEVNULL, text=True)
+                                        stderr=subprocess.DEVNULL, text=True,
+                                        preexec_fn=die_with_parent)
                 for line in proc.stdout:
                     try:
-                        visible = bool(json.loads(line).get("visible"))
+                        info = json.loads(line)
                     except ValueError:
                         continue
+                    visible = bool(info.get("visible"))
+                    empty = not info.get("count")
+                    if empty != self.nc_empty:
+                        # nothing to show: smaller panel; something arrived: full size
+                        self.nc_empty = empty
+                        ncplace.save(empty=empty)
+                        ncplace.sync()
                     if self.nc_open and not visible:
                         GLib.idle_add(lambda: self.hide() and False)
                     self.nc_open = visible
             except OSError:
                 pass
             time.sleep(2)            # swaync restarted or not running yet
+
+    MIN_HEIGHT = 40             # px; anything smaller is a bogus measurement
+
+    # ── fold the month away (the arrow in the header), like Windows ──
+    def toggle_fold(self):
+        self.folded = not self.folded
+        ncplace.save(folded=self.folded)
+        self.fold_img.set_from_icon_name("win11-chevron-up" if self.folded else "win11-chevron-down")
+        (self.head_box.add_css_class if self.folded else self.head_box.remove_css_class)("folded")
+        # the notification center moves right away, together with the month
+        self.place_notifications(self.height(open_=not self.folded))
+        self.body.set_reveal_child(not self.folded)
+
+    def height(self, open_):
+        """How tall the calendar is folded / unfolded."""
+        whole = self.panel.measure(Gtk.Orientation.VERTICAL, -1)[1]
+        body = self.body.measure(Gtk.Orientation.VERTICAL, -1)[1]
+        month = self.month_box.measure(Gtk.Orientation.VERTICAL, -1)[1]
+        return whole - body + (month if open_ else 0)
+
+    def folded_done(self):
+        if self.body.get_child_revealed() == (not self.folded):
+            self.win.set_default_size(1, 1)         # a layer surface doesn't shrink by itself
+            self.win.queue_resize()
+
+    def place_notifications(self, height):
+        if not self.win.get_mapped() or height < self.MIN_HEIGHT:
+            return                                  # not measurable yet: keep the last good place
+        if height == getattr(self, "placed_for", None):
+            return
+        self.placed_for = height
+        ncplace.save(height=height)
+        bg(ncplace.sync)
 
     def on_scroll(self, _c, _dx, dy):
         if dy:
@@ -1791,6 +2289,11 @@ class CalendarFlyout:
         self.visible = True
         self.shell.qs.catcher_for("calendar")
         slide_in(self.panel)
+        # measured once the window is up: before its first showing the
+        # calendar reported a far too small height, and the notification
+        # center was placed over it
+        GLib.timeout_add(60, lambda: self.visible and self.place_notifications(
+            self.height(open_=not self.folded)) and False)
         spawn("swaync-client -op")     # notification center sits right above
         # take the keyboard (after swaync opened) so Escape closes both
         LS.set_keyboard_mode(self.win, LS.KeyboardMode.EXCLUSIVE)
@@ -2066,14 +2569,13 @@ class StartMenu:
         foot = Gtk.Box()
         foot.add_css_class("start-footer")
         user = Gtk.Box(spacing=12)
-        avatar = icon("win11-user", 18)
-        avatar.add_css_class("avatar")
-        user.append(avatar)
-        user.append(label(os.environ.get("USER", "User"), "start-user"))
+        self.user_box = user
+        self.user_pic = None                        # your profile picture (~/.face)
+        self.refresh_avatar()
+        user.append(label(display_name(), "start-user"))
         ub = Gtk.MenuButton(child=user, direction=Gtk.ArrowType.UP)
         ub.add_css_class("start-btn")
-        ub.set_popover(self.menu([("win11-lock", "Lock", "Lock"),
-                                  ("win11-signout", "Sign out", "Sign out")]))
+        ub.set_popover(self.menu([("win11-signout", "Sign out", "Sign out")]))
         foot.append(ub)
         sp = Gtk.Box()
         sp.set_hexpand(True)
@@ -2090,6 +2592,20 @@ class StartMenu:
         pb.set_popover(self.menu(items))
         foot.append(pb)
         return foot
+
+    def refresh_avatar(self):
+        """(Re)load the profile picture – a new ~/.face shows up next time
+        the start menu opens."""
+        pic = profile_picture()
+        stamp = (pic, os.path.getmtime(pic) if pic else 0)
+        if self.user_pic is not None and getattr(self, "pic_stamp", None) == stamp:
+            return
+        self.pic_stamp = stamp
+        new = avatar(28)
+        if self.user_pic is not None:
+            self.user_box.remove(self.user_pic)
+        self.user_box.prepend(new)
+        self.user_pic = new
 
     def menu(self, items):
         pop = Gtk.Popover(has_arrow=False)
@@ -2222,6 +2738,7 @@ class StartMenu:
         self.hide() if self.visible else self.show()
 
     def show(self):
+        self.refresh_avatar()
         if self.shell.qs.visible:
             self.shell.qs.hide()
         if self.shell.calendar.visible:
@@ -2604,6 +3121,182 @@ class DesktopAnim:
             self.canvas.remove_tick_callback(self.tick)
             self.tick = 0
         self.close()
+
+
+# ── Clipboard history (Win + V) ─────────────────────────────────────────────
+CLIP_DIR = os.path.join(os.environ.get("XDG_CACHE_HOME", os.path.expanduser("~/.cache")), "winshell", "clipboard")
+TERMINALS = {"kitty", "foot", "alacritty", "org.wezfurlong.wezterm", "com.mitchellh.ghostty",
+             "org.gnome.Console", "org.gnome.Ptyxis", "konsole"}
+
+
+class ClipboardPanel:
+    """Like Windows 11's Win + V: what you copied lately (text and pictures),
+    newest first. Click (or Enter) pastes it where you were; Delete removes
+    one, "Clear all" everything. Stored by clipstore.py (wl-paste --watch)."""
+
+    def __init__(self, app, shell):
+        self.shell = shell
+        self.visible = False
+        self.target = None              # the window to paste into
+        self.rows = []
+        self.sel = 0
+        self.win = layer_window(app, "winshell-clipboard", LS.Layer.OVERLAY,
+                                anchors=(LS.Edge.BOTTOM, LS.Edge.RIGHT),
+                                margins={LS.Edge.BOTTOM: 12, LS.Edge.RIGHT: 12},
+                                keyboard=LS.KeyboardMode.EXCLUSIVE)
+        panel = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        panel.add_css_class("clip")
+        panel.add_css_class("flyout")
+        self.panel = panel
+        head = Gtk.Box()
+        head.add_css_class("clip-head")
+        head.append(label("Clipboard", "clip-title"))
+        sp = Gtk.Box(hexpand=True)
+        head.append(sp)
+        head.append(button("Clear all", "plain-btn", on_click=self.clear_all))
+        panel.append(head)
+        self.scroll = Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.NEVER,
+                                         propagate_natural_height=True, max_content_height=460)
+        self.list = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        self.list.add_css_class("clip-list")
+        self.scroll.set_child(self.list)
+        panel.append(self.scroll)
+        self.empty = label("Nothing here yet.\nText and pictures you copy show up here.",
+                           "clip-empty", xalign=0.5, ellipsize=False)
+        self.empty.set_justify(Gtk.Justification.CENTER)
+        panel.append(self.empty)
+        self.win.set_child(panel)
+        keys = Gtk.EventControllerKey()
+        keys.connect("key-pressed", self.on_key)
+        self.win.add_controller(keys)
+
+    @staticmethod
+    def entries():
+        try:
+            with open(os.path.join(CLIP_DIR, "index.json")) as f:
+                return [e for e in json.load(f) if os.path.exists(os.path.join(CLIP_DIR, e["file"]))]
+        except (OSError, ValueError):
+            return []
+
+    def toggle(self):
+        self.hide() if self.visible else self.show()
+
+    def show(self):
+        for other in (self.shell.start, self.shell.calendar, self.shell.qs):
+            if getattr(other, "visible", False):
+                other.hide()
+        self.target = hypr_json("activewindow") or {}
+        self.build()
+        self.visible = True
+        self.shell.qs.catcher_for("clipboard")
+        slide_in(self.panel)
+        self.win.present()
+
+    def hide(self):
+        self.visible = False
+        self.win.set_visible(False)
+        self.shell.qs.catcher_for(None)
+
+    def build(self):
+        clear(self.list)
+        self.rows = []
+        for e in self.entries():
+            path = os.path.join(CLIP_DIR, e["file"])
+            card = Gtk.Box(spacing=8)
+            card.add_css_class("clip-card")
+            if e["kind"] == "image":
+                pic = Gtk.Picture(content_fit=Gtk.ContentFit.CONTAIN, can_shrink=True, hexpand=True)
+                pic.set_filename(path)
+                pic.set_size_request(-1, 110)
+                pic.set_halign(Gtk.Align.START)
+                card.append(pic)
+            else:
+                try:
+                    text = open(path, encoding="utf-8", errors="replace").read(600)
+                except OSError:
+                    continue
+                lbl = Gtk.Label(label=text.strip(), xalign=0, wrap=True, lines=3, hexpand=True,
+                                ellipsize=Pango.EllipsizeMode.END, max_width_chars=40)
+                lbl.set_wrap_mode(Pango.WrapMode.WORD_CHAR)
+                lbl.add_css_class("clip-text")
+                card.append(lbl)
+            x = button(icon("win11-close", 12), "flat-btn", "clip-del", tooltip="Delete",
+                       on_click=lambda e=e: self.delete(e))
+            x.set_valign(Gtk.Align.START)
+            card.append(x)
+            click = Gtk.GestureClick()
+            click.connect("released", lambda *_a, e=e: self.paste(e))
+            card.add_controller(click)
+            card.entry = e
+            self.list.append(card)
+            self.rows.append(card)
+        self.empty.set_visible(not self.rows)
+        self.scroll.set_visible(bool(self.rows))
+        self.sel = 0
+        self.mark()
+
+    def mark(self):
+        for i, r in enumerate(self.rows):
+            (r.add_css_class if i == self.sel else r.remove_css_class)("selected")
+
+    def on_key(self, _c, keyval, _code, _state):
+        if keyval == Gdk.KEY_Escape:
+            self.hide()
+        elif keyval in (Gdk.KEY_Down, Gdk.KEY_Tab) and self.rows:
+            self.sel = min(len(self.rows) - 1, self.sel + 1)
+            self.mark()
+        elif keyval == Gdk.KEY_Up and self.rows:
+            self.sel = max(0, self.sel - 1)
+            self.mark()
+        elif keyval in (Gdk.KEY_Return, Gdk.KEY_KP_Enter) and self.rows:
+            self.paste(self.rows[self.sel].entry)
+        elif keyval == Gdk.KEY_Delete and self.rows:
+            self.delete(self.rows[self.sel].entry)
+        return True
+
+    def paste(self, e):
+        """Put it on the clipboard and paste it into the window you were in."""
+        path = os.path.join(CLIP_DIR, e["file"])
+        args = ["wl-copy", "--type", "image/png"] if e["kind"] == "image" else ["wl-copy"]
+        try:
+            with open(path, "rb") as f:
+                subprocess.Popen(args, stdin=f, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                 env=child_env(), start_new_session=True)
+        except OSError:
+            return
+        self.hide()
+        t = self.target or {}
+        if t.get("address"):
+            mods = "CTRL SHIFT" if t.get("class") in TERMINALS else "CTRL"
+            GLib.timeout_add(120, lambda: (dispatch(
+                f'hl.dsp.send_shortcut({{ mods = "{mods}", key = "V", window = "address:{t["address"]}" }})'), False)[1])
+
+    def write(self, entries):
+        tmp = os.path.join(CLIP_DIR, "index.json.tmp")
+        with open(tmp, "w") as f:
+            json.dump(entries, f)
+        os.replace(tmp, os.path.join(CLIP_DIR, "index.json"))
+
+    def delete(self, e):
+        entries = [x for x in self.entries() if x["file"] != e["file"]]
+        try:
+            os.unlink(os.path.join(CLIP_DIR, e["file"]))
+        except OSError:
+            pass
+        self.write(entries)
+        keep = self.sel
+        self.build()
+        self.sel = min(keep, max(0, len(self.rows) - 1))
+        self.mark()
+
+    def clear_all(self):
+        for e in self.entries():
+            try:
+                os.unlink(os.path.join(CLIP_DIR, e["file"]))
+            except OSError:
+                pass
+        self.write([])
+        self.build()
 
 
 # ── Taskbar (replaces Waybar) ───────────────────────────────────────────────
@@ -3321,6 +4014,7 @@ class WinShell(Gtk.Application):
     def do_startup(self):
         Gtk.Application.do_startup(self)
         self.hold()
+        crisp_text()
         # winshell-ctl starts us with LD_PRELOAD=libgtk4-layer-shell and
         # LC_TIME=en_GB. Both are in effect now (GTK has set the locale), so
         # drop them from the environment: apps launched from the start menu
@@ -3343,6 +4037,7 @@ class WinShell(Gtk.Application):
         self.osd = OSD(self)
         self.snap = SnapPreview(self)
         self.desk = DesktopAnim(self, self)
+        self.clip = ClipboardPanel(self, self)
         self.start = StartMenu(self, self)
         self.calendar = CalendarFlyout(self, self)
         self.taskbar = Taskbar(self, self)
@@ -3431,10 +4126,12 @@ class WinShell(Gtk.Application):
         elif what == "qs":
             if arg == "hide":
                 self.qs.hide()
-            elif arg in ("main", "wifi", "bluetooth"):
+            elif arg in ("main", "wifi", "bluetooth", "sound"):
                 self.qs.show(arg)
             else:
                 self.qs.toggle()
+        elif what == "clipboard":               # Win + V
+            self.clip.hide() if arg == "hide" else self.clip.toggle()
         elif what == "desk":                    # hyprland.lua: minimize / show desktop animation
             if arg in ("out", "in") and len(args) > 3 and args[2].isidentifier() and args[3].isdigit():
                 self.desk.run(arg, args[2], int(args[3]), args[4:])

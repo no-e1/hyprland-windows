@@ -29,53 +29,93 @@
 .control-center-list,
 .control-center-list-placeholder { background: transparent; }
 
-/* ── Header: "Notifications" + "Clear all" on one line ────────── */
+/* ── Header like Windows 11: "Notifications", [Clear all], bell ─ */
 .widget-title {
     margin: 0;
-    padding: 18px 18px 6px 20px;
+    padding: 14px 48px 10px 20px;      /* room on the right for the bell */
+    min-height: 32px;
     font-size: 14px;
-    font-weight: 600;
+    font-weight: 400;
 }
-.widget-title > label { margin: 0; }
+.widget-title > label { margin: 0; font-size: 14px; }
 .widget-title > button {
-    margin: 0;
-    padding: 3px 12px;
-    min-height: 0;
+    /* same look and height as the bell next to it */
+    margin: 0 8px 0 0;
+    padding: 0 14px;
+    min-height: 30px;
     font-size: 12px;
     font-weight: 400;
+    color: @fg;
     border-radius: 4px;
     background: @card;
     border: 1px solid @border;
     box-shadow: none;
+    transition: opacity 120ms ease-out, background-color 120ms ease-out;
 }
-.widget-title > button:hover { background: @card-hover; }
+.widget-title > button label { font-size: 12px; font-weight: 400; }
+.widget-title > button:hover { background: rgba(255, 255, 255, 0.1); }
+.widget-title > button:active { background: rgba(255, 255, 255, 0.03); color: @fg-dim; }
+.widget-title > button:disabled { opacity: 0; }   /* only when there is something to clear */
 
-.widget-dnd {
-    margin: 0;
-    padding: 6px 18px 12px 20px;
-    color: @fg-dim;
-    font-size: 12px;
-    border-bottom: 1px solid @border;
-}
-.widget-dnd > switch {
-    min-width: 38px;
-    min-height: 18px;
-    border-radius: 999px;
+/* "Do not disturb": the bell button in the header's right corner (the
+   buttons-grid is its own row below the title, pulled up into it) */
+.widget-buttons-grid {
+    /* only as wide as the bell: a full-width row lying over the title
+       swallowed the clicks on "Clear all" */
+    margin: -42px 16px 10px 330px;       /* right corner (panel is 378 px wide) */
+    padding: 0;
     background: transparent;
-    border: 1px solid rgba(255, 255, 255, 0.6);
+}
+.control-center .widget-buttons-grid flowboxchild,
+.control-center .widget-buttons-grid flowboxchild:hover,
+.control-center .widget-buttons-grid flowboxchild:focus,
+.control-center .widget-buttons-grid flowboxchild:selected {
+    /* the hover shade belongs to the button only, not to the cell around it */
+    padding: 0;
+    margin: 0;
+    min-height: 0;
+    background: transparent;
+    outline: none;
     box-shadow: none;
 }
-.widget-dnd > switch:checked { background: @accent; border-color: @accent; }
-.widget-dnd > switch slider {
-    min-width: 12px;
-    min-height: 12px;
-    margin: 2px;
-    border-radius: 999px;
-    background: rgba(255, 255, 255, 0.8);
+/* the visible frame is the flowbox (swaync gives it a shape of its own);
+   the button inside only carries the bell, hover and the "on" colour */
+.control-center .widget-buttons-grid flowbox {
+    margin: 0;
+    padding: 0;
+    min-width: 30px;
+    min-height: 0;
+    border-radius: 4px;
+    background: @card;
+    border: 1px solid @border;
+}
+.control-center .widget-buttons-grid flowbox:hover { background: rgba(255, 255, 255, 0.1); }
+.control-center .widget-buttons-grid flowboxchild > button {
+    margin: 0;
+    padding: 0;
+    min-width: 30px;
+    min-height: 30px;
+    border-radius: 3px;
     border: none;
     box-shadow: none;
+    background-color: transparent;
+    background-image: -gtk-icontheme("win11-bell-snooze");
+    background-size: 16px 16px;
+    background-repeat: no-repeat;
+    background-position: center;
 }
-.widget-dnd > switch:checked slider { background: #000000; }
+.control-center .widget-buttons-grid flowboxchild > button * { font-size: 1px; min-height: 0; padding: 0; margin: 0; }
+.control-center .widget-buttons-grid flowboxchild > button.toggle:checked,
+.control-center .widget-buttons-grid flowboxchild > button.active {
+    background-color: @accent;
+    background-image: -gtk-icontheme("win11-bell-snooze-dark");
+}
+
+/* no big gear when it's empty, just the text in the middle */
+/* the (hidden) picture still takes its room above the text: give it back,
+   so the text is in the middle of the panel */
+.control-center-list-placeholder image { -gtk-icon-size: 0; min-width: 0; min-height: 0; opacity: 0; margin-top: -96px; }
+.control-center-list-placeholder label { color: @fg; font-size: 13px; }
 
 /* ── Notifications ────────────────────────────────────────────── */
 /* cards use the full width of the panel (swaync itself keeps ~12 px at the
@@ -115,23 +155,41 @@
 .notification-default-action:hover { background: @card; }
 
 .summary { font-weight: 600; font-size: 13px; }
-.time { color: @fg-dim; font-size: 11px; margin-right: 34px; }
+/* the time sits at the right edge; the X only shows on hover (swaync), then
+   the time moves aside and stands right next to it */
+.time {
+    color: @fg-dim;
+    font-size: 11px;
+    font-weight: 400;
+    margin: 2px 0 0 0;
+    transition: margin 140ms ease-out;
+}
+.notification-row:hover .time { margin-right: 34px; }
 .body { color: @fg-dim; font-size: 12px; }
-.image { margin-right: 8px; }
+/* app icon: no extra room above/below, so a card with an icon is as tall as
+   one without and the title stays on the line of the time and the X */
+.notification-row .notification-background .notification .notification-default-action .notification-content .image {
+    margin: 0 10px 0 0;
+    -gtk-icon-size: 32px;
+}
 
 /* close (X) on a notification: a bigger target that's easy to hit */
 .close-button {
-    margin: 12px 12px 0 0;
+    /* thin X like Windows, centred on the line with the title and the time */
+    margin: 17px 10px 0 0;
     padding: 0;
-    min-width: 32px;
-    min-height: 32px;
-    border-radius: 6px;
+    min-width: 28px;
+    min-height: 28px;
+    border-radius: 4px;
     background: transparent;
     border: none;
     box-shadow: none;
-    -gtk-icon-size: 16px;
 }
-.close-button image { -gtk-icon-size: 16px; transform: scale(1.45); }
+.close-button image {
+    -gtk-icon-source: -gtk-icontheme("win11-close");
+    -gtk-icon-size: 14px;
+    color: @fg;
+}
 .close-button:hover { background: @card-hover; }
 
 .notification-action {
@@ -168,3 +226,8 @@
     background: transparent;
     box-shadow: none;
 }
+
+/* every layer inside the bell cell gets the button's small corners (one of
+   swaync's/libadwaita's inner nodes drew a bigger rounded shade on hover) */
+.control-center .widget-buttons-grid,
+.control-center .widget-buttons-grid * { border-radius: 4px; }

@@ -1,9 +1,4 @@
 #!/usr/bin/env bash
-# Clipboard history (Win + V)
-pkill -x rofi && exit 0
-if ! command -v cliphist >/dev/null; then
-    notify-send "Clipboard" "cliphist is not installed – history unavailable."
-    exit 0
-fi
-sel=$(cliphist list | rofi -dmenu -i -p "Clipboard" -display-columns 2 -theme "$HOME/.config/rofi/list.rasi")
-[ -n "$sel" ] && cliphist decode <<<"$sel" | wl-copy
+# Clipboard history (Win + V): winshell's panel, like Windows 11.
+# The history itself is kept by winshell/clipstore.py (wl-paste --watch).
+exec "$HOME/.config/hypr/winshell/winshell-ctl" clipboard

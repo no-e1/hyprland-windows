@@ -20,8 +20,13 @@ mkdir -p "$icons"
 for f in "$REPO"/icons/win11-*.svg; do
     ln -sf "$f" "$icons/$(basename "$f")"
 done
-gtk-update-icon-cache -q "$HOME/.local/share/icons/hicolor" 2>/dev/null || true
+gtk-update-icon-cache -f -t -q "$HOME/.local/share/icons/hicolor" 2>/dev/null || true   # a stale cache hides new icons
 "$REPO/tools/make-icon-theme.sh" >/dev/null || echo "Win11-dark icon theme missing – skipped Win11-modern"
+
+# swaync started by D-Bus uses the same placement as the autostart
+mkdir -p "$HOME/.config/systemd/user"
+ln -sfn "$REPO/systemd/swaync.service.d" "$HOME/.config/systemd/user/swaync.service.d"
+systemctl --user daemon-reload 2>/dev/null || true
 
 echo "Linked configs and icons."
 echo "Title bars: run tools/build-hyprbars.sh once (needs podman)."
