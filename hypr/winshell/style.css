@@ -583,3 +583,24 @@ button.boxed-btn {
     box-shadow: none;
 }
 button.boxed-btn:hover { background: rgba(255, 255, 255, 0.09); }
+
+/* Alt + F4 on the desktop: "Shut down?" in the middle of the screen */
+window.shutdown-backdrop { background: rgba(0, 0, 0, 0.35); }
+.shutdown-dialog {
+    min-width: 380px;
+    background: rgba(40, 40, 40, 0.98);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 8px;
+    box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
+}
+.shutdown-body { padding: 22px 24px 20px 24px; }
+.shutdown-title { font-size: 18px; font-weight: 600; }
+.shutdown-text { font-size: 13px; color: rgba(255, 255, 255, 0.85); margin-top: 6px; }
+.shutdown-foot {
+    padding: 18px 24px;
+    background: rgba(255, 255, 255, 0.03);
+    border-top: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 0 0 8px 8px;
+}
+.shutdown-foot button { min-height: 32px; }
+.shutdown-foot button:focus-visible { outline: 2px solid #ffffff; outline-offset: 1px; }

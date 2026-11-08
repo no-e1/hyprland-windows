@@ -24,7 +24,7 @@ if [ ! -f "$cache" ]; then
     then echo 1 > "$cache"; else echo 0 > "$cache"; fi
 fi
 if [ "$(cat "$cache")" = 1 ]; then
-    entries+=("Restart to Windows|computer")
+    entries+=("Restart to Windows|win11-windows")
 fi
 
 run() { setsid -f "$@" >/dev/null 2>&1; }

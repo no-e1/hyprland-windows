@@ -105,6 +105,9 @@ save("power", arc(12, 12.75, 7.75, 38, 322, W).replace('0 0 1', '0 1 1') + f'<pa
 save("user", f'<circle cx="12" cy="8.5" r="4" {st}/><path d="M4.5 20.5a7.5 7.5 0 0 1 15 0" {st}/>')
 save("sleep", f'<path d="M19.5 14.5A8 8 0 0 1 9.5 4.5a8 8 0 1 0 10 10z" {st}/>')
 save("restart", arc(12, 12, 7.75, 30, 330, W).replace('0 0 1', '0 1 1') + f'<path d="M8 4.2l3.3-.2-.3 3.4" {st}/>')
+# "Restart to Windows": the Windows logo, four filled panes
+save("windows", "".join(f'<rect x="{x}" y="{y}" width="8.1" height="8.1" fill="{W}"/>'
+                        for x in (3.5, 12.4) for y in (3.5, 12.4)))
 save("signout", f'<path d="M14 4.5H6.5a1.5 1.5 0 0 0-1.5 1.5v12a1.5 1.5 0 0 0 1.5 1.5H14M10 12h10.5M17.5 9l3 3-3 3" {st}/>')
 save("sun", f'<circle cx="12" cy="12" r="4" {st}/>' + "".join(
     f'<path d="M{12+7*math.sin(a):.2f} {12-7*math.cos(a):.2f}L{12+9.5*math.sin(a):.2f} {12-9.5*math.cos(a):.2f}" {st}/>'

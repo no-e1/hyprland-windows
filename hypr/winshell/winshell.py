@@ -2585,7 +2585,7 @@ class StartMenu:
                  ("win11-restart", "Restart", "Restart")]
         cache = os.path.expanduser("~/.cache/hypr-has-windows")
         if os.path.exists(cache) and open(cache).read().strip() == "1":
-            items.append(("win11-restart", "Restart to Windows", "Restart to Windows"))
+            items.append(("win11-windows", "Restart to Windows", "Restart to Windows"))
         pb = Gtk.MenuButton(child=icon("win11-power", 16), direction=Gtk.ArrowType.UP)
         pb.add_css_class("start-btn")
         pb.set_tooltip_text("Power")
@@ -3127,6 +3127,95 @@ class DesktopAnim:
 CLIP_DIR = os.path.join(os.environ.get("XDG_CACHE_HOME", os.path.expanduser("~/.cache")), "winshell", "clipboard")
 TERMINALS = {"kitty", "foot", "alacritty", "org.wezfurlong.wezterm", "com.mitchellh.ghostty",
              "org.gnome.Console", "org.gnome.Ptyxis", "konsole"}
+
+
+class ShutdownDialog:
+    """Alt + F4 on the desktop (no window focused), like Windows: "shut down?"
+    Enter or "Shut down" turns the computer off; Escape, "Cancel", a click
+    outside or Alt + F4 again close it."""
+
+    def __init__(self, app, shell):
+        self.shell = shell
+        self.visible = False
+        # full screen and dimmed behind, the box in the middle
+        self.win = layer_window(app, "winshell-shutdown", LS.Layer.OVERLAY,
+                                anchors=(LS.Edge.TOP, LS.Edge.BOTTOM, LS.Edge.LEFT, LS.Edge.RIGHT),
+                                keyboard=LS.KeyboardMode.EXCLUSIVE, exclusive=-1)
+        self.win.add_css_class("shutdown-backdrop")
+        outer = Gtk.Box(hexpand=True, vexpand=True)
+        outside = Gtk.GestureClick()
+        outside.connect("released", self.on_outside)
+        outer.add_controller(outside)
+
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0,
+                      halign=Gtk.Align.CENTER, valign=Gtk.Align.CENTER, hexpand=True)
+        box.add_css_class("shutdown-dialog")
+        box.add_css_class("flyout")
+        self.box = box
+        body = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        body.add_css_class("shutdown-body")
+        top = Gtk.Box(spacing=12)
+        top.append(icon("win11-power", 24))
+        top.append(label("Shut down", "shutdown-title"))
+        body.append(top)
+        text = label("Do you want to shut down this computer?\nOpen apps will be closed.",
+                     "shutdown-text", ellipsize=False)
+        text.set_wrap(True)
+        body.append(text)
+        box.append(body)
+
+        foot = Gtk.Box(spacing=8, homogeneous=True)
+        foot.add_css_class("shutdown-foot")
+        self.ok_btn = button("Shut down", "accent-btn", on_click=self.shut_down)
+        foot.append(self.ok_btn)
+        foot.append(button("Cancel", "plain-btn", on_click=self.hide))
+        box.append(foot)
+        outer.append(box)
+        self.win.set_child(outer)
+
+        keys = Gtk.EventControllerKey(propagation_phase=Gtk.PropagationPhase.CAPTURE)
+        keys.connect("key-pressed", self.on_key)
+        self.win.add_controller(keys)
+
+    def on_outside(self, gesture, _n, x, y):
+        b = self.box.compute_bounds(self.win.get_child())
+        if b[0] and not b[1].contains_point(Graphene.Point().init(x, y)):
+            self.hide()
+
+    def on_key(self, _c, keyval, _code, _state):
+        if keyval == Gdk.KEY_Escape:
+            self.hide()
+            return True
+        if keyval in (Gdk.KEY_Return, Gdk.KEY_KP_Enter):
+            focus = self.win.get_focus()
+            if isinstance(focus, Gtk.Button) and focus is not self.ok_btn:
+                focus.activate()            # Tab to "Cancel", then Enter: cancel
+            else:
+                self.shut_down()
+            return True
+        return False
+
+    def toggle(self):
+        self.hide() if self.visible else self.show()
+
+    def show(self):
+        for other in (self.shell.start, self.shell.calendar, self.shell.qs, self.shell.clip):
+            if getattr(other, "visible", False):
+                other.hide()
+        self.visible = True
+        slide_in(self.box)
+        self.win.present()
+        self.ok_btn.grab_focus()
+
+    def hide(self):
+        if not self.visible:
+            return
+        self.visible = False
+        self.win.set_visible(False)
+
+    def shut_down(self):
+        self.hide()
+        spawn(f"sleep 0.2; {SCRIPTS}/powermenu.sh 'Shut down'")
 
 
 class ClipboardPanel:
@@ -4038,6 +4127,7 @@ class WinShell(Gtk.Application):
         self.snap = SnapPreview(self)
         self.desk = DesktopAnim(self, self)
         self.clip = ClipboardPanel(self, self)
+        self.shutdown = ShutdownDialog(self, self)
         self.start = StartMenu(self, self)
         self.calendar = CalendarFlyout(self, self)
         self.taskbar = Taskbar(self, self)
@@ -4130,6 +4220,8 @@ class WinShell(Gtk.Application):
                 self.qs.show(arg)
             else:
                 self.qs.toggle()
+        elif what == "shutdown-dialog":         # Alt + F4 on the desktop
+            self.shutdown.hide() if arg == "hide" else self.shutdown.toggle()
         elif what == "clipboard":               # Win + V
             self.clip.hide() if arg == "hide" else self.clip.toggle()
         elif what == "desk":                    # hyprland.lua: minimize / show desktop animation

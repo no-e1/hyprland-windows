@@ -628,8 +628,6 @@ hl.bind(win .. " + T", hl.dsp.exec_cmd(terminal))                            -- 
 hl.bind(win .. " + B", hl.dsp.exec_cmd(browser))                             -- browser
 hl.bind("CTRL + SHIFT + Escape", hl.dsp.exec_cmd("gnome-system-monitor"))    -- Task Manager
 
--- Windows
-hl.bind("ALT + F4", hl.dsp.window.close())
 
 -- Talk to winshell directly through its pipe, so commands arrive in the
 -- order the keys were pressed (separate processes could overtake each other).
@@ -1230,6 +1228,18 @@ hl.gesture({ fingers = 3, direction = "horizontal", action = {
         winshell_send((e and e.cancelled) and "switch swipe-cancel" or "switch swipe-end")
     end,
 } })
+-- Alt + F4 closes the active window; on the desktop (no window focused)
+-- it asks "shut down?" like Windows – Alt + F4 again closes that question.
+hl.bind("ALT + F4", function()
+    local w = hl.get_active_window()
+    local ws = hl.get_active_workspace()
+    -- a minimized / hidden window can still be "active": that's the desktop too
+    if w and w.mapped and w.workspace and ws and w.workspace.id == ws.id then
+        hl.dispatch(hl.dsp.window.close())
+    else
+        winshell_send("shutdown-dialog")
+    end
+end)
 hl.bind(win .. " + M",         function() hide_all() end)
 hl.bind(win .. " + SHIFT + M", restore_hidden)
 
