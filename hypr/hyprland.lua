@@ -29,7 +29,7 @@ hl.monitor({
 ---------------------------------------------------------------------
 hl.env("XCURSOR_SIZE", "24")
 hl.env("HYPRCURSOR_SIZE", "24")
-hl.env("XCURSOR_THEME", "Fluent-cursors")   -- white pointer like Windows 11
+hl.env("XCURSOR_THEME", "Fluent-dark-cursors")   -- white pointer with black outline, like Windows 11
 hl.env("GDK_BACKEND", "wayland,x11,*")
 hl.env("QT_QPA_PLATFORM", "wayland;xcb")
 hl.env("QT_WAYLAND_DISABLE_WINDOWDECORATION", "1")
@@ -162,6 +162,11 @@ hl.config({
         sensitivity  = -0.3,
         touchpad = {
             natural_scroll = true,
+            -- tap and touch again = "hold the button and drag": with many
+            -- quick 3-finger swipes (lift, touch again) that turned into
+            -- stray clicks and drags. Tapping still clicks; to drag, press
+            -- the touchpad down.
+            tap_and_drag   = false,
             -- two-finger scrolling: a bit slower than Linux' default; browsers
             -- scroll much further per step, they get their own factor below
             scroll_factor  = 0.7,
@@ -240,11 +245,13 @@ local function square_corners(addr, on)
     end
 end
 
-local function client_maximized(addr, on)
+-- quiet: don't tell the app itself (hiding / bringing back a window: an app
+-- like Brave would rebuild itself right while it goes away and could hang)
+local function client_maximized(addr, on, quiet)
     hl.dispatch(hl.dsp.window.fullscreen_state({ internal = 0, client = on and 1 or 0,
                                                  window = "address:" .. addr }))
     square_corners(addr, on)
-    if AppMaximized then AppMaximized(addr, on) end
+    if AppMaximized and not quiet then AppMaximized(addr, on) end
 end
 -- windows that are maximized already (config reload, login)
 for _, w in ipairs(hl.get_windows() or {}) do
@@ -288,7 +295,7 @@ function RestoreWindow(w, ws_id)
     if hidden_maximized[a] then
         hidden_maximized[a] = nil
         fs_hook_paused[a] = true
-        client_maximized(a, true)
+        client_maximized(a, true, true)
         later(300, function() fs_hook_paused[a] = nil end)
     else
         local sx, sy = w.size.x, w.size.y
@@ -347,7 +354,7 @@ function HideWindow(addr, keep_focus)
         -- the app has to redraw as "not maximized" before it disappears
         hidden_maximized[addr] = true
         fs_hook_paused[addr] = true
-        client_maximized(addr, false)
+        client_maximized(addr, false, true)
         later(MAX_HIDE_DELAY, hide)
         later(MAX_HIDE_DELAY + 300, function() fs_hook_paused[addr] = nil end)
     else
@@ -1077,7 +1084,7 @@ local function cancel_hide(a)
         hide_cancel[a] = true
         hidden_maximized[a] = nil
         fs_hook_paused[a] = true
-        client_maximized(a, true)
+        client_maximized(a, true, true)
         later(300, function() fs_hook_paused[a] = nil end)
     end
     return true
@@ -1151,10 +1158,31 @@ hl.bind(win .. " + D",         ShowDesktop)
 
 -- Touchpad, 3 fingers like Windows: down shows the desktop (everything is
 -- minimized), up brings back exactly those windows.
-hl.gesture({ fingers = 3, direction = "down", action = function()
-    if not desktop_shown() and #windows_here() > 0 then hide_all() end
-end })
-hl.gesture({ fingers = 3, direction = "up", action = function() restore_hidden() end })
+-- Reacts while the fingers move (no need to lift them): once they went
+-- DESK_SWIPE far down / up it happens; a short flick counts when lifted.
+local DESK_SWIPE, DESK_FLICK = 45, 18
+local desk_acc, desk_done = 0, false
+local function desk_swipe(dir)
+    desk_done = true
+    if dir > 0 then
+        if not desktop_shown() and #windows_here() > 0 then hide_all() end
+    else
+        restore_hidden()
+    end
+end
+hl.gesture({ fingers = 3, direction = "vertical", action = {
+    start = function() desk_acc, desk_done = 0, false end,
+    update = function(e)
+        if desk_done then return end
+        desk_acc = desk_acc + ((e.delta and e.delta.y) or 0)
+        if math.abs(desk_acc) >= DESK_SWIPE then desk_swipe(desk_acc) end
+    end,
+    finish = function(e)
+        if not desk_done and not (e and e.cancelled) and math.abs(desk_acc) >= DESK_FLICK then
+            desk_swipe(desk_acc)
+        end
+    end,
+} })
 
 -- 3 fingers left/right: the Alt+Tab switcher follows the fingers – every
 -- SWIPE_STEP of movement selects the next/previous window (up/down: the
