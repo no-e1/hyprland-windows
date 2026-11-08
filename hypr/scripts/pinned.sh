@@ -24,7 +24,7 @@ case "$mode" in
     open)
         if [ -n "$front" ]; then
             # like Windows: clicking the app that is in front minimizes it
-            hyprctl eval "HideWindow(\"$front\")" >/dev/null
+            hyprctl eval "MinimizeWindow(\"$front\")" >/dev/null
         elif [ -n "$addr" ]; then
             # brings it back if it was minimized (see the window.active hook)
             hyprctl eval "ShowWindow(\"$addr\")" >/dev/null

@@ -244,6 +244,7 @@ local function client_maximized(addr, on)
     hl.dispatch(hl.dsp.window.fullscreen_state({ internal = 0, client = on and 1 or 0,
                                                  window = "address:" .. addr }))
     square_corners(addr, on)
+    if AppMaximized then AppMaximized(addr, on) end
 end
 -- windows that are maximized already (config reload, login)
 for _, w in ipairs(hl.get_windows() or {}) do
@@ -278,6 +279,7 @@ end
 -- the second resize goes out a moment later, otherwise Hyprland merges both
 -- and the window grows by a pixel on every restore.
 function RestoreWindow(w, ws_id)
+    if ThumbsPause then ThumbsPause() end
     local a, sel = w.address, "address:" .. w.address
     local x, y = w.at.x, w.at.y     -- numbers: the window object reads live values
     hl.dispatch(hl.dsp.window.move({ workspace = ws_id, follow = false, window = sel }))
@@ -336,6 +338,7 @@ function HideWindow(addr, keep_focus)
     later(MAX_HIDE_DELAY + 400, function() restore_blocked = false end)
     local function hide()
         if hide_cancel[addr] then hide_cancel[addr] = nil return end
+        if ThumbsPause then ThumbsPause() end
         hl.dispatch(hl.dsp.window.move({ workspace = "special:minimized", follow = false,
                                          window = "address:" .. addr }))
     end
@@ -355,21 +358,6 @@ function HideWindow(addr, keep_focus)
     end
 end
 
--- Bring a window to the front, restoring it first if it is minimized.
--- Taskbar and Alt+Tab use this: the window is back on the desktop before it
--- gets focus, so the hidden workspace never shows up on screen (Brave draws
--- its contents shifted after being shown there while maximized).
-function ShowWindow(addr)
-    local w = hl.get_window("address:" .. addr)
-    if not w then return end
-    if w.workspace and w.workspace.name == "special:minimized" then
-        local ws = hl.get_active_workspace()
-        if ws and not ws.special then
-            RestoreWindow(w, ws.id)
-        end
-    end
-    hl.dispatch(hl.dsp.focus({ window = "address:" .. addr }))
-end
 
 -- Other ways of activating a minimized window (e.g. Waybar's app buttons)
 -- focus it while it is still hidden: hide the minimized workspace again
@@ -417,6 +405,27 @@ local function has_bar(w)
     return true
 end
 
+-- Hyprland tells every app "maximized" once and never again (otherwise apps
+-- like Brave draw their own frame, and Hyprland shows it shifted). But then
+-- an app with its own title bar waits forever for an answer to its first
+-- □ click and ignores every further one. So answer it: "not maximized" for a
+-- moment, then "maximized" again – it stays frame-less and takes the next
+-- click (its □ then always toggles). Via the hyprbars plugin; GTK apps are
+-- left alone.
+function AppMaximized(addr, on)
+    local hb = hl.plugin and hl.plugin.hyprbars
+    if not hb or not hb.set_maximized then return end      -- older plugin
+    local w = hl.get_window("address:" .. addr)
+    if not w or has_bar(w) then return end
+    local cls = w.class or ""
+    for _, p in ipairs(OWN_TITLEBAR_PREFIX) do
+        if cls:sub(1, #p) == p then return end
+    end
+    local sel = "address:" .. addr
+    pcall(hb.set_maximized, sel, false)
+    later(60, function() pcall(hb.set_maximized, sel, true) end)
+end
+
 local function work_area(mon)
     local r, s = mon.reserved, mon.scale
     return mon.x + r.left, mon.y + r.top,
@@ -425,6 +434,7 @@ local function work_area(mon)
 end
 
 local function set_geometry(addr, x, y, w, h)
+    if ThumbsPause then ThumbsPause() end
     local sel = "address:" .. addr
     hl.dispatch(hl.dsp.window.resize({ x = w, y = h, window = sel }))
     hl.dispatch(hl.dsp.window.move({ x = x, y = y, window = sel }))
@@ -435,7 +445,8 @@ function WinMax(action, w)
     if not w or not w.mapped then return end
     local a = w.address
     if action == "toggle" then
-        action = saved_geometry[a] and "restore" or "max"
+        -- maximized also when its normal size got lost (e.g. a config reload)
+        action = (saved_geometry[a] or w.fullscreen_client == 1) and "restore" or "max"
     end
     local mon = w.monitor or hl.get_active_monitor()
     local x, y, ww, hh = work_area(mon)
@@ -447,8 +458,9 @@ function WinMax(action, w)
     if action == "max" then
         if not saved_geometry[a] then
             local g = { w.at.x, w.at.y, w.size.x, w.size.y }
-            -- window started maximized: restore to a centered 70% window later
-            if g[3] >= ww - 4 then
+            -- (nearly) as big as the screen already – it started maximized, or
+            -- the app chose a huge size itself: restore to a centered 70% window
+            if g[3] >= ww - 4 or g[4] + bar >= hh - 4 then
                 g = { x + math.floor(ww * 0.15), y + math.floor(hh * 0.12),
                       math.floor(ww * 0.7), math.floor(hh * 0.7) }
             end
@@ -456,11 +468,14 @@ function WinMax(action, w)
         end
         client_maximized(a, true)
         set_geometry(a, x, y + bar, ww, hh - bar)
-    elseif action == "restore" and saved_geometry[a] then
-        local g = saved_geometry[a]
+    elseif action == "restore" and (saved_geometry[a] or w.fullscreen_client == 1) then
+        -- no normal size known: a centered window, like Windows
+        local g = saved_geometry[a] or { x + math.floor(ww * 0.15), y + math.floor(hh * 0.12),
+                                         math.floor(ww * 0.7), math.floor(hh * 0.7) }
         saved_geometry[a] = nil
         client_maximized(a, false)
         set_geometry(a, g[1], g[2], g[3], g[4])
+        if EnsureOnScreenSoon then EnsureOnScreenSoon(a, g) end
     end
 end
 
@@ -505,7 +520,7 @@ end)
 hl.on("window.minimize", function(ev)
     local w = event_window(ev) or hl.get_active_window()
     if w and w.workspace and w.workspace.name ~= "special:minimized" then
-        HideWindow(w.address)
+        MinimizeWindow(w.address)
     end
 end)
 
@@ -519,8 +534,11 @@ hl.on("window.open", function(ev)
     local bar = has_bar(w) and BAR_HEIGHT or 0
     if w.size.x > ww - 2 or w.size.y > hh - bar - 2 then
         WinMax("max", w)
-    elseif w.at.y < y + bar then
-        hl.dispatch(hl.dsp.window.move({ x = w.at.x, y = y + bar + 1, window = "address:" .. w.address }))
+    else
+        if w.at.y < y + bar then
+            hl.dispatch(hl.dsp.window.move({ x = w.at.x, y = y + bar + 1, window = "address:" .. w.address }))
+        end
+        if EnsureOnScreenSoon then EnsureOnScreenSoon(w.address) end
     end
 end)
 
@@ -625,6 +643,10 @@ local function winshell_send(cmd)
     hl.exec_cmd(winshell .. " " .. cmd)
 end
 
+-- before a window changes size or place (or goes away): winshell stops
+-- taking pictures of it for a moment – grim crashes on such windows
+function ThumbsPause() winshell_send("thumbs pause") end
+
 ---------------------------------------------------------------------
 -- Dragging windows like on Windows 11 (Snap)
 --  * windows may be pushed partly off the screen and under the taskbar;
@@ -706,6 +728,23 @@ function WinSnap(zone, w)
     snapped_to[a] = zone
 end
 
+-- An app's own maximize / restore button (Brave's □; via the hyprbars
+-- plugin, which can't tell which of the two it is): toggle by the real state.
+-- Once per half second – some apps ask twice.
+local max_toggled = {}
+function WinMaxWindow(addr)
+    if drag and drag.moved then return end
+    local w = hl.get_window("address:" .. addr)
+    if not w or max_toggled[w.address] then return end
+    max_toggled[w.address] = true
+    later(500, function() max_toggled[w.address] = nil end)
+    if saved_geometry[w.address] or w.fullscreen_client == 1 then
+        WinMax("restore", w)
+    else
+        WinSnap("max", w)
+    end
+end
+
 -- a snapped window back to the size and place it had before (Win + Down)
 function WinUnsnap(w)
     w = w or hl.get_active_window()
@@ -719,6 +758,7 @@ function WinUnsnap(w)
         g = { x + math.floor(ww * 0.2), y + math.floor(hh * 0.15), math.floor(ww * 0.6), math.floor(hh * 0.7) }
     end
     set_geometry(a, g[1], g[2], g[3], g[4])
+    if EnsureOnScreenSoon then EnsureOnScreenSoon(a) end
     return true
 end
 
@@ -803,23 +843,48 @@ function WinDragStart()
     drag.timer = hl.timer(drag_poll, { timeout = SNAP_POLL_MS, type = "repeat" })
 end
 
--- dropped without snapping: it may stick out, but never vanish – a third of
--- it (at least 200 px across / 120 px down) stays on screen at the sides and
--- above the taskbar, and the title bar never goes above the top.
--- Otherwise it stays exactly where it was dropped.
+-- Every window stays reachable: its title bar never goes above the top or
+-- under the taskbar, and sideways at least a third of it (200 px or more)
+-- stays on screen. A window bigger than the free space is made to fit.
+-- Used when a window is dropped and shortly after it comes back (restored,
+-- unsnapped, opened) – apps like Brave set their own size a moment later.
 local function keep_reachable(w)
-    if not w or not w.floating or saved_geometry[w.address] then return end
+    if not w or not w.floating or saved_geometry[w.address] or w.fullscreen_client == 1 then return end
+    if not w.workspace or w.workspace.name:sub(1, 8) == "special:" then return end
     local x, y, ww, hh = work_area(w.monitor or hl.get_active_monitor())
     local bar = has_bar(w) and BAR_HEIGHT or 0
-    local fw, fh = w.size.x, w.size.y + bar         -- the whole frame
+    local sel = "address:" .. w.address
+    local sw, sh = w.size.x, w.size.y
+    if sh + bar > hh or sw > ww then                -- too big for the screen: fit it
+        sw, sh = math.min(sw, ww), math.min(sh, hh - bar)
+        hl.dispatch(hl.dsp.window.resize({ x = sw, y = sh, window = sel }))
+    end
+    local fw, fh = sw, sh + bar                     -- the whole frame
     local keep_x = math.min(fw, math.max(200, math.floor(fw / 3)))
     local keep_y = math.min(fh, math.max(120, math.floor(fh / 3)))
     local top = w.at.y - bar                        -- top of the title bar
     local ntop = math.max(y, math.min(top, y + hh - keep_y))
     local nx = math.max(x - fw + keep_x, math.min(w.at.x, x + ww - keep_x))
-    if nx ~= w.at.x or ntop ~= top then
-        hl.dispatch(hl.dsp.window.move({ x = nx, y = ntop + bar, window = "address:" .. w.address }))
+    if nx ~= w.at.x or ntop ~= top or sw ~= w.size.x or sh ~= w.size.y then
+        hl.dispatch(hl.dsp.window.move({ x = nx, y = ntop + bar, window = sel }))
     end
+end
+function EnsureOnScreen(addr)
+    keep_reachable(addr and hl.get_window("address:" .. addr))
+end
+-- check now and again once the app had time to pick its own size. With
+-- `want` (x, y, w, h): an app that sets its own size meanwhile (Brave puts
+-- back its own remembered size on "restore") gets the intended one again.
+function EnsureOnScreenSoon(addr, want)
+    later(250, function()
+        local w = hl.get_window("address:" .. addr)
+        if want and w and w.fullscreen_client ~= 1 and not saved_geometry[addr]
+           and (math.abs(w.size.x - want[3]) > 4 or math.abs(w.size.y - want[4]) > 4) then
+            set_geometry(addr, want[1], want[2], want[3], want[4])
+        end
+        EnsureOnScreen(addr)
+    end)
+    later(700, function() EnsureOnScreen(addr) end)
 end
 
 function WinDragEnd()
@@ -930,7 +995,7 @@ local function hide_all()
     for _, w in ipairs(list) do table.insert(saved.windows, w.address) end
     if #list > 0 then
         desk_out = { gen = gen, windows = saved.windows }
-        winshell_send("desk out " .. gen .. " " .. desk_tokens(list))
+        winshell_send("desk out DesktopOutNow " .. gen .. " " .. desk_tokens(list))
         later(400, function() DesktopOutNow(gen) end)    -- winshell didn't answer
     end
     desktop_hidden = #list > 0 and saved or nil
@@ -944,6 +1009,63 @@ function DesktopOutNow(gen)
         set_alpha(a, 0)                     -- gone at once (the pictures fly on)
         HideWindow(a, true)
     end
+end
+
+-- Minimize like Windows: the window shrinks into its taskbar button (title
+-- bar –, Win + Down, an app's own –, a click on its active taskbar button).
+local mini_gen, mini_pending = 0, {}
+function MinimizeWindow(addr)
+    local w = addr and hl.get_window("address:" .. addr) or hl.get_active_window()
+    if not w or not w.workspace or w.workspace.name == "special:minimized" then return end
+    mini_gen = mini_gen + 1
+    local gen = mini_gen
+    mini_pending[gen] = w.address
+    winshell_send("desk out MinimizeNow " .. gen .. " " .. desk_tokens({ w }))
+    later(400, function() MinimizeNow(gen) end)        -- winshell didn't answer
+end
+function MinimizeNow(gen)
+    local a = mini_pending[gen]
+    if not a then return end
+    mini_pending[gen] = nil
+    set_alpha(a, 0)                         -- gone at once (the picture flies on)
+    HideWindow(a)
+end
+
+-- Bring a window to the front, restoring it first if it is minimized – it
+-- grows out of its taskbar button (taskbar, Alt+Tab, Win + 1/2/3).
+local show_pending = {}                     -- gen -> { address, workspace }
+local showing = {}                          -- address -> gen (asked again meanwhile)
+function ShowWindow(addr)
+    local w = hl.get_window("address:" .. addr)
+    if not w then return end
+    if showing[addr] then return end
+    if w.workspace and w.workspace.name == "special:minimized" then
+        local ws = hl.get_active_workspace()
+        if ws and not ws.special then
+            mini_gen = mini_gen + 1
+            local gen = mini_gen
+            show_pending[gen] = { addr = addr, ws = ws.id }
+            showing[addr] = gen
+            winshell_send("desk in ShowNow " .. gen .. " " .. desk_tokens({ w }))
+            later(700, function() ShowNow(gen) end)    -- winshell didn't answer
+            return
+        end
+    end
+    hl.dispatch(hl.dsp.focus({ window = "address:" .. addr }))
+end
+function ShowNow(gen)
+    local p = show_pending[gen]
+    if not p then return end
+    show_pending[gen] = nil
+    showing[p.addr] = nil
+    local w = hl.get_window("address:" .. p.addr)
+    if not w then return end
+    if w.workspace and w.workspace.name == "special:minimized" then
+        RestoreWindow(w, p.ws)
+        EnsureOnScreenSoon(p.addr)
+    end
+    hl.dispatch(hl.dsp.window.alter_zorder({ mode = "top", window = "address:" .. p.addr }))
+    hl.dispatch(hl.dsp.focus({ window = "address:" .. p.addr }))
 end
 
 -- A window that is still on screen (being hidden right now): stop that.
@@ -988,7 +1110,7 @@ local function restore_hidden()
         DesktopInNow(gen)
         return
     end
-    winshell_send("desk in " .. gen .. " " .. desk_tokens(todo))
+    winshell_send("desk in DesktopInNow " .. gen .. " " .. desk_tokens(todo))
     later(700, function() DesktopInNow(gen) end)        -- winshell didn't answer
 end
 function DesktopInNow(gen)
@@ -1106,7 +1228,7 @@ hl.bind(win .. " + Down",  function()
     if saved_geometry[w.address] then
         WinMax("restore", w)
     elseif not WinUnsnap(w) then
-        HideWindow()
+        MinimizeWindow(w.address)
     end
 end)
 hl.bind(win .. " + SHIFT + Up", hl.dsp.window.fullscreen({ mode = "fullscreen", action = "toggle" }))

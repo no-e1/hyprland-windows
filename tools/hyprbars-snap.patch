@@ -277,10 +277,10 @@ index e57f77b..a4c5acd 100644
      }
  }
 diff --git a/hyprbars/main.cpp b/hyprbars/main.cpp
-index 3d88b57..7368f6b 100644
+index 3d88b57..52a60d5 100644
 --- a/hyprbars/main.cpp
 +++ b/hyprbars/main.cpp
-@@ -14,6 +14,13 @@
+@@ -14,6 +14,15 @@
  #include <hyprland/src/config/lua/bindings/LuaBindingsInternal.hpp>
  #include <hyprland/src/config/lua/types/LuaConfigColor.hpp>
  #include <hyprland/src/state/MonitorState.hpp>
@@ -291,10 +291,12 @@ index 3d88b57..7368f6b 100644
 +#include <hyprland/src/config/supplementary/executor/Executor.hpp>
 +#include <hyprland/src/desktop/view/window/WindowBackend.hpp>
 +#include <hyprland/src/plugins/HookSystem.hpp>
++#include <hyprland/src/protocols/XDGShell.hpp>
++#include <hyprland/src/protocols/core/Compositor.hpp>
  
  #include <algorithm>
  
-@@ -153,6 +160,65 @@ int setLuaTitle(lua_State* L) {
+@@ -153,6 +162,107 @@ int setLuaTitle(lua_State* L) {
      return 0;
  }
  
@@ -334,39 +336,104 @@ index 3d88b57..7368f6b 100644
 +}
 +
 +// ── App minimize buttons ──
-+// Hyprland drops an app's own "minimize" request (xdg_toplevel.set_minimized,
-+// the – button of Brave, Discord, Steam, …). Catch it where the request
-+// arrives and minimize the window like the title bar button does.
-+using onUpdateStateFn            = void (*)(Desktop::View::CWindow*, const Desktop::View::SBackendStateRequest&);
-+inline CFunctionHook* g_pStateHook = nullptr;
++// An app's own "–" (Brave, Discord, …) asks the compositor to minimize it;
++// Hyprland drops that request entirely (window.minimize only comes from
++// taskbars via foreign-toplevel). Listen to every window's requests and let
++// hyprland.lua minimize it (animated, like the title bar's –).
++static std::unordered_map<uintptr_t, Hyprutils::Signal::CHyprSignalListener> s_stateListeners;
 +
-+static void hkOnUpdateState(Desktop::View::CWindow* self, const Desktop::View::SBackendStateRequest& request) {
-+    if (request.minimized.value_or(false))
-+        Config::Supplementary::executor()->spawn(std::format("$HOME/.config/hypr/scripts/winctl.sh minimize-window 0x{:x}", (uintptr_t)self));
-+    ((onUpdateStateFn)g_pStateHook->m_original)(self, request);
++static void watchMinimize(PHLWINDOW w) {
++    if (!w)
++        return;
++    const auto ADDR = (uintptr_t)w.get();
++    s_stateListeners[ADDR] = w->backend().m_events.stateRequest.listen([ADDR](const Desktop::View::SBackendStateRequest& r) {
++        if (r.minimized.value_or(false))
++            Config::Supplementary::executor()->spawn(std::format("$HOME/.config/hypr/scripts/winctl.sh minimize-window 0x{:x}", ADDR));
++    });
 +}
 +
-+static void hookMinimizeRequests() {
-+    for (const auto& fn : HyprlandAPI::findFunctionsByName(PHANDLE, "onUpdateState")) {
-+        if (fn.demangled.find("CWindow::onUpdateState") == std::string::npos)
++// ── Tell an app whether it is maximized ──
++// Hyprland tells every app "maximized" once when it maps and never changes
++// it (so GTK apps don't draw their own frames). Apps with their own title bar
++// (Brave, Discord, …) then always show "restore" and, after one click,
++// wait for an answer that never comes – their □ button works only once.
++// hyprland.lua calls this whenever it maximizes / restores such an app.
++int setLuaMaximized(lua_State* L) {
++    const auto WINDOW = Config::Lua::Bindings::Internal::windowFromLuaSelectorOrObject(L, 1, "hl.plugin.hyprbars.set_maximized");
++    if (!WINDOW)
++        return Config::Lua::Bindings::Internal::configError(L, "hl.plugin.hyprbars.set_maximized: expected a window");
++    const bool ON   = lua_toboolean(L, 2);
++    const auto SURF = WINDOW->backend().surface();
++    if (SURF && SURF->m_role && SURF->m_role->role() == SURFACE_ROLE_XDG_SHELL) {
++        const auto XDG = ((CXDGSurfaceRole*)SURF->m_role.get())->m_xdgSurface.lock();
++        if (XDG && XDG->m_toplevel)
++            XDG->m_toplevel->setMaximized(ON);
++    }
++    return 0;
++}
++
++// ── App maximize / restore buttons ──
++// An app's own maximize / restore (Brave's □ button) arrives as a "maximize"
++// request – Hyprland can't tell the two apart with the Windows-style maximize
++// of hyprland.lua (it inverts its own maximized state, which that doesn't
++// use) and swallows every other one as an "echo". So take it here and let
++// hyprland.lua toggle. (App minimize requests reach it as window.minimize.)
++using requestClientFullscreenFn = void (*)(Desktop::View::CWindow*, const Desktop::View::SClientFullscreenRequest&);
++inline CFunctionHook* g_pFsHook = nullptr;
++
++static void hkRequestClientFullscreen(Desktop::View::CWindow* self, const Desktop::View::SClientFullscreenRequest& request) {
++    using Req = Desktop::View::SClientFullscreenRequest;
++    if (request.origin == Req::ORIGIN_BACKEND && request.maximized.has_value() && !request.fullscreen.has_value()) {
++        Config::Supplementary::executor()->spawn(std::format("$HOME/.config/hypr/scripts/winctl.sh togglemax-window 0x{:x}", (uintptr_t)self));
++        return;
++    }
++    ((requestClientFullscreenFn)g_pFsHook->m_original)(self, request);
++}
++
++static void hookMaximizeRequests() {
++    for (const auto& fn : HyprlandAPI::findFunctionsByName(PHANDLE, "requestClientFullscreen")) {
++        if (fn.demangled.find("CWindow::requestClientFullscreen") == std::string::npos)
 +            continue;
-+        g_pStateHook = HyprlandAPI::createFunctionHook(PHANDLE, fn.address, (void*)&hkOnUpdateState);
-+        if (g_pStateHook && g_pStateHook->hook())
++        g_pFsHook = HyprlandAPI::createFunctionHook(PHANDLE, fn.address, (void*)&hkRequestClientFullscreen);
++        if (g_pFsHook && g_pFsHook->hook())
 +            return;
 +    }
-+    HyprlandAPI::addNotification(PHANDLE, "[hyprbars] could not hook app minimize requests", CHyprColor{1.0, 0.5, 0.2, 1.0}, 6000);
++    HyprlandAPI::addNotification(PHANDLE, "[hyprbars] could not hook app maximize requests", CHyprColor{1.0, 0.5, 0.2, 1.0}, 6000);
 +}
 +
  APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
      PHANDLE = handle;
  
-@@ -222,6 +288,9 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
+@@ -170,7 +280,11 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
+     g_pGlobalState->barColorRuleIdx   = Desktop::Rule::windowEffects()->registerEffect("hyprbars:bar_color");
+     g_pGlobalState->titleColorRuleIdx = Desktop::Rule::windowEffects()->registerEffect("hyprbars:title_color");
+ 
+-    static auto P  = Event::bus()->m_events.window.open.listen([&](PHLWINDOW w) { onNewWindow(w); });
++    static auto P  = Event::bus()->m_events.window.open.listen([&](PHLWINDOW w) {
++        onNewWindow(w);
++        watchMinimize(w);
++    });
++    static auto P8 = Event::bus()->m_events.window.close.listen([&](PHLWINDOW w) { s_stateListeners.erase((uintptr_t)w.get()); });
+     static auto P3 = Event::bus()->m_events.window.updateRules.listen([&](PHLWINDOW w) { onUpdateWindowRules(w); });
+ 
+     g_pGlobalState->config.barColor            = makeShared<Config::Values::CColorValue>("plugin:hyprbars:bar_color", "Change the bar color", 0x88333333);
+@@ -218,13 +332,19 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
+     HyprlandAPI::addConfigValueV2(PHANDLE, g_pGlobalState->config.onDoubleClick);
+ 
+     HyprlandAPI::addLuaFunction(PHANDLE, "hyprbars", "add_button", ::newLuaButton);
++    HyprlandAPI::addLuaFunction(PHANDLE, "hyprbars", "set_maximized", ::setLuaMaximized);
+     HyprlandAPI::addLuaFunction(PHANDLE, "hyprbars", "set_title", ::setLuaTitle);
  
      static auto P4 = Event::bus()->m_events.config.preReload.listen([&] { onPreConfigReload(); });
      static auto P5 = Event::bus()->m_events.config.reloaded.listen([&] { onConfigReloaded(); });
 +    static auto P6 = g_layoutManager->dragController()->m_events.motion.listen([] { onDragMotion(); });
 +    static auto P7 = g_layoutManager->dragController()->m_events.ended.listen([] { onDragEnded(); });
-+    hookMinimizeRequests();
++    hookMaximizeRequests();
  
      // add deco to existing windows
      for (auto& w : Desktop::windowState()->windows()) {
++        if (validMapped(w))
++            watchMinimize(w);
+         if (w->isHidden() || !validMapped(w))
+             continue;
+ 

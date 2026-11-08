@@ -434,6 +434,7 @@ class Switcher:
         self.geo = {}               # address -> (geometry, since when): grim crashes
                                     # on windows that change size mid-capture
         self.cap_busy = 0           # grims running
+        self.grims = set()
         GLib.timeout_add_seconds(2, self.warm_thumbs)
         self.live = None            # renews the previews while the switcher is open
         self.items, self.cards = [], []
@@ -733,9 +734,21 @@ class Switcher:
         LS.set_keyboard_mode(self.win, LS.KeyboardMode.NONE)
 
     # previews ------------------------------------------------------------
+    def pause_thumbs(self, seconds=1.2):
+        """A window is about to change size or go away (hyprland.lua says so):
+        no pictures for a moment, and the running ones stop – grim crashes when
+        the window changes under it (and Fedora shows a crash report)."""
+        self.paused_until = max(self.paused_until, time.monotonic() + seconds)
+        for p in list(self.grims):
+            try:
+                p.kill()
+            except OSError:
+                pass
+
     def stable(self, c):
         """True once a window has kept its place and size for a second."""
-        key = (tuple(c.get("at") or ()), tuple(c.get("size") or ()))
+        key = (tuple(c.get("at") or ()), tuple(c.get("size") or ()),
+               (c.get("workspace") or {}).get("name"))
         now = time.monotonic()
         prev = self.geo.get(c["address"])
         if not prev or prev[0] != key:
@@ -751,7 +764,7 @@ class Switcher:
         if time.monotonic() < self.paused_until:
             return
         c = self.fresh(c)
-        if not c or not self.stable(c):
+        if not c or not self.stable(c) or c["workspace"].get("name", "").startswith("special:"):
             return
         if c["workspace"].get("name", "").startswith("special:"):
             return                      # hidden windows are not rendered
@@ -808,9 +821,14 @@ class Switcher:
 
         def grab():
             try:
-                out = subprocess.run(["grim", "-T", sid, "-s", f"{factor:.3f}", "-t", "jpeg", "-q", "85", "-"],
-                                     capture_output=True, timeout=3).stdout
-                return Gdk.Texture.new_from_bytes(GLib.Bytes.new(out)) if out else None
+                p = subprocess.Popen(["grim", "-T", sid, "-s", f"{factor:.3f}", "-t", "jpeg", "-q", "85", "-"],
+                                     stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+                self.grims.add(p)
+                try:
+                    out = p.communicate(timeout=3)[0]
+                finally:
+                    self.grims.discard(p)
+                return Gdk.Texture.new_from_bytes(GLib.Bytes.new(out)) if out and p.returncode == 0 else None
             except Exception:
                 return None
 
@@ -2451,17 +2469,12 @@ class DeskCanvas(Gtk.Widget):
             bx, by, bw, bh = it["b"]
             x, y = ax + (bx - ax) * e, ay + (by - ay) * e
             w, h = aw + (bw - aw) * e, ah + (bh - ah) * e
-            bar = it["bar"] * (h / ah if ah else 1)
-            rect = Graphene.Rect().init(x, y - bar, w, h + bar)
+            rect = Graphene.Rect().init(x, y, w, h)        # the window's content only
             radius = 8 * min(1.0, w / max(1.0, aw)) + 2
             snap.push_opacity(max(0.0, min(1.0, alpha)))
             clip = Gsk.RoundedRect()        # (init_from_rect's return value is unusable in Python)
             clip.init_from_rect(rect, radius)
             snap.push_rounded_clip(clip)
-            if bar:
-                c = Gdk.RGBA()
-                c.parse("#202020")
-                snap.append_color(c, Graphene.Rect().init(x, y - bar, w, bar))
             if it["tex"]:
                 snap.append_texture(it["tex"], Graphene.Rect().init(x, y, w, h))
             else:
@@ -2478,8 +2491,8 @@ class DesktopAnim:
     Hyprland can't scale windows, so pictures of them do it on a full-screen
     layer above everything (the windows themselves are hidden meanwhile).
 
-    hyprland.lua:  desk out <gen> <window>…   → DesktopOutNow(gen) once shown
-                   desk in  <gen> <window>…   → DesktopInNow(gen) at the end
+    hyprland.lua:  desk out <callback> <gen> <window>…   → callback(gen) once shown
+                   desk in  <callback> <gen> <window>…   → callback(gen) at the end
                    desk stop
     <window> = address|x|y|width|height|title bar height|class"""
     OUT = 0.24                  # seconds
@@ -2535,11 +2548,12 @@ class DesktopAnim:
                           "win": (x, y, w, h), "icon": self.target(cls, mon_h)})
         return items
 
-    def run(self, kind, gen, tokens):
+    def run(self, kind, callback, gen, tokens):
         self.gen = gen
+        self.shell.switcher.pause_thumbs(self.OUT + self.IN + 0.4)
         items = self.parse(tokens)
         if not items:
-            self.finish_now(kind, gen)
+            hypr_eval(f"{callback}({gen})")
             return
         rising = kind == "in"
         for it in items:
@@ -2554,15 +2568,12 @@ class DesktopAnim:
         self.canvas.queue_draw()
         if not rising:
             # the pictures cover the windows now: hide the real ones
-            GLib.timeout_add(34, lambda: (hypr_eval(f"DesktopOutNow({gen})"), False)[1])
+            GLib.timeout_add(34, lambda: (hypr_eval(f"{callback}({gen})"), False)[1])
         else:
-            self.done = lambda: hypr_eval(f"DesktopInNow({gen})")
+            self.done = lambda: hypr_eval(f"{callback}({gen})")
         self.t0 = 0
         if not self.tick:
             self.tick = self.canvas.add_tick_callback(self.on_tick)
-
-    def finish_now(self, kind, gen):
-        hypr_eval(f"DesktopOutNow({gen})" if kind == "out" else f"DesktopInNow({gen})")
 
     def on_tick(self, _w, clock):
         now = clock.get_frame_time() / 1e6
@@ -2802,6 +2813,12 @@ class Taskbar:
         box.add_controller(g)
 
     def drag_begin(self, g, box, kind, x, y):
+        # a drag whose end never arrived (the pointer left for another
+        # surface): clean it up first, or the tray stays frozen
+        if getattr(self, "idrag", None) and self.idrag.get("active"):
+            self.drag_finish(False)
+        elif self.tdrag:
+            self.tray_drag_end({}, False)
         w = box.item_at(x, y)
         if w is None or (kind != "app" and not getattr(w, "ident", None)):
             self.idrag = None
@@ -2857,12 +2874,12 @@ class Taskbar:
             return
         if key == self.active_key:
             if len(wins) == 1:          # the app in front: minimize it, like Windows
-                spawn(f"hyprctl eval 'HideWindow(\"{wins[0]['address']}\")'")
+                hypr_eval(f'MinimizeWindow("{wins[0]["address"]}")')
                 return
             target = wins[1]            # several windows: go to the next one
         else:
             target = wins[0]
-        spawn(f"hyprctl eval 'ShowWindow(\"{target['address']}\")'")
+        hypr_eval(f'ShowWindow("{target["address"]}")')
 
     def launch(self, key):
         app = self.app_of(key)
@@ -2910,7 +2927,7 @@ class Taskbar:
 
         self.right = right
         # "^": only there while icons are hidden (or while an icon is dragged)
-        self.tray_arrow = button(icon("win11-chevron-up", 12), "tb-tray-arrow",
+        self.tray_arrow = button(icon("win11-chevron-up", 16), "tb-tray-arrow",
                                  tooltip="Show hidden icons", on_click=self.toggle_overflow)
         self.tray_arrow.set_visible(False)
         right.append(self.tray_arrow)
@@ -3006,6 +3023,9 @@ class Taskbar:
         items.sort(key=lambda it: order.index(it.ident))
         hidden = set(self.cfg["tray_hidden"])
         if self.tdrag:                  # rebuilt once the drag is over
+            if time.monotonic() - self.tdrag.get("moved_at", 0) < 10:
+                return False
+            self.tray_drag_end({}, False)  # a drag that never ended
             return False
         bar, ov = [], []
         for it in items:
@@ -3070,7 +3090,8 @@ class Taskbar:
         src = "bar" if st["box"] is self.tray_box else "ov"
         self.dragging_tray = True
         self.tdrag = {"btn": btn, "src": src, "target": src, "index": 0, "item": item,
-                      "ghost": {"bar": None, "ov": None}}
+                      "ghost": {"bar": None, "ov": None}, "moved_at": time.monotonic()}
+        GLib.timeout_add_seconds(11, self.tray_changed)     # in case it never ends
         self.tray_arrow.set_visible(True)
 
     def ghost(self, where):
@@ -3108,7 +3129,14 @@ class Taskbar:
         if where is None and ty >= 0:
             where = "bar"
             lx, ly = self.point(self.win, self.tray_box, tx, ty)
-        if where:
+        if where is None and ty < 0 and d["target"] == "ov" and self.ov_win.get_visible():
+            # between the taskbar and the flyout (or just beside it): stay with
+            # the flyout – letting go of it there made the flyout shrink and
+            # grow again under the pointer (flicker)
+            where = "ov"
+            lx = ly = 10 ** 6 if d["index"] >= 10 ** 6 else None
+        d["moved_at"] = time.monotonic()
+        if where and lx is not None:
             box = self.tray_box_of(where)
             moving = d["btn"] if d["src"] == where else self.ghost(where)
             d["index"] = box.index_at(lx, ly, exclude=moving) if lx < 10 ** 6 else 10 ** 6
@@ -3125,8 +3153,7 @@ class Taskbar:
 
     def tray_preview(self, where, index=0):
         """Show where the dragged icon would land: there the others glide
-        aside; where it came from, its place closes while it hovers over the
-        other place."""
+        aside; where it came from, its place stays free."""
         d = self.tdrag
         if not d:
             return
@@ -3145,12 +3172,15 @@ class Taskbar:
                 if d["src"] == name:
                     box.set_collapsed(btn, False)
             else:
+                # where it came from, its place stays free until it is let go:
+                # closing it moved "^" away under the pointer and back, 60
+                # times a second (the flicker)
                 box.set_items(items)
-                if d["src"] == name:
-                    box.set_collapsed(btn, where is not None)
         has_ov = any(w.get_visible() and w not in self.overflow_grid.collapsed for w in self.overflow_grid.items)
         self.overflow_empty.set_visible(not has_ov)
-        self.overflow_grid.set_visible(has_ov)
+        # an icon dragged out of the flyout: its grid holds the drag – hiding
+        # it would drop the drag without a word (the tray then got stuck)
+        self.overflow_grid.set_visible(has_ov or d["src"] == "ov")
         if self.ov_win.get_visible():
             GLib.idle_add(self.place_overflow)
 
@@ -3405,11 +3435,13 @@ class WinShell(Gtk.Application):
                 self.qs.show(arg)
             else:
                 self.qs.toggle()
-        elif what == "desk":                    # hyprland.lua: show desktop animation
-            if arg in ("out", "in") and len(args) > 2 and args[2].isdigit():
-                self.desk.run(arg, int(args[2]), args[3:])
+        elif what == "desk":                    # hyprland.lua: minimize / show desktop animation
+            if arg in ("out", "in") and len(args) > 3 and args[2].isidentifier() and args[3].isdigit():
+                self.desk.run(arg, args[2], int(args[3]), args[4:])
             else:
                 self.desk.stop()
+        elif what == "thumbs":                  # hyprland.lua: a window is about to change
+            self.switcher.pause_thumbs()
         elif what == "snap":                    # hyprland.lua, while a window is dragged
             if arg == "show" and len(args) >= 8:
                 self.snap.show(*(float(v) for v in args[2:8]))
