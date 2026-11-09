@@ -226,7 +226,7 @@ window.lock { background: #18181c; }
 
 .stage1 { transition: opacity 260ms ease-out, transform 320ms cubic-bezier(0.2, 0.8, 0.2, 1); }
 .signin .stage1 { opacity: 0; transform: translateY(-90px); }
-.clock { color: white; font-family: "Inter Display", Inter; font-weight: 600; font-size: 132px; }
+.clock { color: white; font-family: "Inter Display", Inter; font-weight: 500; font-size: 124px; }
 .date { color: white; font-family: Inter; font-weight: 500; font-size: 23px; margin-top: -6px; }
 
 .stage2 { opacity: 0; transform: scale(0.96); transition: opacity 260ms ease-out 60ms, transform 300ms cubic-bezier(0.2, 0.8, 0.2, 1) 60ms; }

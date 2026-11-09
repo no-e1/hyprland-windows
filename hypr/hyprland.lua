@@ -225,6 +225,9 @@ hl.layer_rule({ name = "blur-winshell",  match = { namespace = "^winshell-(qs|sw
 hl.layer_rule({ name = "blur-osd",        match = { namespace = "^winshell-osd$" },             blur = true, ignore_alpha = 0.2 })
 -- winshell animates its flyouts itself (they glide out of the taskbar)
 hl.layer_rule({ name = "no-anim-winshell", match = { namespace = "^winshell-.*$" }, no_anim = true })
+-- slurp's selection overlay must vanish at once: otherwise it is still sliding
+-- out (dim + blue frame) while grim takes the screenshot
+hl.layer_rule({ name = "no-anim-slurp",    match = { namespace = "^selection$" },   no_anim = true })
 
 ---------------------------------------------------------------------
 -- Active window always comes to the front (taskbar, click, Alt+Tab).
