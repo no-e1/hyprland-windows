@@ -4195,15 +4195,22 @@ class WinShell(Gtk.Application):
                 print("winshell:", e, file=sys.stderr)
         return True
 
+    def close_flyouts(self):
+        """Close every open menu (start menu, quick settings with its Wi-Fi /
+        Bluetooth / sound pages, calendar, clipboard, tray flyout), like
+        Windows does when Alt+Tab starts."""
+        for f in (self.start, self.qs, self.calendar, self.clip, self.shutdown):
+            if f.visible:
+                f.hide()
+        self.taskbar.close_overflow()
+
     def command(self, args):
         if not args:
             return
         what, arg = args[0], (args[1] if len(args) > 1 else "")
         if what == "switch":
-            if self.qs.visible:
-                self.qs.hide()
-            if self.start.visible:
-                self.start.hide()
+            if arg not in ("release", "commit", "cancel"):
+                self.close_flyouts()
             {"next": lambda: self.switcher.step(1), "prev": lambda: self.switcher.step(-1),
              "release": self.switcher.alt_released,
              "swipe-begin": self.switcher.swipe_begin,
