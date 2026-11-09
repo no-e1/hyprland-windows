@@ -46,6 +46,15 @@ for lvl in range(4):            # 0 = no wave ... 3 = three waves
     save(f"volume-{lvl}", b)
 save("volume-mute", spk + f'<path d="M15 9.5l5 5M20 9.5l-5 5" stroke="{W}" stroke-width="{SW}"/>')
 
+# ── Microphone (on / muted with a slash) ─────────────────────────────
+mic = (f'<rect x="9" y="3" width="6" height="11" rx="3" stroke="{W}" stroke-width="{SW}"/>'
+       f'<path d="M6 11a6 6 0 0 0 12 0M12 17v3.5M9 20.5h6" stroke="{W}" stroke-width="{SW}"/>')
+save("mic", mic)
+save("mic-off", '<mask id="micoff"><rect width="24" height="24" fill="white"/>'
+                '<path d="M4 3.5l16 17" stroke="black" stroke-width="4"/></mask>'
+                f'<g mask="url(#micoff)">{mic}</g>'
+                f'<path d="M4 3.5l16 17" stroke="{W}" stroke-width="{SW}"/>')
+
 # ── Battery (Windows 11 taskbar style) ───────────────────────────────
 # Wide, flat body with a thin outline and a small terminal on the right;
 # the level fills almost the whole inside (thin gap to the outline).
@@ -53,7 +62,7 @@ save("volume-mute", spk + f'<path d="M15 9.5l5 5M20 9.5l-5 5" stroke="{W}" strok
 # Plugged in but not charging (full): a small plug instead of the bolt.
 BODY = '<rect x="2.6" y="7.6" width="16.8" height="8.8" rx="2.4" stroke="{c}" stroke-width="1.2"/>'
 NUB = '<path d="M20.6 10.3h.6a1 1 0 0 1 1 1v1.4a1 1 0 0 1-1 1h-.6z" fill="{c}"/>'
-FILL_X, FILL_W = 4.4, 13.9
+FILL_X, FILL_W = 4.4, 13.2      # same gap to the outline on the left and right (when full)
 BOLT = "M12.48 5.89L7.86 12.82h3.8l-.99 5.44 4.62-7.43h-3.8z"
 PLUG = "M9.5 8.8V6.3M12.5 8.8V6.3M8.1 8.8h5.8v2.2a2.9 2.9 0 0 1-5.8 0zM11 14v3.6"
 GREEN, RED = "#6ccb5f", "#ff6363"

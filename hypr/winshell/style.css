@@ -254,6 +254,8 @@ scrollbar slider { min-width: 3px; background: rgba(255, 255, 255, 0.35); border
 }
 .osd progressbar.muted progress { background: rgba(255, 255, 255, 0.54); }
 .osd-value { font-size: 13px; min-width: 24px; }
+.osd-message { font-size: 13px; }
+.osd.osd-text { min-width: 0; padding: 12px 20px; }
 
 /* click catcher behind flyouts: must not be 100% transparent, or GTK
    never hands the compositor a buffer and the surface never appears */

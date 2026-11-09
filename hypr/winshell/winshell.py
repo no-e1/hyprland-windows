@@ -2806,9 +2806,13 @@ class OSD:
         self.bar = Gtk.ProgressBar(hexpand=True, valign=Gtk.Align.CENTER)
         self.lbl = label("", "osd-value", xalign=1.0, ellipsize=False)
         self.lbl.set_width_chars(4)          # "100", "High": same width
+        # microphone on/off: a text instead of the bar ("Microphone muted")
+        self.msg = label("", "osd-message", xalign=0.5, ellipsize=False)
+        self.box = box
         box.append(self.img)
         box.append(self.bar)
         box.append(self.lbl)
+        box.append(self.msg)
         self.win.set_child(box)
         self.watch_kbd_backlight()
 
@@ -2844,6 +2848,9 @@ class OSD:
             m = sh("brightnessctl -m").split(",")
             v = int(m[3].rstrip("%")) if len(m) > 3 else 0
             return "win11-sun", v, False
+        if kind == "mic":
+            muted = "MUTED" in sh("wpctl get-volume @DEFAULT_AUDIO_SOURCE@")
+            return ("win11-mic-off" if muted else "win11-mic"), None, muted
         out = sh("wpctl get-volume @DEFAULT_AUDIO_SINK@")
         mv = re.search(r"([\d.]+)", out)
         v = round(float(mv.group(1)) * 100) if mv else 0
@@ -2856,9 +2863,19 @@ class OSD:
     def update(self, res, text=None):
         name, value, muted = res
         self.img.set_from_icon_name(name)
-        self.bar.set_fraction(max(0, min(100, value)) / 100)
-        (self.bar.add_css_class if muted else self.bar.remove_css_class)("muted")
-        self.lbl.set_text(text if text is not None else str(value))
+        message = value is None             # microphone: on / muted, no level
+        self.bar.set_visible(not message)
+        self.lbl.set_visible(not message)
+        self.msg.set_visible(message)
+        # a text pill is only as wide as icon + text: even room on both sides
+        (self.box.add_css_class if message else self.box.remove_css_class)("osd-text")
+        self.win.set_default_size(1, 1)     # shrink again after the wider volume pill
+        if message:
+            self.msg.set_text("Microphone muted" if muted else "Microphone on")
+        else:
+            self.bar.set_fraction(max(0, min(100, value)) / 100)
+            (self.bar.add_css_class if muted else self.bar.remove_css_class)("muted")
+            self.lbl.set_text(text if text is not None else str(value))
         self.win.present()
         if self.timer:
             GLib.source_remove(self.timer)
@@ -4244,7 +4261,7 @@ class WinShell(Gtk.Application):
             else:
                 self.snap.hide()
         elif what == "osd":
-            self.osd.show("brightness" if arg == "brightness" else "volume")
+            self.osd.show(arg if arg in ("brightness", "mic") else "volume")
             if self.qs.visible:
                 self.qs.refresh()
         elif what == "calendar":

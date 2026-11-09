@@ -133,18 +133,36 @@
     box-shadow: none;
 }
 
+/* ── Card, like a Windows 11 toast ─────────────────────────────────
+   dark acrylic (blurred by Hyprland, see the swaync layer rule), thin
+   light border, 8 px corners, 16 px inside, big picture on the left,
+   14 px title and text, buttons in a row below */
 .notification,
 .notification-background .notification {
-    background: rgba(48, 48, 48, 0.96);
-    border: 1px solid @border;
+    background: rgba(44, 44, 44, 0.92);
+    border: 1px solid rgba(255, 255, 255, 0.09);
     border-radius: 8px;
     margin: 6px 0;
-    padding: 4px;
+    padding: 0;
     box-shadow: none;
 }
-.floating-notifications .notification { box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45); }
+/* pop-ups: 12 px to the screen edge and between the cards, and a shadow
+   small enough to fit in that room – a bigger one got cut off into dark
+   bars under each card */
+.floating-notifications .notification-row .notification-background .notification {
+    margin: 4px 12px 8px 12px;
+    box-shadow: 0 4px 10px rgba(0, 0, 0, 0.35);
+}
 
-.notification-content { padding: 8px; }
+/* a picture sent with the notification (e.g. the screenshot preview) shows
+   big below the text, as on Windows */
+.notification-row .notification-background .notification .notification-default-action .notification-content .body-image {
+    margin-top: 10px;
+    border-radius: 4px;
+    background-color: transparent;
+}
+
+.notification-content { padding: 12px 16px; }
 .notification-default-action,
 .notification-default-action:hover {
     background: transparent;
@@ -154,7 +172,9 @@
 }
 .notification-default-action:hover { background: @card; }
 
-.summary { font-weight: 600; font-size: 13px; }
+.summary { font-weight: 600; font-size: 14px; }
+/* leave room for the X (shown on hover) at the end of the title line */
+.text-box { margin-right: 28px; }
 /* the time sits at the right edge; the X only shows on hover (swaync), then
    the time moves aside and stands right next to it */
 .time {
@@ -165,18 +185,32 @@
     transition: margin 140ms ease-out;
 }
 .notification-row:hover .time { margin-right: 34px; }
-.body { color: @fg-dim; font-size: 12px; }
-/* app icon: no extra room above/below, so a card with an icon is as tall as
-   one without and the title stays on the line of the time and the X */
+.body { color: rgba(255, 255, 255, 0.79); font-size: 14px; margin-top: 2px; }
+/* Windows' toasts have no time on them (the notification center has it) */
+.floating-notifications .time { opacity: 0; font-size: 1px; margin: 0; min-width: 0; }
+.floating-notifications .notification-row:hover .time { margin: 0; }
+/* the big picture on the left (app icon or the sender's avatar), 48 px.
+   swaync scales pictures sent as raw pixels (Discord avatars, "image-data")
+   to the image's size *including* its margin, without keeping the aspect
+   ratio – a gap only on the right squashed them flat. So the margin adds as
+   much height as width (10 px each way): the area stays square. */
 .notification-row .notification-background .notification .notification-default-action .notification-content .image {
-    margin: 0 10px 0 0;
-    -gtk-icon-size: 32px;
+    margin: 0 10px 10px 0;
+    -gtk-icon-size: 48px;
+}
+/* the small app badge on the avatar's corner (the same margin as the
+   picture, or it sits in the gap next to it and runs into the text) */
+.notification-row .notification-background .notification .notification-default-action .notification-content .app-icon {
+    -gtk-icon-shadow: none;
+    margin: 0 10px 10px 0;
 }
 
 /* close (X) on a notification: a bigger target that's easy to hit */
 .close-button {
-    /* thin X like Windows, centred on the line with the title and the time */
-    margin: 17px 10px 0 0;
+    /* thin X in the top right corner, like Windows: 8 px inside the card's
+       corner. The X sits on the row, not the card, so the card's own margin
+       (pop-ups 4 px top / 12 px right, center 6 px top) is added. */
+    margin: 14px 8px 0 0;
     padding: 0;
     min-width: 28px;
     min-height: 28px;
@@ -191,15 +225,30 @@
     color: @fg;
 }
 .close-button:hover { background: @card-hover; }
+.floating-notifications .close-button { margin: 12px 20px 0 0; }
 
-.notification-action {
+/* buttons ("Reply", "Mark as read" …): a row of equal buttons below the text */
+.notification-alt-actions { margin: 0 12px 12px 12px; padding: 0; }
+.notification-action,
+.notification-action:focus {
     margin: 4px;
+    padding: 0;
     border-radius: 4px;
-    background: @card;
-    border: 1px solid @border;
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.09);
+    box-shadow: none;
+    outline: none;
+}
+.notification-action > button {
+    min-height: 30px;
+    padding: 0 12px;
+    background: transparent;
+    border: none;
     box-shadow: none;
 }
-.notification-action:hover { background: @card-hover; }
+.notification-action label { font-size: 14px; }
+.notification-action:hover { background: rgba(255, 255, 255, 0.09); }
+.notification-action:active { background: rgba(255, 255, 255, 0.03); }
 
 .notification-group-headers { margin: 6px 4px 0 4px; }
 .notification-group-header { color: @fg-dim; font-size: 12px; }
