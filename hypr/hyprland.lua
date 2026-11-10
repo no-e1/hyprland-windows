@@ -50,6 +50,7 @@ hl.on("hyprland.start", function()
     -- restarts itself if it ever crashes (like explorer.exe)
     hl.exec_cmd(winshell .. " supervise")
     hl.exec_cmd("hypridle")                    -- lock / screen off when idle
+    hl.exec_cmd(scripts .. "/lock.sh --standby")   -- lock screen waits ready: Win + L locks at once
     -- clipboard history for Win + V (winshell/clipstore.py keeps the last 25)
     hl.exec_cmd("wl-paste --type text --watch python3 -I " .. home .. "/.config/hypr/winshell/clipstore.py text")
     hl.exec_cmd("wl-paste --type image/png --watch python3 -I " .. home .. "/.config/hypr/winshell/clipstore.py image")
@@ -144,7 +145,8 @@ hl.animation({ leaf = "layersOut",     enabled = true, speed = 1.8, bezier = "wi
 hl.animation({ leaf = "fadeLayersIn",  enabled = true, speed = 2.5, bezier = "smooth" })
 hl.animation({ leaf = "fadeLayersOut", enabled = true, speed = 1.8, bezier = "linear" })
 -- virtual desktops slide sideways like on Windows
-hl.animation({ leaf = "workspaces",    enabled = true, speed = 4,   bezier = "winOut", style = "slide" })
+WORKSPACE_ANIM = { leaf = "workspaces", enabled = true, speed = 4, bezier = "winOut", style = "slide" }
+hl.animation(WORKSPACE_ANIM)
 
 ---------------------------------------------------------------------
 -- Input
@@ -221,10 +223,13 @@ hl.window_rule({
 -- Mica/Acrylic blur for taskbar, start menu, flyouts and Alt+Tab
 hl.layer_rule({ name = "blur-startmenu", match = { namespace = "^rofi$" },                      blur = true, ignore_alpha = 0.2 })
 hl.layer_rule({ name = "blur-swaync",    match = { namespace = "^swaync-.*$" },                 blur = true, ignore_alpha = 0.2 })
-hl.layer_rule({ name = "blur-winshell",  match = { namespace = "^winshell-(qs|switcher|start|calendar|clipboard)$" }, blur = true, ignore_alpha = 0.2 })
+hl.layer_rule({ name = "blur-winshell",  match = { namespace = "^winshell-(qs|switcher|start|calendar|clipboard|taskview)$" }, blur = true, ignore_alpha = 0.2 })
 hl.layer_rule({ name = "blur-osd",        match = { namespace = "^winshell-osd$" },             blur = true, ignore_alpha = 0.2 })
 -- winshell animates its flyouts itself (they glide out of the taskbar)
 hl.layer_rule({ name = "no-anim-winshell", match = { namespace = "^winshell-.*$" }, no_anim = true })
+-- …except the task view (Win + Tab): it fades in and out as a whole, like
+-- Windows (its contents move by themselves, see winshell's style.css)
+hl.layer_rule({ name = "fade-taskview",    match = { namespace = "^winshell-taskview$" }, no_anim = false, animation = "fade" })
 -- slurp's selection overlay must vanish at once: otherwise it is still sliding
 -- out (dim + blue frame) while grim takes the screenshot
 hl.layer_rule({ name = "no-anim-slurp",    match = { namespace = "^selection$" },   no_anim = true })
@@ -1261,8 +1266,9 @@ hl.bind(win .. " + 1", hl.dsp.exec_cmd(scripts .. "/pinned.sh open '^nemo$' nemo
 hl.bind(win .. " + 2", hl.dsp.exec_cmd(scripts .. "/pinned.sh open '^(brave-browser)$' brave-browser"))
 hl.bind(win .. " + 3", hl.dsp.exec_cmd(scripts .. "/pinned.sh open '^kitty$' kitty"))
 
--- Win + Tab: task view (the switcher stays open until you pick a window)
-hl.bind(win .. " + Tab", function() winshell_send("switch view") end)
+-- Win + Tab: task view like Windows – the windows of this desktop and all
+-- desktops at the bottom (winshell's TaskView); Win + Tab again closes it
+hl.bind(win .. " + Tab", function() winshell_send("taskview") end)
 
 -- Win + Print: save a screenshot of the whole screen
 hl.bind(win .. " + Print", hl.dsp.exec_cmd(scripts .. "/screenshot.sh full"))
@@ -1288,12 +1294,135 @@ hl.bind(win .. " + SHIFT + Up", hl.dsp.window.fullscreen({ mode = "fullscreen", 
 hl.bind(win .. " + mouse:272", hl.dsp.window.drag(),   { mouse = true })
 hl.bind(win .. " + mouse:273", hl.dsp.window.resize(), { mouse = true })
 
--- Virtual desktops like Windows: Ctrl + Win + arrows / Ctrl + Win + D
-hl.bind("CTRL + " .. win .. " + Right", hl.dsp.focus({ workspace = "r+1" }))
-hl.bind("CTRL + " .. win .. " + Left",  hl.dsp.focus({ workspace = "r-1" }))
-hl.bind("CTRL + " .. win .. " + D",     hl.dsp.focus({ workspace = "empty" }))
-hl.bind(win .. " + SHIFT + Right", hl.dsp.window.move({ workspace = "r+1" }))
-hl.bind(win .. " + SHIFT + Left",  hl.dsp.window.move({ workspace = "r-1" }))
+---------------------------------------------------------------------
+-- Virtual desktops like Windows: a desktop stays until you close it, even
+-- when it's empty (Hyprland drops empty workspaces, so every desktop gets a
+-- "persistent" rule; the list is kept across config reloads).
+-- winshell's task view (Win + Tab) uses DesktopAdd / DesktopClose.
+---------------------------------------------------------------------
+local desktops_file = runtime .. "/hypr-desktops"
+MAX_DESKTOPS = 6                    -- no more desktops than this (winshell knows it too)
+local desktop_rules = {}            -- workspace id -> its persistent rule
+
+local function desktop_ids()
+    local ids = {}
+    for _, w in ipairs(hl.get_workspaces() or {}) do
+        if w.id and w.id > 0 then ids[#ids + 1] = w.id end
+    end
+    table.sort(ids)
+    return ids
+end
+
+local function save_desktops()
+    local f = io.open(desktops_file, "w")
+    if not f then return end
+    for id in pairs(desktop_rules) do f:write(id, "\n") end
+    f:close()
+end
+
+local function keep_desktop(id)
+    if not desktop_rules[id] then
+        desktop_rules[id] = hl.workspace_rule({ workspace = tostring(id), persistent = true })
+    end
+end
+
+-- desktop 1 always, plus the ones from before a config reload
+keep_desktop(1)
+do
+    local f = io.open(desktops_file, "r")
+    if f then
+        for line in f:lines() do
+            local id = tonumber(line)
+            if id and id > 0 then keep_desktop(id) end
+        end
+        f:close()
+    end
+end
+
+-- A new desktop after the last one. switch = false (task view): it only
+-- appears, you stay where you are, like Windows. A persistent rule alone
+-- doesn't create the workspace, so it is visited for an instant – with the
+-- desktop animation off, nothing shows on screen.
+function DesktopAdd(switch)
+    local ids = desktop_ids()
+    if #ids >= MAX_DESKTOPS then return end
+    local id = (ids[#ids] or 0) + 1
+    keep_desktop(id)
+    save_desktops()
+    if switch then
+        hl.dispatch(hl.dsp.focus({ workspace = tostring(id) }))
+        return
+    end
+    local cur = hl.get_active_workspace()
+    hl.animation({ leaf = "workspaces", enabled = false })
+    hl.dispatch(hl.dsp.focus({ workspace = tostring(id) }))
+    if cur and cur.id then
+        hl.dispatch(hl.dsp.focus({ workspace = tostring(cur.id) }))
+    end
+    hl.animation(WORKSPACE_ANIM)
+end
+
+-- Close a desktop: its windows move to the desktop on the left (the first
+-- one's to the right), like Windows.
+function DesktopClose(id)
+    local ids = desktop_ids()
+    if #ids < 2 then return end
+    local idx
+    for i, v in ipairs(ids) do if v == id then idx = i end end
+    if not idx then return end
+    local target = ids[idx - 1] or ids[idx + 1]
+    for _, w in ipairs(hl.get_windows() or {}) do
+        if w.workspace and w.workspace.id == id then
+            hl.dispatch(hl.dsp.window.move({ workspace = tostring(target), follow = false,
+                                             window = "address:" .. w.address }))
+        end
+    end
+    local cur = hl.get_active_workspace()
+    if cur and cur.id == id then
+        hl.dispatch(hl.dsp.focus({ workspace = tostring(target) }))
+    end
+    if desktop_rules[id] then
+        desktop_rules[id]:set_enabled(false)
+        desktop_rules[id] = nil
+    end
+    save_desktops()
+end
+
+-- Ctrl + Win + Left / Right: the neighbouring desktop (only existing ones,
+-- like Windows – no new desktop past the last one)
+function DesktopStep(delta)
+    local ids = desktop_ids()
+    local cur = hl.get_active_workspace()
+    if not cur or not cur.id then return end
+    for i, v in ipairs(ids) do
+        if v == cur.id and ids[i + delta] then
+            hl.dispatch(hl.dsp.focus({ workspace = tostring(ids[i + delta]) }))
+            return
+        end
+    end
+end
+
+hl.bind("CTRL + " .. win .. " + Right", function() DesktopStep(1) end)
+hl.bind("CTRL + " .. win .. " + Left",  function() DesktopStep(-1) end)
+hl.bind("CTRL + " .. win .. " + D",     function() DesktopAdd(true) end)
+
+-- Win + Shift + Left / Right: move the window to the neighbouring desktop
+-- (existing ones only – "r+1" made a new desktop past the last one, past the limit)
+function DesktopMoveWindow(delta)
+    local w = hl.get_active_window()
+    local cur = hl.get_active_workspace()
+    if not w or not cur or not cur.id then return end
+    local ids = desktop_ids()
+    for i, v in ipairs(ids) do
+        if v == cur.id and ids[i + delta] then
+            hl.dispatch(hl.dsp.window.move({ workspace = tostring(ids[i + delta]),
+                                             window = "address:" .. w.address }))
+            return
+        end
+    end
+end
+hl.bind(win .. " + SHIFT + Right", function() DesktopMoveWindow(1) end)
+hl.bind(win .. " + SHIFT + Left",  function() DesktopMoveWindow(-1) end)
 
 -- Screenshots: Print / Win + Shift + S select a region with the mouse,
 -- Shift + Print captures the whole screen

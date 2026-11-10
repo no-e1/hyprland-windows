@@ -90,6 +90,10 @@ for pct in range(0, 101, 10):
 # ── Quick settings and switcher glyphs ───────────────────────────────
 st = f'stroke="{W}" stroke-width="{SW}"'
 save("close", f'<path d="M6.5 6.5l11 11M17.5 6.5l-11 11" {st}/>')
+save("add", f'<path d="M12 4.5v15M4.5 12h15" {st}/>')
+# desktops: two screens, one behind the other (the "Desktop 2" pill)
+save("desktops", f'<rect x="3" y="7" width="14" height="10" rx="1.5" {st}/>'
+                 f'<path d="M7 4.5h12.5A1.5 1.5 0 0 1 21 6v8.5" {st}/><path d="M8 20h4" {st}/>')         # "New desktop" in the task view
 # keyboard light: a keyboard with light rays above it (off: no rays)
 kbd = (f'<rect x="3" y="11" width="18" height="9.5" rx="1.5" {st}/>'
        f'<path d="M6.5 14.2h.01M9.5 14.2h.01M12.5 14.2h.01M15.5 14.2h.01M17.5 14.2h.01M8 17.3h8" {st}/>')

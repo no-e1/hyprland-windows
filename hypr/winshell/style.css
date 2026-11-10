@@ -31,6 +31,73 @@ window.winshell {
     border-radius: 4px;
 }
 
+/* ── Task view (Win + Tab) ───────────────────────────────────────── */
+/* the whole screen, dimmed and blurred (Hyprland blurs winshell-taskview) */
+.taskview { background: rgba(20, 20, 24, 0.62); }
+.tv-empty { color: rgba(255, 255, 255, 0.75); font-size: 15px; }
+.taskview flowboxchild { padding: 0; background: transparent; }
+.tv-card {
+    padding: 8px 10px 10px 10px;
+    border-radius: 8px;
+    border: 2px solid transparent;
+    background: rgba(44, 44, 44, 0.55);
+}
+.tv-card:hover { background: rgba(60, 60, 60, 0.7); }
+.tv-card.selected { border-color: rgba(255, 255, 255, 0.92); }
+/* close (X): only on the card / desktop the mouse is over, like Windows */
+.tv-close {
+    min-width: 24px; min-height: 24px; padding: 0;
+    border-radius: 4px; border: none; box-shadow: none;
+    background: transparent; opacity: 0;
+}
+.tv-card:hover .tv-close, .tv-desk:hover .tv-close { opacity: 1; }
+.tv-close:hover { background: #c42b1c; }
+/* the desktops at the bottom */
+.tv-desks {
+    margin: 0 0 28px 0;
+    padding: 14px 16px 6px 16px;
+    border-radius: 8px;
+    background: rgba(32, 32, 32, 0.78);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+}
+.tv-desk { padding: 6px 6px 2px 6px; border-radius: 6px; }
+.tv-desk:hover, .tv-desk.shown { background: rgba(255, 255, 255, 0.06); }
+.tv-desk-name { font-size: 12px; color: rgba(255, 255, 255, 0.86); margin-left: 2px; }
+.tv-desk-pic { border-radius: 4px; box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.08); }
+/* the desktop you're on: blue frame, its name bright and bold */
+.tv-desk.current .tv-desk-name { color: #ffffff; font-weight: 600; }
+.tv-desk.current .tv-desk-pic { box-shadow: 0 0 0 2px #4cc2ff; }
+/* "New desktop": a quiet tile with a "+" in a round button, like Windows 11 */
+.tv-new-tile {
+    border-radius: 4px;
+    background: rgba(255, 255, 255, 0.05);
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+    transition: background-color 120ms ease-out;
+}
+.tv-plus image { padding: 10px; border-radius: 999px; background: rgba(255, 255, 255, 0.08);
+                 transition: background-color 120ms ease-out; }
+.tv-new:hover .tv-new-tile { background: rgba(255, 255, 255, 0.09); }
+.tv-new:hover .tv-plus image { background: rgba(255, 255, 255, 0.16); }
+.tv-new:active .tv-new-tile { background: rgba(255, 255, 255, 0.04); }
+
+/* opening like Windows: the windows grow into place, the desktops rise from
+   the bottom (the fade of the whole view is Hyprland's, see hyprland.lua) */
+.taskview .tv-card {
+    opacity: 0;
+    transform: scale(0.9);
+    transition: opacity 200ms ease-out, transform 280ms cubic-bezier(0.1, 0.9, 0.2, 1);
+}
+.taskview .tv-empty { opacity: 0; transition: opacity 200ms ease-out; }
+.taskview .tv-desks {
+    opacity: 0;
+    transform: translateY(48px);
+    transition: opacity 200ms ease-out, transform 300ms cubic-bezier(0.1, 0.9, 0.2, 1);
+}
+.taskview.open .tv-card, .taskview.open .tv-empty, .taskview.open .tv-desks {
+    opacity: 1;
+    transform: none;
+}
+
 /* ── Quick settings ──────────────────────────────────────────────── */
 .qs {
     min-width: 360px;
@@ -261,6 +328,10 @@ scrollbar slider { min-width: 3px; background: rgba(255, 255, 255, 0.35); border
    never hands the compositor a buffer and the surface never appears */
 window.catcher { background: rgba(0, 0, 0, 0.004); }
 window.snap-window { background: transparent; }
+window.freeze-window { background: black; }
+/* desktop slide: stays on screen all the time; not 100 % transparent, or GTK
+   never hands the compositor a buffer and the layer never appears */
+window.deskslide-window { background: rgba(0, 0, 0, 0.004); }
 
 /* ── Start menu ──────────────────────────────────────────────────── */
 .start {

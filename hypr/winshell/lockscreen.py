@@ -12,6 +12,8 @@ the desktop hidden until it unlocks. If this program ever fails, lock.sh
 starts hyprlock instead – the screen never ends up unlocked or stuck.
 
   lockscreen.py              lock the screen
+  lockscreen.py --standby    load everything and wait; SIGUSR1 locks at once
+                             (lock.sh keeps one ready, so Win + L is instant)
   lockscreen.py --preview    show it in a normal window, nothing is locked
                              (add "signin" to start at the sign-in step)
 """
@@ -19,6 +21,7 @@ import ctypes
 import ctypes.util
 import os
 import pwd
+import signal
 import subprocess
 import sys
 import threading
@@ -30,6 +33,10 @@ gi.require_version("Gdk", "4.0")
 from gi.repository import Gdk, Gio, GLib, Gtk  # noqa: E402
 
 PREVIEW = "--preview" in sys.argv
+STANDBY = "--standby" in sys.argv
+RUN = os.environ.get("XDG_RUNTIME_DIR", "/tmp")
+STANDBY_PID = os.path.join(RUN, "lockscreen-standby.pid")   # waiting, ready to lock
+RESULT = os.path.join(RUN, "lockscreen.result")             # "unlocked" after a real unlock
 if PREVIEW:
     gi.require_version("Gtk4LayerShell", "1.0")
     from gi.repository import Gtk4LayerShell as LS  # noqa: E402
@@ -432,12 +439,7 @@ class LockScreen:
         if not self.signin:
             if keyval == Gdk.KEY_Escape:
                 return True
-            self.show_signin()
-            ch = Gdk.keyval_to_unicode(keyval)
-            entry = next((s["entry"] for s in self.screens if s["entry"]), None)
-            if entry and ch >= 32 and not state & (Gdk.ModifierType.CONTROL_MASK | Gdk.ModifierType.ALT_MASK):
-                entry.set_text(entry.get_text() + chr(ch))     # the first key counts already
-                entry.set_position(-1)
+            self.show_signin()          # the first key only slides the lock screen away
             return True
         if keyval == Gdk.KEY_Escape:
             entry = next((s["entry"] for s in self.screens if s["entry"]), None)
@@ -510,6 +512,21 @@ class App(Gtk.Application):
         Gtk.StyleContext.add_provider_for_display(Gdk.Display.get_default(), css,
                                                   Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
         self.hold()
+        if STANDBY:
+            # everything is loaded: wait for lock.sh's signal, then lock at once
+            GLib.unix_signal_add(GLib.PRIORITY_HIGH, signal.SIGUSR1, self.start_lock)
+            GLib.unix_signal_add(GLib.PRIORITY_HIGH, signal.SIGTERM, lambda: self.quit_with(3))
+            with open(STANDBY_PID, "w") as f:
+                f.write(str(os.getpid()))
+            return
+        self.start_lock()
+
+    def start_lock(self):
+        if STANDBY:
+            try:
+                os.unlink(STANDBY_PID)          # used up: lock.sh starts the next one
+            except OSError:
+                pass
         self.screen = LockScreen(self, start_signin=PREVIEW and "signin" in sys.argv)
         display = Gdk.Display.get_default()
         monitors = [display.get_monitors().get_item(i) for i in range(display.get_monitors().get_n_items())]
@@ -520,7 +537,7 @@ class App(Gtk.Application):
             if not self.lock.lock():
                 print("lockscreen: could not lock", file=sys.stderr)
                 self.quit_with(2)
-                return
+                return False
             for i, mon in enumerate(monitors):
                 win = Gtk.Window(application=self)
                 win.add_css_class("lock")
@@ -533,6 +550,7 @@ class App(Gtk.Application):
         GLib.timeout_add_seconds(10, self.screen.update_status)
         if self.screen.start_signin:
             GLib.timeout_add(300, lambda: self.screen.show_signin() and False)
+        return False                            # (as a signal handler: run once)
 
     def preview_window(self, mon):
         win = Gtk.Window(application=self)
@@ -553,6 +571,9 @@ class App(Gtk.Application):
         if self.lock:
             self.lock.unlock()
         self.unlocked = True
+        if STANDBY:
+            with open(RESULT, "w") as f:        # lock.sh can't see a standby's exit code
+                f.write("unlocked")
         GLib.timeout_add(150, lambda: self.quit_with(0))
 
     def quit_with(self, code):

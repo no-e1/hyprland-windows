@@ -518,6 +518,7 @@ class Switcher:
         self.task_view = False
         self.gesture = False        # opened by a 3-finger swipe
         self.paused_until = 0.0
+        self.on_thumb = None        # the task view wants new previews too
         self.win = layer_window(app, "winshell-switcher", LS.Layer.OVERLAY)
         self.flow = Gtk.FlowBox(selection_mode=Gtk.SelectionMode.NONE, homogeneous=True,
                                 max_children_per_line=6, min_children_per_line=1,
@@ -583,10 +584,11 @@ class Switcher:
         if not self.task_view and not self.gesture and keyval in (Gdk.KEY_Alt_L, Gdk.KEY_Alt_R):
             self.commit()
 
-    # every open window – all desktops, minimized ones too – most recent first.
-    # (Hyprland reports no workspace "id" for minimized windows.)
+    # every open window of this desktop (like Windows), minimized ones too –
+    # most recent first. Minimized windows count for the desktop they were on.
     def collect(self):
         clients = hypr_json("clients") or []
+        cur = current_desktop()
         wins = []
         for c in clients:
             name = (c.get("workspace") or {}).get("name", "")
@@ -594,6 +596,8 @@ class Switcher:
                 continue
             if name.startswith("special:") and name != "special:minimized":
                 continue                    # scratchpads and the like
+            if desktop_of(c) not in (cur, None):
+                continue
             wins.append(c)
         wins.sort(key=lambda c: c.get("focusHistoryID", 99))
         return wins
@@ -914,6 +918,8 @@ class Switcher:
             if tex:
                 self.thumbs[addr] = tex
                 self.thumb_time[addr] = time.monotonic()
+                if self.on_thumb:
+                    self.on_thumb(addr, tex)
                 if update and self.visible:
                     for item, card in zip(self.items, self.cards):
                         if item["address"] == addr:
@@ -932,6 +938,11 @@ class Switcher:
                     GLib.idle_add(refresh_taskbar)
                 if ev == "configreloaded":
                     self.paused_until = time.monotonic() + 3   # grim can crash during a reload
+                elif ev == "workspacev2" and data and SHELL and getattr(SHELL, "deskslide", None):
+                    wid = data.split(",")[0]
+                    if wid.lstrip("-").isdigit():
+                        GLib.idle_add(SHELL.deskslide.changed, int(wid),
+                                      GLib.get_monotonic_time() / 1e6)
                 elif ev == "activewindowv2" and data:
                     GLib.idle_add(self.schedule_capture, "0x" + data)
                 elif ev == "closewindow" and data:
@@ -2871,7 +2882,8 @@ class OSD:
         (self.box.add_css_class if message else self.box.remove_css_class)("osd-text")
         self.win.set_default_size(1, 1)     # shrink again after the wider volume pill
         if message:
-            self.msg.set_text("Microphone muted" if muted else "Microphone on")
+            self.msg.set_text(text if text is not None else
+                              ("Microphone muted" if muted else "Microphone on"))
         else:
             self.bar.set_fraction(max(0, min(100, value)) / 100)
             (self.bar.add_css_class if muted else self.bar.remove_css_class)("muted")
@@ -2886,6 +2898,578 @@ class OSD:
         self.win.set_visible(False)
         return False
 
+
+
+# ── Desktops (Hyprland workspaces) ──────────────────────────────────────────
+# Minimized windows sit in "special:minimized", so they don't tell which
+# desktop they belong to: remember the last real desktop of every window
+# (kept in a file, so it survives a winshell restart).
+DESKTOPS_FILE = os.path.join(RUNTIME, "winshell-desktops.json")
+try:
+    with open(DESKTOPS_FILE) as _f:
+        WINDOW_DESKTOP = {k: int(v) for k, v in json.load(_f).items()}
+except (OSError, ValueError, TypeError, AttributeError):
+    WINDOW_DESKTOP = {}
+
+
+def desktop_of(c):
+    """The desktop (workspace id) a window belongs to – for a minimized
+    window the one it was on. None if unknown."""
+    ws = c.get("workspace") or {}
+    if not ws.get("name", "").startswith("special:") and ws.get("id") is not None:
+        if WINDOW_DESKTOP.get(c["address"]) != ws["id"]:
+            WINDOW_DESKTOP[c["address"]] = ws["id"]
+            try:
+                with open(DESKTOPS_FILE, "w") as f:
+                    json.dump(WINDOW_DESKTOP, f)
+            except OSError:
+                pass
+        return ws["id"]
+    return WINDOW_DESKTOP.get(c["address"])
+
+
+def current_desktop():
+    return (hypr_json("activeworkspace") or {}).get("id")
+
+
+class FixedPicture(Gtk.Picture):
+    """A picture that always asks for the same size, whatever the texture."""
+    def __init__(self, w, h, **kw):
+        super().__init__(**kw)
+        self.fixed = (w, h)
+
+    def do_measure(self, orientation, for_size):
+        n = self.fixed[0] if orientation == Gtk.Orientation.HORIZONTAL else self.fixed[1]
+        return n, n, -1, -1
+
+
+# ── Task view (Win + Tab) ──────────────────────────────────────────────────
+class TaskView:
+    """Win + Tab like Windows 11: the windows of this desktop big in the
+    middle, every desktop in a row at the bottom, "+ New desktop" last.
+    Pointing at a desktop shows its windows; a click on a window or a desktop
+    goes there. Esc, Win + Tab again or a click on the background close it."""
+    CARD_W, CARD_H = 288, 180
+    DESK_W, DESK_H = 176, 99
+    MAX_DESKTOPS = 6            # as in hyprland.lua: no "New desktop" beyond this
+
+    def __init__(self, app, shell):
+        self.shell = shell
+        self.visible = False
+        self.items, self.cards, self.sel = [], [], 0
+        self.shown_ws = None
+        self.wall = (None, None)                # (path, texture)
+        self.win = layer_window(app, "winshell-taskview", LS.Layer.OVERLAY,
+                                anchors=(LS.Edge.TOP, LS.Edge.BOTTOM, LS.Edge.LEFT, LS.Edge.RIGHT),
+                                exclusive=-1)
+        root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        root.add_css_class("taskview")
+        self.root = root
+        self.flow = Gtk.FlowBox(selection_mode=Gtk.SelectionMode.NONE, homogeneous=True,
+                                column_spacing=20, row_spacing=20,
+                                halign=Gtk.Align.CENTER, valign=Gtk.Align.CENTER)
+        self.empty = label("No open windows on this desktop", "tv-empty", xalign=0.5)
+        middle = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, valign=Gtk.Align.CENTER,
+                         halign=Gtk.Align.CENTER)
+        middle.append(self.flow)
+        middle.append(self.empty)
+        self.scroll = Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.NEVER,
+                                         vscrollbar_policy=Gtk.PolicyType.AUTOMATIC, vexpand=True)
+        self.scroll.set_child(middle)
+        root.append(self.scroll)
+        self.desks = Gtk.Box(spacing=14, halign=Gtk.Align.CENTER)
+        self.desks.add_css_class("tv-desks")
+        root.append(self.desks)
+        self.win.set_child(root)
+        # a click that no card took: on the background – close
+        back = Gtk.GestureClick()
+        back.connect("released", lambda *_: self.visible and self.hide())
+        root.add_controller(back)
+        keys = Gtk.EventControllerKey()
+        keys.connect("key-pressed", self.on_key)
+        self.win.add_controller(keys)
+
+    # ── open / close ──
+    def toggle(self):
+        self.hide() if self.visible else self.show()
+
+    def show(self):
+        self.shell.close_flyouts()
+        if self.shell.switcher.visible:
+            self.shell.switcher.hide()
+        self.visible = True
+        self.shell.switcher.on_thumb = self.on_thumb
+        self.cur = current_desktop()
+        self.build_desks()
+        self.show_desktop(self.cur, select_active=True)
+        LS.set_keyboard_mode(self.win, LS.KeyboardMode.EXCLUSIVE)
+        # Windows-like opening: Hyprland fades the whole view in (layer rule
+        # in hyprland.lua), the windows grow into place and the desktops rise
+        # from the bottom – CSS transitions, started one frame after showing
+        self.root.remove_css_class("open")
+        self.win.present()
+        GLib.timeout_add(30, lambda: self.visible and self.root.add_css_class("open") and False)
+        # fresh previews of this desktop's windows (only visible windows can
+        # be captured; the others keep their last picture)
+        for c in self.items:
+            self.shell.switcher.capture(c, update=False)
+
+    def hide(self):
+        self.visible = False
+        self.shell.switcher.on_thumb = None
+        self.win.set_visible(False)
+        LS.set_keyboard_mode(self.win, LS.KeyboardMode.NONE)
+
+    def close_then(self, fn):
+        """Give the keyboard back first (Hyprland refocuses right then), then
+        act, then hide – like the Alt+Tab switcher."""
+        self.visible = False
+        LS.set_keyboard_mode(self.win, LS.KeyboardMode.NONE)
+
+        def later():
+            fn()
+            GLib.timeout_add(40, lambda: self.hide() and False)
+            return False
+        GLib.timeout_add(20, later)
+
+    # ── data ──
+    @staticmethod
+    def windows():
+        wins = []
+        for c in hypr_json("clients") or []:
+            name = (c.get("workspace") or {}).get("name", "")
+            if not c.get("mapped") or c.get("hidden") or not c.get("address"):
+                continue
+            if name.startswith("special:") and name != "special:minimized":
+                continue
+            wins.append(c)
+        wins.sort(key=lambda c: c.get("focusHistoryID", 99))
+        return wins
+
+    def desktop_ids(self):
+        ids = {w.get("id") for w in hypr_json("workspaces") or [] if (w.get("id") or 0) > 0}
+        if self.cur:
+            ids.add(self.cur)
+        return sorted(ids)
+
+    def wallpaper(self):
+        try:
+            with open(os.path.expanduser("~/.config/hypr/.current_wallpaper")) as f:
+                path = f.read().strip()
+        except OSError:
+            return None
+        if re.search(r"\.(mp4|webm|mkv|gif)$", path, re.I):
+            path = os.path.splitext(path)[0] + ".poster.jpg"
+        if self.wall[0] == path:
+            return self.wall[1]
+        tex = None
+        try:
+            gi.require_version("GdkPixbuf", "2.0")
+            from gi.repository import GdkPixbuf
+            pb = GdkPixbuf.Pixbuf.new_from_file_at_scale(path, self.DESK_W * 2, -1, True)
+            tex = Gdk.Texture.new_for_pixbuf(pb)
+        except Exception:
+            pass
+        self.wall = (path, tex)
+        return tex
+
+    # ── windows in the middle ──
+    def show_desktop(self, ws, select_active=False):
+        self.shown_ws = ws
+        wins = self.windows()
+        self.items = [c for c in wins if desktop_of(c) == ws or
+                      (desktop_of(c) is None and ws == self.cur)]
+        self.cards = []
+        clear(self.flow)
+        mon_w = self.shell.switcher.monitor_size()[0]
+        per_line = max(1, min(len(self.items) or 1, int((mon_w * 0.9) // (self.CARD_W + 44))))
+        self.flow.set_min_children_per_line(per_line)
+        self.flow.set_max_children_per_line(per_line)
+        for i, c in enumerate(self.items):
+            self.flow.append(self.make_card(i, c))
+        self.flow.set_visible(bool(self.items))
+        self.empty.set_visible(not self.items)
+        self.sel = 0
+        self.update_selection(select_active)
+        for d in self.desk_cards:
+            (d.add_css_class if d.ws == ws else d.remove_css_class)("shown")
+
+    def make_card(self, i, c):
+        card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        card.add_css_class("tv-card")
+        head = Gtk.Box(spacing=8)
+        img = Gtk.Image.new_from_gicon(self.shell.switcher.icons.get(c["class"]))
+        img.set_pixel_size(16)
+        head.append(img)
+        t = label(c["title"] or c["class"], "card-title")
+        t.set_hexpand(True)
+        t.set_width_chars(1)
+        head.append(t)
+        x = Gtk.Button(child=icon("win11-close", 12))
+        x.add_css_class("tv-close")
+        x.set_tooltip_text("Close")
+        x.connect("clicked", lambda *_: self.close_window(c))
+        head.append(x)
+        head.set_size_request(self.CARD_W, -1)
+        card.append(head)
+        stack = Gtk.Stack()
+        stack.add_css_class("thumb")
+        big = Gtk.Image.new_from_gicon(self.shell.switcher.icons.get(c["class"]))
+        big.set_pixel_size(56)
+        stack.add_named(big, "icon")
+        pic = FixedPicture(self.CARD_W, self.CARD_H, content_fit=Gtk.ContentFit.CONTAIN, can_shrink=True)
+        stack.add_named(pic, "pic")
+        tex = self.shell.switcher.thumbs.get(c["address"])
+        if tex:
+            pic.set_paintable(tex)
+            stack.set_visible_child_name("pic")
+        else:
+            stack.set_size_request(self.CARD_W, self.CARD_H)
+        card.append(stack)
+        card.pic, card.stack, card.addr = pic, stack, c["address"]
+        click = Gtk.GestureClick()
+        click.connect("released", lambda g, *_a, i=i: (g.set_state(Gtk.EventSequenceState.CLAIMED),
+                                                       self.open(i)))
+        stack.add_controller(click)
+        self.cards.append(card)
+        return card
+
+    def on_thumb(self, addr, tex):
+        for card in self.cards:
+            if card.addr == addr:
+                card.pic.set_paintable(tex)
+                card.stack.set_visible_child_name("pic")
+
+    def update_selection(self, select_active=False):
+        if select_active:
+            self.sel = 0                        # most recent window first
+        for i, card in enumerate(self.cards):
+            (card.add_css_class if i == self.sel else card.remove_css_class)("selected")
+
+    def open(self, i):
+        if not (0 <= i < len(self.items)):
+            return
+        c = self.items[i]
+        ws = self.shown_ws
+        minimized = (c.get("workspace") or {}).get("name") == "special:minimized"
+
+        def go():
+            if minimized and ws and ws != self.cur:
+                # restored onto the desktop it belongs to, not this one
+                dispatch(f'hl.dsp.focus({{ workspace = "{ws}" }})')
+                GLib.timeout_add(60, lambda: self.shell.switcher.focus(c["address"], c["class"], 4) and False)
+            else:
+                self.shell.switcher.focus(c["address"], c["class"], tries=4)
+        self.close_then(go)
+
+    def close_window(self, c):
+        dispatch(f'hl.dsp.window.close({{ window = "address:{c["address"]}" }})')
+        GLib.timeout_add(250, lambda: self.visible and (self.build_desks(),
+                                                        self.show_desktop(self.shown_ws)) and False)
+
+    # ── desktops at the bottom ──
+    def build_desks(self):
+        clear(self.desks)
+        self.desk_cards = []
+        wins = self.windows()
+        ids = self.desktop_ids()
+        wall = self.wallpaper()
+        for n, ws in enumerate(ids, 1):
+            card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+            card.add_css_class("tv-desk")
+            card.ws = ws
+            if ws == self.cur:
+                card.add_css_class("current")
+            over = Gtk.Overlay()
+            pic = FixedPicture(self.DESK_W, self.DESK_H, content_fit=Gtk.ContentFit.COVER, can_shrink=True)
+            pic.add_css_class("tv-desk-pic")
+            if wall:
+                pic.set_paintable(wall)
+            over.set_child(pic)
+            row = Gtk.Box(spacing=4, halign=Gtk.Align.CENTER, valign=Gtk.Align.CENTER)
+            seen = []
+            for c in wins:
+                if desktop_of(c) == ws and c["class"] not in seen and len(seen) < 5:
+                    seen.append(c["class"])
+                    im = Gtk.Image.new_from_gicon(self.shell.switcher.icons.get(c["class"]))
+                    im.set_pixel_size(28)
+                    row.append(im)
+            over.add_overlay(row)
+            card.append(over)
+            foot = Gtk.Box(spacing=4)
+            name = label(f"Desktop {n}", "tv-desk-name")
+            name.set_hexpand(True)
+            foot.append(name)
+            if len(ids) > 1:
+                x = Gtk.Button(child=icon("win11-close", 10))
+                x.add_css_class("tv-close")
+                x.set_tooltip_text("Close desktop")
+                x.connect("clicked", lambda *_a, ws=ws: self.close_desktop(ws))
+                foot.append(x)
+            else:
+                foot.set_size_request(-1, 24)   # same height as with the X
+            card.append(foot)
+            self.hook_desk(card, lambda ws=ws: self.go_desktop(ws))
+            self.desks.append(card)
+            self.desk_cards.append(card)
+        if len(ids) >= self.MAX_DESKTOPS:
+            return                              # the limit: no "New desktop" tile
+        # "New desktop": a tile like a desktop, a "+" in the middle
+        new = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        new.add_css_class("tv-desk")
+        new.add_css_class("tv-new")
+        tile = Gtk.Box(halign=Gtk.Align.CENTER, valign=Gtk.Align.CENTER)
+        tile.set_size_request(self.DESK_W, self.DESK_H)
+        tile.add_css_class("tv-new-tile")
+        plus = Gtk.Box(halign=Gtk.Align.CENTER, valign=Gtk.Align.CENTER, hexpand=True)
+        plus.add_css_class("tv-plus")
+        plus.append(icon("win11-add", 20))
+        tile.append(plus)
+        new.append(tile)
+        foot = Gtk.Box()
+        foot.set_size_request(-1, 24)
+        foot.append(label("New desktop", "tv-desk-name"))
+        new.append(foot)
+        new.ws = None
+        self.hook_desk(new, self.new_desktop, hover=False)
+        self.desks.append(new)
+
+    def hook_desk(self, card, on_click, hover=True):
+        click = Gtk.GestureClick()
+        click.connect("released", lambda g, *_: (g.set_state(Gtk.EventSequenceState.CLAIMED), on_click()))
+        card.add_controller(click)
+        if hover:
+            motion = Gtk.EventControllerMotion()
+            motion.connect("enter", lambda *_: self.visible and self.shown_ws != card.ws
+                           and self.show_desktop(card.ws))
+            card.add_controller(motion)
+
+    def go_desktop(self, ws):
+        if ws == self.cur:
+            self.close_then(lambda: None)
+        else:
+            self.close_then(lambda: dispatch(f'hl.dsp.focus({{ workspace = "{ws}" }})'))
+
+    def new_desktop(self):
+        """A new, empty desktop after the last one (hyprland.lua DesktopAdd);
+        you stay where you are and the view stays open, like Windows."""
+        hypr_eval("DesktopAdd(false)")
+
+        def again():
+            if self.visible:
+                self.build_desks()
+                for d in self.desk_cards:
+                    (d.add_css_class if d.ws == self.shown_ws else d.remove_css_class)("shown")
+            return False
+        GLib.timeout_add(120, again)
+
+    def close_desktop(self, ws):
+        """Like Windows: its windows move to the desktop on the left (or the
+        right one, for the first)."""
+        ids = self.desktop_ids()
+        if ws not in ids or len(ids) < 2:
+            return
+        i = ids.index(ws)
+        target = ids[i - 1] if i > 0 else ids[1]
+        for c in self.windows():             # minimized ones: winshell keeps their desktop
+            if desktop_of(c) == ws and (c.get("workspace") or {}).get("name") == "special:minimized":
+                WINDOW_DESKTOP[c["address"]] = target
+        hypr_eval(f"DesktopClose({ws})")       # moves the others, drops the desktop
+
+        def again():
+            if self.visible:
+                self.cur = current_desktop()
+                self.build_desks()
+                self.show_desktop(self.cur)
+            return False
+        GLib.timeout_add(150, again)
+
+    # ── keyboard ──
+    def on_key(self, _c, keyval, _code, state):
+        n = len(self.cards)
+        if keyval == Gdk.KEY_Escape:
+            self.hide()
+        elif keyval in (Gdk.KEY_Return, Gdk.KEY_KP_Enter, Gdk.KEY_space):
+            if n:
+                self.open(self.sel)
+            else:
+                self.go_desktop(self.shown_ws)
+        elif n and keyval in (Gdk.KEY_Right, Gdk.KEY_Tab, Gdk.KEY_Down):
+            per = self.flow.get_max_children_per_line()
+            self.sel = min(n - 1, self.sel + (per if keyval == Gdk.KEY_Down else 1))
+            self.update_selection()
+        elif n and keyval in (Gdk.KEY_Left, Gdk.KEY_ISO_Left_Tab, Gdk.KEY_Up):
+            per = self.flow.get_max_children_per_line()
+            self.sel = max(0, self.sel - (per if keyval == Gdk.KEY_Up else 1))
+            self.update_selection()
+        return True
+
+
+# ── Desktop switch: the wallpaper slides along ─────────────────────────────
+class DesktopSlide(Gtk.Widget):
+    """Hyprland slides only the windows when you change desktops; the
+    wallpaper is its own layer and stands still – between two empty desktops
+    nothing moved at all. Like Windows, the wallpaper slides along: this
+    layer lies right above the wallpaper (below every window) and moves the
+    old picture out and the new one in – in step with Hyprland's slide: same
+    curve ("winOut"), same length, same distance, timed from the moment
+    Hyprland reports the switch. A "Desktop 2" pill (the OSD) says where you are.
+    The layer stays mapped (empty and click-through), so nothing has to
+    appear first when a switch starts."""
+    DURATION = 0.4              # s: Hyprland's "workspaces" animation, speed 4 (× 100 ms)
+    CURVE = (0.1, 0.9, 0.1, 1.0)    # its bezier "winOut" (hyprland.lua)
+    SEAM = 28                   # px of shadow on the edge between the two desktops
+    LEAD = 0.025                # s ahead: the switch reaches us a moment late and our
+                                # picture shows a frame later – measured ~15–30 ms behind
+
+    def __init__(self, app, shell):
+        super().__init__()
+        self.shell = shell
+        self.tex = None
+        self.tex_path = None
+        self.dir = 1
+        self.t0 = None              # monotonic s when Hyprland switched; None: idle
+        self.tick = 0
+        self.prev = current_desktop()
+        self.win = layer_window(app, "winshell-deskslide", LS.Layer.BOTTOM,
+                                anchors=(LS.Edge.TOP, LS.Edge.BOTTOM, LS.Edge.LEFT, LS.Edge.RIGHT),
+                                exclusive=-1)
+        self.win.add_css_class("deskslide-window")
+        self.set_hexpand(True)
+        self.set_vexpand(True)
+        self.win.set_child(self)
+        self.win.connect("realize", lambda w: self.passthrough())
+        self.win.present()
+        GLib.idle_add(lambda: self.wallpaper() and False)      # decoded before the first switch
+
+    def passthrough(self):
+        import cairo
+        surf = self.win.get_surface()
+        if surf:
+            surf.set_input_region(cairo.Region())
+
+    def wallpaper(self):
+        try:
+            with open(os.path.expanduser("~/.config/hypr/.current_wallpaper")) as f:
+                path = f.read().strip()
+        except OSError:
+            return None
+        if re.search(r"\.(mp4|webm|mkv|gif)$", path, re.I):
+            path = os.path.splitext(path)[0] + ".poster.jpg"
+        if path != self.tex_path:
+            try:
+                self.tex = Gdk.Texture.new_from_filename(path)
+            except GLib.Error:
+                self.tex = None
+            self.tex_path = path
+        return self.tex
+
+    def changed(self, ws, when):
+        """workspacev2 from Hyprland (when: monotonic s it arrived)."""
+        prev, self.prev = self.prev, ws
+        if not prev or ws == prev or ws <= 0:
+            return False
+        if self.shell.taskview.visible:
+            return False            # the task view switches behind its own picture
+        ids = sorted({w.get("id") for w in hypr_json("workspaces") or [] if (w.get("id") or 0) > 0})
+        name = f"Desktop {ids.index(ws) + 1}" if ws in ids else f"Desktop {ws}"
+        self.shell.osd.update(("win11-desktops", None, False), text=name)
+        if not self.wallpaper():
+            return False
+        self.dir = 1 if ws > prev else -1    # to the right: the new one comes from the right
+        self.t0 = when
+        self.queue_draw()
+        if not self.tick:
+            self.tick = self.add_tick_callback(self.on_tick)
+        return False
+
+    def on_tick(self, _w, _clock):
+        self.queue_draw()
+        if self.t0 is None or GLib.get_monotonic_time() / 1e6 - self.t0 + self.LEAD >= self.DURATION:
+            self.t0 = None
+            self.tick = 0
+            self.queue_draw()           # back to empty
+            return False
+        return True
+
+    @classmethod
+    def ease(cls, x):
+        """y of the bezier at x (Hyprland's curves are x → y like CSS)."""
+        x1, y1, x2, y2 = cls.CURVE
+        lo, hi = 0.0, 1.0
+        for _ in range(30):             # find t for x by halving
+            t = (lo + hi) / 2
+            bx = 3 * (1 - t) ** 2 * t * x1 + 3 * (1 - t) * t * t * x2 + t ** 3
+            lo, hi = (t, hi) if bx < x else (lo, t)
+        t = (lo + hi) / 2
+        return 3 * (1 - t) ** 2 * t * y1 + 3 * (1 - t) * t * t * y2 + t ** 3
+
+    def do_snapshot(self, snap):
+        w, h = self.get_width(), self.get_height()
+        tex = self.tex
+        if self.t0 is None or not tex or not w or not h:
+            return                      # idle: draws nothing, the wallpaper shows through
+        x = min(1.0, max(0.0, (GLib.get_monotonic_time() / 1e6 - self.t0 + self.LEAD) / self.DURATION))
+        shift = w * self.ease(x)
+        scale = max(w / tex.get_width(), h / tex.get_height())      # "cover", like the wallpaper
+        tw, th = tex.get_width() * scale, tex.get_height() * scale
+        old_x, new_x = -self.dir * shift, self.dir * (w - shift)
+        for x0 in (old_x, new_x):
+            snap.push_clip(Graphene.Rect().init(x0, 0, w, h))
+            snap.append_texture(tex, Graphene.Rect().init(x0 + (w - tw) / 2, (h - th) / 2, tw, th))
+            snap.pop()
+        # a soft shadow on the incoming desktop's leading edge marks the seam
+        edge = new_x if self.dir > 0 else new_x + w - self.SEAM
+        dark, clear_ = Gdk.RGBA(), Gdk.RGBA()
+        dark.parse("rgba(0,0,0,0.55)")
+        clear_.parse("rgba(0,0,0,0)")
+        stops = [Gsk.ColorStop(), Gsk.ColorStop()]
+        stops[0].offset, stops[0].color = 0.0, dark
+        stops[1].offset, stops[1].color = 1.0, clear_
+        rect = Graphene.Rect().init(edge, 0, self.SEAM, h)
+        a = Graphene.Point().init(edge if self.dir > 0 else edge + self.SEAM, 0)
+        b = Graphene.Point().init(edge + self.SEAM if self.dir > 0 else edge, 0)
+        snap.append_linear_gradient(rect, a, b, stops)
+
+
+# ── Frozen screen while a screenshot region is picked ──────────────────────
+class Freeze:
+    """screenshot.sh takes a picture of every screen first, then shows it
+    here, full screen above everything, while slurp lets you pick the region
+    – so a running video (or anything else) holds still until you're done.
+    Underneath, everything keeps running.
+      freeze <monitor>=<png> ...   show the pictures
+      freeze off                   remove them"""
+    def __init__(self, app):
+        self.app = app
+        self.wins = []
+
+    def show(self, pairs):
+        self.hide()
+        display = Gdk.Display.get_default()
+        mons = display.get_monitors()
+        by_name = {mons.get_item(i).get_connector(): mons.get_item(i) for i in range(mons.get_n_items())}
+        for pair in pairs:
+            name, _, path = pair.partition("=")
+            mon = by_name.get(name)
+            if not mon or not os.path.exists(path):
+                continue
+            w = layer_window(self.app, "winshell-freeze", LS.Layer.OVERLAY,
+                             anchors=(LS.Edge.TOP, LS.Edge.BOTTOM, LS.Edge.LEFT, LS.Edge.RIGHT),
+                             exclusive=-1)
+            LS.set_monitor(w, mon)
+            w.add_css_class("freeze-window")
+            pic = Gtk.Picture.new_for_filename(path)
+            pic.set_content_fit(Gtk.ContentFit.FILL)
+            pic.set_can_shrink(True)
+            w.set_child(pic)
+            w.present()
+            self.wins.append(w)
+
+    def hide(self):
+        for w in self.wins:
+            w.destroy()
+        self.wins = []
 
 
 # ── Snap preview (dragging a window to a screen edge) ──────────────────────
@@ -3540,10 +4124,15 @@ class Taskbar:
     def refresh(self):
         clients = hypr_json("clients") or []
         active = hypr_json("activewindow") or {}
+        cur = current_desktop()
         groups = {}
         for c in sorted(clients, key=lambda c: c.get("focusHistoryID", 99)):
             ws = (c.get("workspace") or {}).get("name", "")
             if not c.get("mapped") or (ws.startswith("special:") and ws != "special:minimized"):
+                continue
+            # like Windows: only the windows of the desktop you're on (minimized
+            # ones count for the desktop they were on; unknown: shown everywhere)
+            if desktop_of(c) not in (cur, None):
                 continue
             groups.setdefault(self.key_for(c), []).append(c)
         self.groups = groups
@@ -4142,6 +4731,9 @@ class WinShell(Gtk.Application):
         self.qs = QuickSettings(self)
         self.osd = OSD(self)
         self.snap = SnapPreview(self)
+        self.freeze = Freeze(self)
+        self.taskview = TaskView(self, self)
+        self.deskslide = DesktopSlide(self, self)
         self.desk = DesktopAnim(self, self)
         self.clip = ClipboardPanel(self, self)
         self.shutdown = ShutdownDialog(self, self)
@@ -4216,7 +4808,7 @@ class WinShell(Gtk.Application):
         """Close every open menu (start menu, quick settings with its Wi-Fi /
         Bluetooth / sound pages, calendar, clipboard, tray flyout), like
         Windows does when Alt+Tab starts."""
-        for f in (self.start, self.qs, self.calendar, self.clip, self.shutdown):
+        for f in (self.start, self.qs, self.calendar, self.clip, self.shutdown, self.taskview):
             if f.visible:
                 f.hide()
         self.taskbar.close_overflow()
@@ -4253,6 +4845,10 @@ class WinShell(Gtk.Application):
                 self.desk.run(arg, args[2], int(args[3]), args[4:])
             else:
                 self.desk.stop()
+        elif what == "taskview":                # Win + Tab
+            self.taskview.hide() if arg == "hide" else self.taskview.toggle()
+        elif what == "freeze":                  # screenshot.sh: still picture while picking a region
+            self.freeze.hide() if arg == "off" else self.freeze.show(args[1:])
         elif what == "thumbs":                  # hyprland.lua: a window is about to change
             self.switcher.pause_thumbs()
         elif what == "snap":                    # hyprland.lua, while a window is dragged
