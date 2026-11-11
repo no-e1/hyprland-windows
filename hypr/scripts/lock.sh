@@ -41,14 +41,9 @@ pidof hyprlock >/dev/null && exit 0
 
 dir="$HOME/.cache/hyprlock"
 mkdir -p "$dir"
-# background: the current wallpaper (a still frame for videos / GIFs) – set
-# before the lock screen is woken, it reads it right then
-f=$(cat "$HOME/.config/hypr/.current_wallpaper" 2>/dev/null)
-img="$f"
-if [[ "${f,,}" =~ \.(mp4|webm|mkv|gif)$ ]]; then
-    img="${f%.*}.poster.jpg"
-    [ -f "$img" ] || ffmpeg -loglevel error -y -i "$f" -frames:v 1 "$img" 2>/dev/null
-fi
+# background: the current wallpaper – set before the lock screen is woken,
+# it reads it right then
+img=$(cat "$HOME/.config/hypr/.current_wallpaper" 2>/dev/null)
 [ -f "$img" ] && ln -sfn "$img" "$dir/wallpaper"
 # profile picture
 for p in "$HOME/.face" "$HOME/.face.icon" "/var/lib/AccountsService/icons/$USER"; do

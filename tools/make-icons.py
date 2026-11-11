@@ -21,15 +21,19 @@ def arc(cx, cy, r, a0, a1, color, op=1.0, sw=SW):
             f'stroke="{color}" stroke-opacity="{op}" stroke-width="{sw}"/>')
 
 # ── Wi-Fi: dot + 3 arcs, unreached levels dimmed ─────────────────────
+# (centred a bit higher than the geometric middle: the heavy dot at the
+# bottom made it look lower than the speaker and the battery next to it)
+WIFI_Y = 18.0
+WIFI_DIM = 0.45          # arcs above the signal: clearly grey like Windows, not almost gone
 for lvl in range(5):            # 0 = dot only ... 4 = full
-    b = f'<circle cx="12" cy="18.6" r="1.35" fill="{W}"/>'
+    b = f'<circle cx="12" cy="{WIFI_Y - 0.6}" r="1.35" fill="{W}"/>'
     for i, r in enumerate((5, 9.5, 14)):
-        b += arc(12, 19.2, r, -48, 48, W, 1.0 if lvl > i + 1 or lvl == 4 else 0.3)
+        b += arc(12, WIFI_Y, r, -48, 48, W, 1.0 if lvl > i + 1 or lvl == 4 else WIFI_DIM)
     save(f"wifi-{lvl}", b)
-b = f'<circle cx="12" cy="18.6" r="1.35" fill="{W}" fill-opacity="0.3"/>'
+b = f'<circle cx="12" cy="{WIFI_Y - 0.6}" r="1.35" fill="{W}" fill-opacity="{WIFI_DIM}"/>'
 for r in (5, 9.5, 14):
-    b += arc(12, 19.2, r, -48, 48, W, 0.3)
-b += f'<path d="M16.5 15.5l4 4M20.5 15.5l-4 4" stroke="{W}" stroke-width="{SW}"/>'
+    b += arc(12, WIFI_Y, r, -48, 48, W, WIFI_DIM)
+b += f'<path d="M16.5 14.5l4 4M20.5 14.5l-4 4" stroke="{W}" stroke-width="{SW}"/>'
 save("wifi-off", b)
 # Ethernet: monitor with cable
 save("ethernet", f'<rect x="3" y="4.5" width="18" height="12" rx="1.5" stroke="{W}" stroke-width="{SW}"/>'

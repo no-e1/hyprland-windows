@@ -11,7 +11,7 @@ local scripts  = home .. "/.config/hypr/scripts"
 local winshell = home .. "/.config/hypr/winshell/winshell-ctl"
 
 local terminal    = "kitty"
-local fileManager = "nemo"
+local fileManager = "dolphin"
 local browser     = "brave-browser"
 
 ---------------------------------------------------------------------
@@ -33,6 +33,10 @@ hl.env("XCURSOR_THEME", "Fluent-dark-cursors")   -- white pointer with black out
 hl.env("GDK_BACKEND", "wayland,x11,*")
 hl.env("QT_QPA_PLATFORM", "wayland;xcb")
 hl.env("QT_WAYLAND_DISABLE_WINDOWDECORATION", "1")
+-- Qt/KDE apps (Dolphin, Okular, Ark …) follow the KDE settings: dark Breeze
+-- colors (~/.config/kdeglobals, ColorScheme=BreezeDark) – without it they
+-- came up light and plain
+hl.env("QT_QPA_PLATFORMTHEME", "kde")
 hl.env("MOZ_ENABLE_WAYLAND", "1")
 hl.env("ELECTRON_OZONE_PLATFORM_HINT", "auto")
 
@@ -287,6 +291,13 @@ local function set_alpha(addr, v)
     for _, p in ipairs({ "opacity", "opacity_inactive", "opacity_fullscreen" }) do
         hl.dispatch(hl.dsp.window.set_prop({ prop = p, value = tostring(v), window = "address:" .. addr }))
     end
+    -- No blur behind a window that is (being made) invisible: Hyprland blurs
+    -- behind see-through windows, and when the invisible window is then moved
+    -- to the hidden workspace it fades that blur out – the wallpaper where a
+    -- maximized window had been flickered brighter (blurred) for a moment
+    -- after "show desktop". Back to its own setting when it returns.
+    hl.dispatch(hl.dsp.window.set_prop({ prop = "no_blur", value = v < 1 and "1" or "unset",
+                                         window = "address:" .. addr }))
 end
 
 -- Bring a hidden window back to a desktop.
@@ -408,7 +419,8 @@ local BAR_HEIGHT = 32
 -- (hyprbars) title bar. Exact window classes, plus class prefixes.
 OWN_TITLEBAR = { "brave-browser", "discord", "vesktop", "webcord", "steam",
                  "spotify", "obsidian", "slack", "firefox", "org.mozilla.firefox",
-                 "code", "code-oss" }
+                 "code", "code-oss", "codium", "vscodium", "VSCodium",
+                 "com.visualstudio.CodeOSS" }   -- VSCodium on Wayland
 OWN_TITLEBAR_PREFIX = { "org.gnome." }
 
 local function has_bar(w)
@@ -1087,10 +1099,13 @@ function ShowNow(gen)
 end
 
 -- A window that is still on screen (being hidden right now): stop that.
+-- It stays invisible under winshell's picture of it until the pictures have
+-- flown back (DesktopInNow) – showing it at once made it pop in while the
+-- others were still on their way.
 local function cancel_hide(a)
     local w = hl.get_window("address:" .. a)
     if not w or not w.workspace or w.workspace.name == "special:minimized" then return false end
-    set_alpha(a, 1)
+    set_alpha(a, 0)
     if hidden_maximized[a] then     -- told "not maximized" already, its hide still pending
         hide_cancel[a] = true
         hidden_maximized[a] = nil
@@ -1102,7 +1117,8 @@ local function cancel_hide(a)
 end
 
 -- ... and they grow back out of their taskbar buttons; DesktopInNow() puts
--- the real windows right under the pictures at the end.
+-- the real windows right under the pictures at the end. Pressed while they
+-- are still flying out, winshell turns the pictures around where they are.
 local function restore_hidden()
     local saved = desktop_hidden
     desktop_hidden = nil
@@ -1112,19 +1128,13 @@ local function restore_hidden()
     local gen = desk_gen
     desk_out = nil
     if not saved then return end
-    local todo, still_here = {}, false
+    local todo = {}                         -- back ones first, as they were stacked
     for _, a in ipairs(saved.windows) do
-        if cancel_hide(a) then
-            still_here = true
-        else
-            local w = hl.get_window("address:" .. a)
-            if w and w.workspace and w.workspace.name == "special:minimized" then
-                table.insert(todo, w)
-            end
-        end
+        cancel_hide(a)
+        local w = hl.get_window("address:" .. a)
+        if w and w.workspace then table.insert(todo, w) end
     end
-    if still_here then winshell_send("desk stop") end
-    desk_in = { gen = gen, windows = todo, active = saved.active }
+    desk_in = { gen = gen, windows = todo, active = saved.active, saved = saved }
     if #todo == 0 then
         DesktopInNow(gen)
         return
@@ -1139,14 +1149,42 @@ function DesktopInNow(gen)
     local ws = hl.get_active_workspace()
     for _, w in ipairs(d.windows) do        -- back ones first: the stacking order comes back
         local cur = hl.get_window("address:" .. w.address)
-        if cur and cur.workspace and cur.workspace.name == "special:minimized" then
-            RestoreWindow(cur, ws.id)
+        if cur and cur.workspace then
+            if cur.workspace.name == "special:minimized" then
+                RestoreWindow(cur, ws.id)
+            else
+                set_alpha(w.address, 1)     -- never left (its hide was cancelled)
+            end
             hl.dispatch(hl.dsp.window.alter_zorder({ mode = "top", window = "address:" .. w.address }))
         end
     end
     if d.active and hl.get_window("address:" .. d.active) then
         hl.dispatch(hl.dsp.focus({ window = "address:" .. d.active }))
     end
+end
+
+-- Win + D while the windows are still flying back: turn around again – they
+-- are hidden still (or again), the pictures fly back down from where they are.
+local function turn_back_down()
+    local d = desk_in
+    if not d then return false end
+    desk_in = nil
+    desk_gen = desk_gen + 1
+    local gen = desk_gen
+    desktop_hidden = d.saved
+    save_desktop()
+    desk_settling = true
+    later(MAX_HIDE_DELAY + 600, function() if desk_gen == gen then desk_settling = false end end)
+    desk_out = nil                          -- nothing left to do once the pictures cover them
+    winshell_send("desk out DesktopOutNow " .. gen .. " " .. desk_tokens(d.windows))
+    for _, w in ipairs(d.windows) do        -- the ones whose hide had been cancelled
+        local cur = hl.get_window("address:" .. w.address)
+        if cur and cur.workspace and cur.workspace.name ~= "special:minimized" then
+            set_alpha(w.address, 0)
+            HideWindow(w.address, true)
+        end
+    end
+    return true
 end
 
 -- the desktop is shown: everything Win + D hid is hidden or on its way
@@ -1164,6 +1202,7 @@ local function desktop_shown()
     return true
 end
 function ShowDesktop()
+    if turn_back_down() then return end
     if desktop_shown() then
         restore_hidden()
     else
@@ -1181,6 +1220,7 @@ local desk_acc, desk_done = 0, false
 local function desk_swipe(dir)
     desk_done = true
     if dir > 0 then
+        if turn_back_down() then return end
         if not desktop_shown() and #windows_here() > 0 then hide_all() end
     else
         restore_hidden()
@@ -1262,7 +1302,7 @@ hl.bind(win .. " + Home", function()
 end)
 
 -- Win + 1/2/3: open or switch to the pinned taskbar apps
-hl.bind(win .. " + 1", hl.dsp.exec_cmd(scripts .. "/pinned.sh open '^nemo$' nemo"))
+hl.bind(win .. " + 1", hl.dsp.exec_cmd(scripts .. "/pinned.sh open '^org.kde.dolphin$' dolphin"))
 hl.bind(win .. " + 2", hl.dsp.exec_cmd(scripts .. "/pinned.sh open '^(brave-browser)$' brave-browser"))
 hl.bind(win .. " + 3", hl.dsp.exec_cmd(scripts .. "/pinned.sh open '^kitty$' kitty"))
 

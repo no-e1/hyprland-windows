@@ -3570,26 +3570,42 @@ class DeskCanvas(Gtk.Widget):
 
     def __init__(self):
         super().__init__()
-        self.items = []         # dicts: tex, bar, a (from rect), b (to rect)
+        # dicts: addr, tex, a (from rect), b (to rect), alpha0 (alpha at the
+        # start – a picture that turns around mid-flight keeps its own)
+        self.items = []
         self.t = 0.0
         self.rising = False
+        self.fade = 1.0         # whole drawing (fades out once the windows are back)
 
-    def do_snapshot(self, snap):
+    def rect_of(self, it):
+        """Where that picture is right now (x, y, w, h)."""
+        t = self.t
+        e = 1 - (1 - t) ** 3 if self.rising else t * t * (3 - 2 * t)
+        ax, ay, aw, ah = it["a"]
+        bx, by, bw, bh = it["b"]
+        return (ax + (bx - ax) * e, ay + (by - ay) * e, aw + (bw - aw) * e, ah + (bh - ah) * e)
+
+    def alpha_of(self, it):
         t = self.t
         if self.rising:                                  # out of the taskbar
-            e = 1 - (1 - t) ** 3
-            alpha = min(1.0, t / 0.35)
-        else:                                            # into the taskbar
-            e = t * t * (3 - 2 * t)
-            alpha = 1.0 - max(0.0, (t - 0.25) / 0.75) ** 1.5
+            a0 = it.get("alpha0", 0.0)
+            return a0 + (1.0 - a0) * min(1.0, t / 0.35)
+        # into the taskbar: opaque from the first frame – the pictures must
+        # cover the real windows (hidden a moment later), or the ones behind
+        # show through
+        return it.get("alpha0", 1.0) * (1.0 - max(0.0, (t - 0.25) / 0.75) ** 1.5)
+
+    def do_snapshot(self, snap):
+        # the final fade-away applies to all pictures together, as one
+        # surface: fading each one by itself let the pictures of the windows
+        # behind shine through the front one (Discord through Brave)
+        snap.push_opacity(self.fade)
         for it in self.items:
-            ax, ay, aw, ah = it["a"]
-            bx, by, bw, bh = it["b"]
-            x, y = ax + (bx - ax) * e, ay + (by - ay) * e
-            w, h = aw + (bw - aw) * e, ah + (bh - ah) * e
+            x, y, w, h = self.rect_of(it)
+            full_w = max(it["a"][2], it["b"][2], 1.0)
             rect = Graphene.Rect().init(x, y, w, h)        # the window's content only
-            radius = 8 * min(1.0, w / max(1.0, aw)) + 2
-            snap.push_opacity(max(0.0, min(1.0, alpha)))
+            radius = 8 * min(1.0, w / full_w) + 2
+            snap.push_opacity(max(0.0, min(1.0, self.alpha_of(it))))
             clip = Gsk.RoundedRect()        # (init_from_rect's return value is unusable in Python)
             clip.init_from_rect(rect, radius)
             snap.push_rounded_clip(clip)
@@ -3601,6 +3617,7 @@ class DeskCanvas(Gtk.Widget):
                 snap.append_color(c, Graphene.Rect().init(x, y, w, h))
             snap.pop()
             snap.pop()
+        snap.pop()
 
 
 class DesktopAnim:
@@ -3608,6 +3625,9 @@ class DesktopAnim:
     button while it fades, and grows back out of it when it returns.
     Hyprland can't scale windows, so pictures of them do it on a full-screen
     layer above everything (the windows themselves are hidden meanwhile).
+    A new run while one is still going (Win + D pressed again mid-way) turns
+    the pictures around from where they are. The taskbar icon dips when its
+    window lands in it and hops when the window leaves it, like Windows 11.
 
     hyprland.lua:  desk out <callback> <gen> <window>…   → callback(gen) once shown
                    desk in  <callback> <gen> <window>…   → callback(gen) at the end
@@ -3628,10 +3648,12 @@ class DesktopAnim:
         self.win.set_child(self.canvas)
         self.win.connect("realize", lambda *_: self.passthrough())
         self.tick = 0
+        self.fade_tick = 0
         self.t0 = 0
         self.dur = self.OUT
         self.done = None
         self.gen = 0
+        self.serial = 0             # counts runs: late timers of an old run do nothing
 
     def passthrough(self):
         import cairo
@@ -3639,19 +3661,39 @@ class DesktopAnim:
         if surf:
             surf.set_input_region(cairo.Region())
 
-    def target(self, cls, mon_h):
-        """The taskbar button of that app (screen coordinates)."""
+    def button(self, cls):
         tb = self.shell.taskbar
         if tb:
-            key = tb.key_for({"class": cls})
-            b = tb.buttons.get(key)
+            b = tb.buttons.get(tb.key_for({"class": cls}))
             if b and b.get_mapped():
-                ok_, r = b.compute_bounds(tb.win)
-                if ok_:
-                    top = mon_h - tb.win.get_height()
-                    cx, cy = r.get_x() + r.get_width() / 2, top + r.get_y() + r.get_height() / 2
-                    return (cx - 20, cy - 14, 40, 28)
+                return b
+        return None
+
+    def target(self, cls, mon_h):
+        """The taskbar button of that app (screen coordinates)."""
+        tb, b = self.shell.taskbar, self.button(cls)
+        if b:
+            ok_, r = b.compute_bounds(tb.win)
+            if ok_:
+                top = mon_h - tb.win.get_height()
+                cx, cy = r.get_x() + r.get_width() / 2, top + r.get_y() + r.get_height() / 2
+                return (cx - 20, cy - 14, 40, 28)
         return (self.win.get_width() / 2 - 20, mon_h - 34, 40, 28)
+
+    def bounce(self, classes, kind, delay):
+        """The taskbar icons of these apps dip ("dip": a window lands in
+        them) or hop ("hop": a window comes out) – CSS animation, style.css."""
+        buttons = {b for b in (self.button(c) for c in classes) if b}
+
+        def start():
+            for b in buttons:
+                b.remove_css_class("tb-dip")
+                b.remove_css_class("tb-hop")
+            # a frame later, so the same animation can start again
+            GLib.timeout_add(20, lambda: [b.add_css_class("tb-" + kind) for b in buttons] and False)
+            GLib.timeout_add(540, lambda: [b.remove_css_class("tb-" + kind) for b in buttons] and False)
+            return False
+        GLib.timeout_add(max(1, int(delay * 1000)), start)
 
     def parse(self, tokens):
         items = []
@@ -3662,33 +3704,47 @@ class DesktopAnim:
             if len(p) < 7:
                 continue
             addr, x, y, w, h, bar, cls = p[0], *map(float, p[1:6]), p[6]
-            items.append({"tex": thumbs.get(addr), "bar": bar,
+            items.append({"addr": addr, "cls": cls, "tex": thumbs.get(addr), "bar": bar,
                           "win": (x, y, w, h), "icon": self.target(cls, mon_h)})
         return items
 
     def run(self, kind, callback, gen, tokens):
         self.gen = gen
+        self.serial += 1
         self.shell.switcher.pause_thumbs(self.OUT + self.IN + 0.4)
         items = self.parse(tokens)
         if not items:
             hypr_eval(f"{callback}({gen})")
             return
         rising = kind == "in"
+        # pictures still on screen (a run in progress, or just landed): the
+        # same windows go on from where they are instead of starting over
+        now = {it["addr"]: (self.canvas.rect_of(it), self.canvas.alpha_of(it) * self.canvas.fade)
+               for it in self.canvas.items}
         for it in items:
             it["a"], it["b"] = (it["icon"], it["win"]) if rising else (it["win"], it["icon"])
+            if it["addr"] in now:
+                it["a"], it["alpha0"] = now[it["addr"]]
+        if self.fade_tick:
+            self.canvas.remove_tick_callback(self.fade_tick)
+            self.fade_tick = 0
         self.canvas.items = items
         self.canvas.rising = rising
         self.canvas.t = 0.0
+        self.canvas.fade = 1.0
         self.dur = self.IN if rising else self.OUT
         self.done = None
         self.win.present()
         self.passthrough()
         self.canvas.queue_draw()
+        classes = {it["cls"] for it in items}
         if not rising:
             # the pictures cover the windows now: hide the real ones
             GLib.timeout_add(34, lambda: (hypr_eval(f"{callback}({gen})"), False)[1])
+            self.bounce(classes, "dip", self.OUT * 0.6)     # as the windows land
         else:
             self.done = lambda: hypr_eval(f"{callback}({gen})")
+            self.bounce(classes, "hop", 0)                  # as they take off
         self.t0 = 0
         if not self.tick:
             self.tick = self.canvas.add_tick_callback(self.on_tick)
@@ -3706,18 +3762,49 @@ class DesktopAnim:
         if self.done:                   # windows come back right under the pictures
             done, self.done = self.done, None
             done()
-            GLib.timeout_add(140, self.close)
+            # then the pictures fade away (instead of vanishing at once) –
+            # but only once the real windows are fully there: Hyprland fades
+            # a window in for ~100 ms when it returns from the hidden
+            # workspace; fading the picture during that let the blurred
+            # background shine through a little (the window looked a touch
+            # brighter for a moment)
+            GLib.timeout_add(160, self.fade_away, self.serial)
         else:
             self.close()
         return False
 
+    def fade_away(self, serial):
+        if serial != self.serial:
+            return False                # another run started meanwhile
+        t0 = []
+
+        def step(_w, clock):
+            now = clock.get_frame_time() / 1e6
+            if not t0:
+                t0.append(now)
+            self.canvas.fade = max(0.0, 1.0 - (now - t0[0]) / 0.12)
+            self.canvas.queue_draw()
+            if self.canvas.fade > 0:
+                return True
+            self.fade_tick = 0
+            self.close()
+            return False
+        if self.canvas.items and not self.fade_tick:
+            self.fade_tick = self.canvas.add_tick_callback(step)
+        return False
+
     def close(self):
+        if self.fade_tick:
+            self.canvas.remove_tick_callback(self.fade_tick)
+            self.fade_tick = 0
+        self.canvas.fade = 1.0
         self.canvas.items = []
         self.win.set_visible(False)
         return False
 
     def stop(self):
         self.done = None
+        self.serial += 1
         if self.tick:
             self.canvas.remove_tick_callback(self.tick)
             self.tick = 0
@@ -4742,6 +4829,8 @@ class WinShell(Gtk.Application):
         self.taskbar = Taskbar(self, self)
         import tray as tray_mod
         self.tray = tray_mod.Tray(lambda: GLib.idle_add(self.taskbar.tray_changed))
+        import thispc                       # "This PC" for Dolphin: drive tiles with free space
+        self.thispc = thispc.ThisPC()
 
         if os.path.exists(FIFO) and not os.path.isfile(FIFO):
             os.unlink(FIFO)
