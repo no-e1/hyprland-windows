@@ -9,7 +9,7 @@ items=()
 items+=("󰖩  Wi-Fi")
 items+=("󰂯  Bluetooth")
 items+=("󰕾  Sound")
-has wdisplays && items+=("󰍹  Displays")
+items+=("󰍹  Displays")
 items+=("󰸉  Background")
 has nwg-look && items+=("󰏘  Appearance (colors, fonts)")
 items+=("󰛳  Network connections")
@@ -22,7 +22,7 @@ case "$choice" in
     *Wi-Fi)               exec "$HOME/.config/hypr/winshell/winshell-ctl" qs wifi ;;
     *Bluetooth)           exec blueman-manager ;;
     *Sound)               exec pavucontrol ;;
-    *Displays)         exec wdisplays ;;
+    *Displays)         exec "$HOME/.config/hypr/winshell/winshell-ctl" displays ;;
     *Background)     exec "$S/wallpaper.sh" pick ;;
     *Appearance*)             exec nwg-look ;;
     *connections) exec nm-connection-editor ;;

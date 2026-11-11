@@ -20,6 +20,8 @@ INDEX = os.path.join(DIR, "index.json")
 
 
 def main():
+    # what you copied is only for you: folder 0700, files 0600
+    os.umask(0o077)
     kind = sys.argv[1] if len(sys.argv) > 1 else "text"
     if os.environ.get("CLIPBOARD_STATE") in ("sensitive", "clear", "nil"):
         return
@@ -27,6 +29,7 @@ def main():
     if not data or (kind == "text" and (len(data) > MAX_TEXT or not data.strip())):
         return
     os.makedirs(DIR, exist_ok=True)
+    os.chmod(DIR, 0o700)                    # also when it was made before
     digest = hashlib.sha1(data).hexdigest()[:16]
     ext = "png" if kind == "image" else "txt"
     name = f"{digest}.{ext}"

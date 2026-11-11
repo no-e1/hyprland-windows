@@ -41,6 +41,7 @@ except (ValueError, ImportError):
 HERE = os.path.dirname(os.path.realpath(__file__))
 sys.path.insert(0, HERE)
 import ncplace                  # noqa: E402  where the notification center sits
+import displays                 # noqa: E402  which screen is the main one
 ICONS = os.path.join(os.path.dirname(os.path.dirname(HERE)), "icons")
 RUNTIME = os.environ.get("XDG_RUNTIME_DIR", "/tmp")
 FIFO = os.path.join(RUNTIME, "winshell.fifo")
@@ -280,6 +281,16 @@ def clear(box):
         box.remove(child)
 
 
+def gdk_monitor(connector):
+    """The GdkMonitor of a screen by its connector name ("eDP-1", "DP-2")."""
+    mons = Gdk.Display.get_default().get_monitors()
+    for i in range(mons.get_n_items()):
+        m = mons.get_item(i)
+        if m.get_connector() == connector:
+            return m
+    return None
+
+
 def layer_window(app, namespace, layer, anchors=(), margins=None,
                  keyboard=LS.KeyboardMode.NONE, exclusive=0):
     w = Gtk.Window(application=app)
@@ -485,8 +496,12 @@ class AppIcons:
             if wm:
                 self.map[wm.lower()] = gicon
 
+    OVERRIDE = {"kitty": "win11-terminal", "io.github.noe1.winshell": "win11-settings-app"}
+
     def get(self, cls):
         c = (cls or "").lower()
+        if c in self.OVERRIDE:              # Alt+Tab, task view: the same icons as the taskbar
+            return Gio.ThemedIcon.new(self.OVERRIDE[c])
         return (self.map.get(c) or self.map.get(c.split(".")[-1])
                 or Gio.ThemedIcon.new_from_names([c, "application-x-executable"]))
 
@@ -1145,7 +1160,10 @@ class QuickSettings:
         main.set_hexpand(True)
         row.append(main)
         if on_more:
-            row.append(button(icon("win11-chevron-right", 16), "tile-more", on_click=on_more))
+            more = button(icon("win11-chevron-right", 16), "tile-more", on_click=on_more)
+            more.set_hexpand(True)
+            row.append(more)
+            row.set_homogeneous(True)       # the divider right in the middle of the tile
         lbl = label(text, "tile-label", xalign=0.5)
         lbl.set_wrap(True)
         lbl.set_lines(2)
@@ -1731,6 +1749,25 @@ class QuickSettings:
                 lst.seen.add(key)
             lst.append(row)
 
+    def live_speed(self, lbl, base):
+        """The network speed next to "Connected", once a second while the
+        Wi-Fi page shows that row (same measuring as the taskbar tooltip)."""
+        last = [None]
+
+        def sample():
+            if not self.visible or not lbl.get_root() or not lbl.get_mapped() and last[0]:
+                return False                    # page closed or list rebuilt
+            now = (time.monotonic(), *Taskbar.net_bytes())
+            if last[0]:
+                dt = max(0.1, now[0] - last[0][0])
+                down = Taskbar.rate((now[1] - last[0][1]) / dt)
+                up = Taskbar.rate((now[2] - last[0][2]) / dt)
+                lbl.set_text(f"{base} · ↓ {down}  ↑ {up}")
+            last[0] = now
+            return True
+        sample()
+        GLib.timeout_add(1000, sample)
+
     def wifi_row(self, n):
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         box.add_css_class("net")
@@ -1743,6 +1780,8 @@ class QuickSettings:
                  ("Secured" if n["secure"] else "Open")
         st_lbl = label(status, "net-status")
         txt.append(st_lbl)
+        if n["active"]:
+            self.live_speed(st_lbl, status)     # "Connected · ↓ 1.2 MB/s  ↑ 40 KB/s"
         txt.set_hexpand(True)
         top.append(txt)
         box.append(top)
@@ -2300,13 +2339,16 @@ class CalendarFlyout:
         self.render()
         self.visible = True
         self.shell.qs.catcher_for("calendar")
+        # the notification center sits right above: opened over D-Bus at the
+        # same moment (not by starting swaync-client, which came a beat
+        # late); it glides in with the same motion (swaync/style.css)
+        self.notification_center(True)
         slide_in(self.panel)
         # measured once the window is up: before its first showing the
         # calendar reported a far too small height, and the notification
         # center was placed over it
         GLib.timeout_add(60, lambda: self.visible and self.place_notifications(
             self.height(open_=not self.folded)) and False)
-        spawn("swaync-client -op")     # notification center sits right above
         # take the keyboard (after swaync opened) so Escape closes both
         LS.set_keyboard_mode(self.win, LS.KeyboardMode.EXCLUSIVE)
         self.win.present()
@@ -2318,7 +2360,22 @@ class CalendarFlyout:
         self.win.set_visible(False)
         LS.set_keyboard_mode(self.win, LS.KeyboardMode.NONE)
         self.shell.qs.catcher_for(None)
-        spawn("swaync-client -cp")
+        self.notification_center(False)
+
+    @staticmethod
+    def notification_center(open_):
+        def fallback(conn, res):
+            try:
+                conn.call_finish(res)
+            except GLib.Error:
+                spawn("swaync-client -op" if open_ else "swaync-client -cp")
+        try:
+            bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+            bus.call("org.erikreider.swaync.cc", "/org/erikreider/swaync/cc", "org.erikreider.swaync.cc",
+                     "SetVisibility", GLib.Variant("(b)", (open_,)), None,
+                     Gio.DBusCallFlags.NONE, 1000, None, fallback)
+        except GLib.Error:
+            spawn("swaync-client -op" if open_ else "swaync-client -cp")
 
 
 # ── Start menu search ranking ───────────────────────────────────────────────
@@ -3466,6 +3523,11 @@ class Freeze:
             w.set_child(pic)
             w.present()
             self.wins.append(w)
+        # it covers the whole screen and takes the clicks: if screenshot.sh
+        # were killed before it says "freeze off", it must still go away
+        if self.wins:
+            gen = self.gen = getattr(self, "gen", 0) + 1
+            GLib.timeout_add_seconds(60, lambda: gen == self.gen and self.hide() and False)
 
     def hide(self):
         for w in self.wins:
@@ -4229,12 +4291,635 @@ class AppIndex:
             return None
 
 
+# ── Display settings (Win + I → Displays) ──────────────────────────────────
+class DisplaySettings:
+    """Like Windows' Settings → Display: the screens as numbered rectangles,
+    drawn by their real resolution (like Windows – a big screen at 200 %
+    doesn't look tiny), with name and resolution; drag them into place (they
+    snap together edge to edge). "Identify" shows the numbers on the real
+    screens, per screen: scale (100 % … 300 %) and "Make this my main
+    display". Apply sets it in Hyprland right away and keeps it in
+    ~/.config/hypr/monitors.lua (hyprland.lua loads that file)."""
+    W, H = 560, 300
+    SNAP = 0.12                     # of the smaller screen's size: closer than this snaps
+
+    def __init__(self, app, shell):
+        self.app, self.shell = app, shell
+        self.win = None
+        self.items = []
+        self.sel = 0
+        self.drag = None
+        self.updating = False
+        self.confirming = None          # after Apply, until kept or reverted
+
+    # ── window ──
+    def show(self):
+        if self.win:
+            self.win.present()
+            return
+        self.load()
+        win = Gtk.Window(application=self.app, title="Display settings")
+        win.set_default_size(620, 640)
+        win.set_resizable(False)            # a dialog: no maximize / full screen (see hyprland.lua)
+        win.add_css_class("display-settings")
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14)
+        box.add_css_class("ds-body")
+        box.append(label("Display", "ds-title"))
+        hint = label("Drag the displays to arrange them the way they stand on your desk. "
+                     "Win + P switches between extend, duplicate and one screen.", "ds-hint", ellipsize=False)
+        hint.set_wrap(True)
+        box.append(hint)
+        frame = Gtk.Box()
+        frame.add_css_class("ds-canvas")
+        self.area = Gtk.DrawingArea(content_width=self.W, content_height=self.H, hexpand=True)
+        self.area.set_draw_func(self.draw)
+        drag = Gtk.GestureDrag()
+        drag.connect("drag-begin", self.on_begin)
+        drag.connect("drag-update", self.on_update)
+        drag.connect("drag-end", self.on_end)
+        self.area.add_controller(drag)
+        frame.append(self.area)
+        box.append(frame)
+        row = Gtk.Box(spacing=8)
+        ident = Gtk.Button(label="Identify")
+        ident.add_css_class("ds-button")
+        ident.connect("clicked", lambda *_: self.identify())
+        row.append(ident)
+        box.append(row)
+        self.info = label("", "ds-info", ellipsize=False)
+        box.append(self.info)
+        scale_row = Gtk.Box(spacing=12)
+        scale_row.append(label("Scale", "ds-info"))
+        self.scales = []
+        self.scale_dd = Gtk.DropDown.new_from_strings(["100%"])
+        self.scale_dd.add_css_class("ds-drop")
+        self.scale_dd.connect("notify::selected", self.on_scale)
+        scale_row.append(self.scale_dd)
+        box.append(scale_row)
+        rate_row = Gtk.Box(spacing=12)
+        rate_row.append(label("Refresh rate", "ds-info"))
+        self.rates = []
+        self.rate_dd = Gtk.DropDown.new_from_strings(["60 Hz"])
+        self.rate_dd.add_css_class("ds-drop")
+        self.rate_dd.connect("notify::selected", self.on_rate)
+        rate_row.append(self.rate_dd)
+        box.append(rate_row)
+        self.main_chk = Gtk.CheckButton(label="Make this my main display")
+        self.main_chk.add_css_class("ds-check")
+        self.main_chk.connect("toggled", self.on_main)
+        box.append(self.main_chk)
+        # bottom: "Apply" – or, after applying, Windows' question with a countdown
+        self.bottom = Gtk.Stack(vexpand=True, valign=Gtk.Align.END)
+        actions = Gtk.Box(halign=Gtk.Align.END, spacing=8)
+        self.apply_btn = Gtk.Button(label="Apply")
+        self.apply_btn.add_css_class("ds-button")
+        self.apply_btn.add_css_class("ds-accent")
+        self.apply_btn.connect("clicked", lambda *_: self.apply())
+        self.apply_btn.set_sensitive(False)
+        actions.append(self.apply_btn)
+        self.bottom.add_named(actions, "apply")
+        conf = Gtk.Box(spacing=10)
+        conf.add_css_class("ds-confirm")
+        txt = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, hexpand=True, valign=Gtk.Align.CENTER)
+        txt.append(label("Keep these display settings?", "ds-confirm-title"))
+        self.count_lbl = label("", "ds-hint")
+        txt.append(self.count_lbl)
+        conf.append(txt)
+        keep = Gtk.Button(label="Keep changes", valign=Gtk.Align.CENTER)
+        keep.add_css_class("ds-button")
+        keep.add_css_class("ds-accent")
+        keep.connect("clicked", lambda *_: self.keep())
+        conf.append(keep)
+        rev = Gtk.Button(label="Revert", valign=Gtk.Align.CENTER)
+        rev.add_css_class("ds-button")
+        rev.connect("clicked", lambda *_: self.revert())
+        conf.append(rev)
+        self.bottom.add_named(conf, "confirm")
+        box.append(self.bottom)
+        win.set_child(box)
+        win.connect("close-request", self.closed)
+        self.win = win
+        self.update_info()
+        win.present()
+
+    def closed(self, *_):
+        if self.confirming:                 # closed without "Keep changes": back, like Windows
+            self.revert()
+        self.win = None
+        return False
+
+    def load(self):
+        mons = displays.monitors()
+        self.primary = displays.primary_name(mons)
+        self.items = displays.to_real(displays.items_from(mons))
+        for m in self.items:
+            m["scales"] = displays.valid_scales(m["pw"], m["ph"], m["scale"])
+        # how it is now: what "Apply" compares with and "Revert" goes back to
+        self.before = {m["name"]: displays.spec(m) for m in self.items}
+        self.before_primary = self.primary
+        self.orig = self.signature()
+        self.sel = next((i for i, m in enumerate(self.items) if m["name"] == self.primary), 0)
+
+    def signature(self):
+        return (tuple(sorted((m["name"], m["px"], m["py"], round(m["scale"], 4), round(m["rate"], 3))
+                             for m in self.items)), self.primary)
+
+    def changed(self):
+        """Apply only when something really differs from how it is now."""
+        self.apply_btn.set_sensitive(not self.confirming and self.signature() != self.orig)
+
+    # ── drawing (layout by real pixels → canvas) ──
+    def view(self):
+        aw, ah = self.area.get_width() or self.W, self.area.get_height() or self.H
+        x0 = min(m["px"] for m in self.items)
+        y0 = min(m["py"] for m in self.items)
+        x1 = max(m["px"] + m["pw"] for m in self.items)
+        y1 = max(m["py"] + m["ph"] for m in self.items)
+        f = min((aw - 60) / max(1, x1 - x0), (ah - 60) / max(1, y1 - y0))
+        ox = (aw - (x1 - x0) * f) / 2 - x0 * f
+        oy = (ah - (y1 - y0) * f) / 2 - y0 * f
+        return f, ox, oy
+
+    def draw(self, _a, cr, _w, _h):
+        if not self.items:
+            return
+        f, ox, oy = self.view()
+        for i, m in enumerate(self.items):
+            x, y, w, h = ox + m["px"] * f + 2, oy + m["py"] * f + 2, m["pw"] * f - 4, m["ph"] * f - 4
+            r = 6
+            cr.new_sub_path()
+            cr.arc(x + w - r, y + r, r, -1.5708, 0)
+            cr.arc(x + w - r, y + h - r, r, 0, 1.5708)
+            cr.arc(x + r, y + h - r, r, 1.5708, 3.1416)
+            cr.arc(x + r, y + r, r, 3.1416, 4.7124)
+            cr.close_path()
+            sel = i == self.sel
+            cr.set_source_rgba(0.30, 0.76, 1.0, 0.95) if sel else cr.set_source_rgba(1, 1, 1, 0.12)
+            cr.fill_preserve()
+            cr.set_source_rgba(1, 1, 1, 0 if sel else 0.35)
+            cr.set_line_width(1)
+            cr.stroke()
+            ink = (0, 0, 0, 0.88) if sel else (1, 1, 1, 0.92)
+            # the number, and the name and resolution under it
+            cr.set_source_rgba(*ink)
+            cr.select_font_face("Inter", 0, 1)
+            cr.set_font_size(min(44, h * 0.34))
+            t = str(i + 1)
+            ext = cr.text_extents(t)
+            cy = y + h * 0.42
+            cr.move_to(x + w / 2 - ext.width / 2 - ext.x_bearing, cy - ext.height / 2 - ext.y_bearing)
+            cr.show_text(t)
+            cr.select_font_face("Inter", 0, 0)
+            for k, line in enumerate((m["label"], f"{m['pw']} × {m['ph']}  ·  {int(round(m['scale'] * 100))}%")):
+                size = max(9, min(13, w / 16))
+                cr.set_font_size(size)
+                e = cr.text_extents(line)
+                if e.width > w - 10:                # too long for a small box: shorter
+                    line = line[: max(4, int(len(line) * (w - 14) / e.width))] + "…"
+                    e = cr.text_extents(line)
+                cr.set_source_rgba(ink[0], ink[1], ink[2], 0.8)
+                cr.move_to(x + w / 2 - e.width / 2 - e.x_bearing, cy + ext.height / 2 + 14 + k * (size + 4))
+                cr.show_text(line)
+
+    def at(self, px, py):
+        f, ox, oy = self.view()
+        for i, m in enumerate(self.items):
+            if ox + m["px"] * f <= px <= ox + (m["px"] + m["pw"]) * f and \
+                    oy + m["py"] * f <= py <= oy + (m["py"] + m["ph"]) * f:
+                return i
+        return None
+
+    # ── dragging ──
+    def on_begin(self, _g, px, py):
+        i = None if self.confirming else self.at(px, py)
+        if i is None:
+            self.drag = None
+            return
+        self.sel = i
+        self.drag = (i, self.items[i]["px"], self.items[i]["py"], self.view()[0])
+        self.update_info()
+        self.area.queue_draw()
+
+    def on_update(self, _g, dx, dy):
+        if not self.drag or len(self.items) < 2:
+            return
+        i, x, y, f = self.drag
+        self.items[i]["px"], self.items[i]["py"] = round(x + dx / f), round(y + dy / f)
+        self.area.queue_draw()
+
+    def on_end(self, *_):
+        if not self.drag or len(self.items) < 2:
+            return
+        self.snap(self.drag[0])
+        self.drag = None
+        self.changed()
+        self.area.queue_draw()
+
+    def snap(self, i):
+        """Put the dragged screen right next to the closest other one, edge
+        to edge (no gaps, no overlap – Hyprland needs that), and line it up
+        with that screen's top / bottom / left / right / middle when close."""
+        m = self.items[i]
+        best = None
+        for j, o in enumerate(self.items):
+            if j == i:
+                continue
+            th_x = self.SNAP * min(m["pw"], o["pw"])
+            th_y = self.SNAP * min(m["ph"], o["ph"])
+
+            def clamp_y(y):
+                y = max(o["py"] - m["ph"] + 1, min(o["py"] + o["ph"] - 1, y))
+                for a in (o["py"], o["py"] + o["ph"] - m["ph"]):
+                    if abs(y - a) < th_y:
+                        return a
+                return y
+
+            def clamp_x(x):
+                x = max(o["px"] - m["pw"] + 1, min(o["px"] + o["pw"] - 1, x))
+                for a in (o["px"], o["px"] + o["pw"] - m["pw"], o["px"] + (o["pw"] - m["pw"]) // 2):
+                    if abs(x - a) < th_x:
+                        return a
+                return x
+            for cx, cy in ((o["px"] + o["pw"], clamp_y(m["py"])), (o["px"] - m["pw"], clamp_y(m["py"])),
+                           (clamp_x(m["px"]), o["py"] + o["ph"]), (clamp_x(m["px"]), o["py"] - m["ph"])):
+                d = (cx - m["px"]) ** 2 + (cy - m["py"]) ** 2
+                if best is None or d < best[0]:
+                    best = (d, cx, cy)
+        if best:
+            m["px"], m["py"] = best[1], best[2]
+        x0 = min(o["px"] for o in self.items)
+        y0 = min(o["py"] for o in self.items)
+        for o in self.items:
+            o["px"] -= x0
+            o["py"] -= y0
+
+    # ── per screen: scale, main display ──
+    def update_info(self):
+        if not self.items:
+            return
+        m = self.items[self.sel]
+        self.updating = True
+        self.info_text()
+        is_main = m["name"] == self.primary
+        self.main_chk.set_active(is_main)
+        self.main_chk.set_sensitive(not is_main and len(self.items) > 1 and not self.confirming)
+        # only the scales this screen can do (see displays.valid_scales)
+        if self.scales != m["scales"]:
+            self.scales = m["scales"]
+            self.scale_dd.set_model(Gtk.StringList.new([f"{round(v * 100)}%" for v in self.scales]))
+        near = min(range(len(self.scales)), key=lambda k: abs(self.scales[k] - m["scale"]))
+        self.scale_dd.set_selected(near)
+        self.scale_dd.set_sensitive(not self.confirming)
+        # the refresh rates it offers at this resolution
+        if self.rates != m["rates"]:
+            self.rates = m["rates"]
+            self.rate_dd.set_model(Gtk.StringList.new([displays.rate_label(r) for r in self.rates]))
+        self.rate_dd.set_selected(min(range(len(self.rates)), key=lambda k: abs(self.rates[k] - m["rate"])))
+        self.rate_dd.set_sensitive(not self.confirming and len(self.rates) > 1)
+        self.updating = False
+
+    def on_rate(self, dd, _p):
+        if self.updating or not self.items or dd.get_selected() >= len(self.rates):
+            return
+        rate = self.rates[dd.get_selected()]
+        if rate == self.items[self.sel]["rate"]:
+            return
+        self.items[self.sel]["rate"] = rate
+        self.changed()
+        # only the text: update_info() would rebuild this drop-down's list
+        # from inside its own "selected" signal – GTK then reported the
+        # selection again, and again … winshell hung in that loop
+        self.info_text()
+
+    def info_text(self):
+        m = self.items[self.sel]
+        self.info.set_text(f"Display {self.sel + 1}  ·  {m['label']}  ·  {m['pw']} × {m['ph']}  ·  "
+                           f"{displays.rate_label(m['rate'])}  ·  {m['name']}")
+
+    def on_scale(self, dd, _p):
+        if self.updating or not self.items or dd.get_selected() >= len(self.scales):
+            return
+        if self.scales[dd.get_selected()] == self.items[self.sel]["scale"]:
+            return
+        self.items[self.sel]["scale"] = self.scales[dd.get_selected()]
+        self.changed()
+        self.area.queue_draw()
+
+    def on_main(self, chk):
+        if self.updating:
+            return
+        if chk.get_active():
+            self.primary = self.items[self.sel]["name"]
+            self.main_chk.set_sensitive(False)
+        self.changed()
+
+    # ── identify: the number big on each real screen ──
+    def identify(self):
+        wins = []
+        for i, m in enumerate(self.items):
+            mon = gdk_monitor(m["name"])
+            if not mon:
+                continue
+            w = layer_window(self.app, "winshell-identify", LS.Layer.OVERLAY,
+                             anchors=(LS.Edge.BOTTOM, LS.Edge.LEFT),
+                             margins={LS.Edge.BOTTOM: 72, LS.Edge.LEFT: 32})
+            LS.set_monitor(w, mon)
+            w.set_child(label(str(i + 1), "ds-identify", xalign=0.5, ellipsize=False))
+            w.present()
+            wins.append(w)
+        GLib.timeout_add(2500, lambda: [w.destroy() for w in wins] and False)
+
+    # ── apply → "Keep these display settings?" (10 s) → keep or revert ──
+    CONFIRM = 10                    # s
+
+    def apply(self):
+        if self.confirming or self.signature() == self.orig:
+            return
+        displays.to_logical(self.items)
+        new = {m["name"]: displays.spec(m) for m in self.items}
+        # only the screens that really change: setting a screen again that
+        # stays as it is made it flicker and Hyprland shuffle the desktops
+        todo = [n for n in new if new[n] != self.before.get(n)]
+        snap = self.shell.screens_snapshot()
+        self.confirming = {"old": {n: self.before[n] for n in todo if n in self.before},
+                           "old_primary": self.before_primary, "new": new,
+                           "left": self.CONFIRM, "snap": snap, "timer": 0}
+        cycled = any(self.set_screen(n, new[n], self.before.get(n)) for n in todo)
+        if self.primary != self.before_primary:
+            displays.save(primary=self.primary)
+        self.settle(snap, 1900 if cycled else 700)
+        self.bottom.set_visible_child_name("confirm")
+        self.apply_btn.set_sensitive(False)
+        self.update_info()
+        self.count_lbl.set_text(f"Reverting in {self.CONFIRM} seconds")
+
+        def tick():
+            c = self.confirming
+            if not c:
+                return False
+            c["left"] -= 1
+            if c["left"] <= 0:
+                c["timer"] = 0
+                self.revert()
+                return False
+            self.count_lbl.set_text(f"Reverting in {c['left']} second{'s' if c['left'] != 1 else ''}")
+            return True
+        self.confirming["timer"] = GLib.timeout_add(1000, tick)
+
+    @staticmethod
+    def set_screen(name, spec, old):
+        """Apply a screen's settings. When its mode (refresh rate) changes it
+        is switched off and on again around it: changed on the fly, the
+        screen froze (a still picture) until it was switched off and on.
+        Returns True when it was cycled (takes a moment longer)."""
+        mode = re.search(r'mode = "([^"]*)"', spec)
+        old_mode = re.search(r'mode = "([^"]*)"', old or "")
+        if old_mode and mode and mode.group(1) != old_mode.group(1):
+            if SHELL:
+                SHELL.drop_bar(name)        # before the screen goes: no stray taskbar
+            hypr_eval(f'hl.monitor({{ output = "{name}", disabled = true }})')
+            GLib.timeout_add(700, lambda: hypr_eval(f"hl.monitor({spec})") and False)
+            return True
+        hypr_eval(f"hl.monitor({spec})")
+        return False
+
+    def settle(self, snap, delay=700):
+        """After screens changed: desktops back on their screens, taskbars."""
+        self.shell.flyout_screen = None
+
+        def after():
+            self.shell.restore_screens(snap)
+            self.shell.arrange_bars()
+            if self.win:
+                self.win.present()
+            return False
+        GLib.timeout_add(delay, after)
+
+    def end_confirm(self):
+        c, self.confirming = self.confirming, None
+        if c and c["timer"]:
+            GLib.source_remove(c["timer"])
+
+        def reload():
+            self.load()                     # how it is now
+            if self.win:
+                self.bottom.set_visible_child_name("apply")
+                self.update_info()
+                self.changed()
+                self.area.queue_draw()
+            return False
+        GLib.timeout_add(900, reload)
+        return c
+
+    def keep(self):
+        """Kept: now it is written down for the next start (monitors.lua)."""
+        c = self.end_confirm()
+        if not c:
+            return
+        lines = ["-- written by winshell's Display settings (Win + I → Displays)",
+                 "-- where the screens stand; delete this file to go back to automatic"]
+        layout = {}
+        for name, spec in c["new"].items():
+            lines.append(f"hl.monitor({spec})")
+            layout[name] = spec.split(",", 1)[1].rstrip(" }").strip()     # mode, position, scale
+        try:
+            with open(MONITORS_LUA, "w") as f:
+                f.write("\n".join(lines) + "\n")
+        except OSError as e:
+            print("winshell: can't save monitors.lua:", e, file=sys.stderr)
+        displays.save(primary=self.primary, layout=layout)
+        ncplace.save(output=None)
+
+    def revert(self):
+        """Not confirmed in time (or "Revert"): everything as it was."""
+        c = self.end_confirm()
+        if not c:
+            return
+        cycled = any(self.set_screen(n, spec, c["new"].get(n)) for n, spec in c["old"].items())
+        if self.primary != c["old_primary"]:
+            displays.save(primary=c["old_primary"])
+        self.settle(c["snap"], 1900 if cycled else 700)
+
+
+# ── Win + P: project ────────────────────────────────────────────────────────
+class ProjectMenu:
+    """Win + P like Windows: PC screen only, Duplicate, Extend, Second screen
+    only. Arrows or Win + P again move the choice, Enter or a click takes it,
+    Escape closes. The arrangement itself is in Display settings."""
+    MODES = (("pc", "PC screen only", "win11-project-pc"),
+             ("duplicate", "Duplicate", "win11-project-duplicate"),
+             ("extend", "Extend", "win11-project-extend"),
+             ("second", "Second screen only", "win11-project-second"))
+
+    def __init__(self, app, shell):
+        self.shell = shell
+        self.visible = False
+        self.sel = 0
+        self.win = layer_window(app, "winshell-project", LS.Layer.OVERLAY,
+                                anchors=(LS.Edge.BOTTOM, LS.Edge.RIGHT),
+                                margins={LS.Edge.BOTTOM: 12, LS.Edge.RIGHT: 12})
+        panel = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        panel.add_css_class("qs")
+        panel.add_css_class("flyout")
+        panel.add_css_class("project")
+        self.panel = panel
+        panel.append(label("Project", "project-title"))
+        grid = Gtk.Grid(column_spacing=12, row_spacing=10, column_homogeneous=True)
+        self.tiles = []
+        for n, (mode, text, ic) in enumerate(self.MODES):
+            outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+            tile = button(icon(ic, 24), "project-tile", on_click=lambda m=mode: self.choose(m))
+            tile.set_size_request(-1, 56)
+            outer.append(tile)
+            lbl = label(text, "tile-label", xalign=0.5)
+            lbl.set_wrap(True)
+            lbl.set_lines(2)
+            lbl.set_justify(Gtk.Justification.CENTER)
+            outer.append(lbl)
+            grid.attach(outer, n % 2, n // 2, 1, 1)
+            self.tiles.append(tile)
+        panel.append(grid)
+        self.win.set_child(panel)
+        keys = Gtk.EventControllerKey()
+        keys.connect("key-pressed", self.on_key)
+        self.win.add_controller(keys)
+
+    def toggle(self):
+        """Win + P: open, or (already open) move to the next choice."""
+        if self.visible:
+            self.move(1)
+            return
+        self.shell.close_flyouts()
+        mon = gdk_monitor(self.shell.primary)
+        if mon:
+            LS.set_monitor(self.win, mon)
+        mode = displays.project_mode()
+        self.sel = next((i for i, m in enumerate(self.MODES) if m[0] == mode), 2)
+        self.current = mode
+        self.update()
+        self.visible = True
+        LS.set_keyboard_mode(self.win, LS.KeyboardMode.EXCLUSIVE)
+        slide_in(self.panel)
+        self.win.present()
+
+    def hide(self):
+        self.visible = False
+        self.win.set_visible(False)
+        LS.set_keyboard_mode(self.win, LS.KeyboardMode.NONE)
+
+    def update(self):
+        for i, (mode, _t, _ic) in enumerate(self.MODES):
+            t = self.tiles[i]
+            (t.add_css_class if mode == self.current else t.remove_css_class)("on")
+            (t.add_css_class if i == self.sel else t.remove_css_class)("selected")
+
+    def move(self, d):
+        self.sel = (self.sel + d) % len(self.MODES)
+        self.update()
+
+    def on_key(self, _c, keyval, _code, _state):
+        if keyval == Gdk.KEY_Escape:
+            self.hide()
+        elif keyval in (Gdk.KEY_Return, Gdk.KEY_KP_Enter, Gdk.KEY_space):
+            self.choose(self.MODES[self.sel][0])
+        elif keyval in (Gdk.KEY_Right, Gdk.KEY_Down, Gdk.KEY_Tab, Gdk.KEY_p, Gdk.KEY_P):
+            self.move(1 if keyval != Gdk.KEY_Down else 2)
+        elif keyval in (Gdk.KEY_Left, Gdk.KEY_Up, Gdk.KEY_ISO_Left_Tab):
+            self.move(-1 if keyval != Gdk.KEY_Up else -2)
+        return True
+
+    def choose(self, mode):
+        self.hide()
+        specs = displays.project_specs(mode)
+        if not specs:
+            return                          # only one screen, or it is like that already
+        displays.save(project=mode)
+        snap = self.shell.screens_snapshot()
+        for sp in specs:
+            off = re.match(r'\{ output = "([^"]+)", disabled = true', sp)
+            if off:
+                self.shell.drop_bar(off.group(1))
+            hypr_eval(f"hl.monitor({sp})")
+        self.shell.flyout_screen = None
+        GLib.timeout_add(900, lambda: (self.shell.restore_screens(snap), self.shell.arrange_bars(), False)[-1])
+
+
+MONITORS_LUA = os.path.expanduser("~/.config/hypr/monitors.lua")
+
+
+class SecondaryTaskbar:
+    """The taskbar on every other screen, like Windows: start, the apps and
+    the clock. The tray and Wi-Fi / volume / battery are only on the main
+    display's taskbar. Start menu and calendar open on this screen."""
+
+    def __init__(self, app, shell, connector):
+        self.shell, self.connector = shell, connector
+        self.keys = None
+        self.buttons = {}
+        self.win = layer_window(app, "winshell-taskbar", LS.Layer.TOP,
+                                anchors=(LS.Edge.BOTTOM, LS.Edge.LEFT, LS.Edge.RIGHT), exclusive=48)
+        self.monitor = gdk_monitor(connector)
+        LS.set_monitor(self.win, self.monitor)
+        # the screen goes away (switched off, unplugged, its mode changes):
+        # close this taskbar at once – otherwise it slips onto another screen
+        # for a moment (two taskbars on the main display)
+        if self.monitor:
+            self.monitor.connect("invalidate", lambda *_: self.shell.drop_bar(self.connector))
+        self.win.add_css_class("taskbar-window")
+        self.win.set_size_request(-1, 48)
+        bar = Gtk.CenterBox()
+        bar.add_css_class("taskbar")
+        center = Gtk.Box()
+        center.append(button(icon("win11-start", 26), "tb-start", tooltip="Start",
+                             on_click=lambda: (self.shell.flyouts_on(self.connector),
+                                               self.shell.start.toggle())))
+        self.app_box = Gtk.Box()
+        center.append(self.app_box)
+        bar.set_center_widget(center)
+        right = Gtk.Box()
+        right.add_css_class("tb-right")
+        self.clock_lbl = Gtk.Label(justify=Gtk.Justification.RIGHT, xalign=1.0)
+        self.clock_lbl.add_css_class("tb-clock-text")
+        self.clock_lbl.set_text(self.shell.taskbar.clock_lbl.get_text())
+        right.append(button(self.clock_lbl, "tb-clock",
+                            on_click=lambda: (self.shell.flyouts_on(self.connector),
+                                              self.shell.calendar.toggle())))
+        right.append(button(Gtk.Box(), "tb-peek", on_click=lambda: spawn(f"{SCRIPTS}/wallpaper.sh next")))
+        bar.set_end_widget(right)
+        self.win.set_child(bar)
+        self.refresh()
+        self.win.present()
+
+    def refresh(self):
+        """The same apps as the main taskbar (Windows: "all taskbars")."""
+        tb = self.shell.taskbar
+        keys = list(tb.shown)
+        if keys != self.keys:
+            clear(self.app_box)
+            self.buttons = {k: tb.make_app_button(k) for k in keys}
+            for k in keys:
+                self.app_box.append(self.buttons[k])
+            self.keys = keys
+        for k, b in self.buttons.items():
+            main = tb.buttons.get(k)
+            for c in ("running", "active"):
+                (b.add_css_class if main is not None and main.has_css_class(c) else b.remove_css_class)(c)
+            if main is not None:
+                b.set_tooltip_text(main.get_tooltip_text())
+
+    def destroy(self):
+        self.win.destroy()
+
+
 class Taskbar:
     """Windows 11 taskbar: start + pinned/running apps in the middle (drag to
     reorder, right click to pin/unpin), tray with overflow flyout, status
     icons, clock and the "show desktop" sliver on the right."""
 
-    ICON_OVERRIDE = {"kitty.desktop": "utilities-terminal"}
+    # own icons: the terminal like Windows Terminal, winshell's own windows
+    # (Display settings) with Windows' settings gear
+    ICON_OVERRIDE = {"kitty.desktop": "win11-terminal",
+                     "class:io.github.noe1.winshell": "win11-settings-app"}
     DEFAULT_PINNED = ["brave-browser.desktop", "kitty.desktop"]
 
     def __init__(self, app, shell):
@@ -4266,7 +4951,7 @@ class Taskbar:
 
         center = Gtk.Box()
         self.start_btn = button(icon("win11-start", 26), "tb-start", tooltip="Start",
-                                on_click=lambda: self.shell.start.toggle())
+                                on_click=lambda: (self.shell.flyouts_on(None), self.shell.start.toggle()))
         center.append(self.start_btn)
         self.app_box = SlideBox()
         center.append(self.app_box)
@@ -4344,6 +5029,8 @@ class Taskbar:
             app = self.app_of(k)
             b.set_tooltip_text((wins[0].get("title") if wins else None)
                                or (app.get_display_name() if app else k.split(":", 1)[-1]))
+        for other in getattr(self.shell, "secondaries", {}).values():
+            other.refresh()
 
     def make_app_button(self, key):
         app = self.app_of(key)
@@ -4546,7 +5233,8 @@ class Taskbar:
         for img, cls in ((self.st_net, "st-net"), (self.st_vol, "st-vol"), (self.st_bat, "st-bat")):
             img.add_css_class(cls)
             quick.append(img)
-        self.quick_btn = button(quick, "tb-quick", on_click=lambda: self.shell.qs.toggle())
+        self.quick_btn = button(quick, "tb-quick", on_click=lambda: (self.shell.flyouts_on(None),
+                                                                     self.shell.qs.toggle()))
         g = Gtk.GestureClick(button=Gdk.BUTTON_SECONDARY)
         g.connect("released", lambda *_: self.shell.qs.show("wifi"))
         self.quick_btn.add_controller(g)
@@ -4554,6 +5242,11 @@ class Taskbar:
                                        Gtk.EventControllerScrollFlags.DISCRETE)
         sc.connect("scroll", self.on_volume_scroll)
         self.quick_btn.add_controller(sc)
+        self.net_speed, self.speed_timer, self.speed_last = "", 0, None
+        hover = Gtk.EventControllerMotion()
+        hover.connect("enter", self.speed_start)
+        hover.connect("leave", self.speed_stop)
+        self.quick_btn.add_controller(hover)
         right.append(self.quick_btn)
         self.status = {}
         for what in ("net", "vol", "bat"):
@@ -4561,7 +5254,8 @@ class Taskbar:
 
         self.clock_lbl = Gtk.Label(justify=Gtk.Justification.RIGHT, xalign=1.0)
         self.clock_lbl.add_css_class("tb-clock-text")
-        right.append(button(self.clock_lbl, "tb-clock", on_click=lambda: self.shell.calendar.toggle()))
+        right.append(button(self.clock_lbl, "tb-clock", on_click=lambda: (self.shell.flyouts_on(None),
+                                                                           self.shell.calendar.toggle())))
         self.tick()
 
         right.append(button(Gtk.Box(), "tb-peek", on_click=lambda: spawn(f"{SCRIPTS}/wallpaper.sh next")))
@@ -4570,6 +5264,8 @@ class Taskbar:
     def tick(self):
         now = GLib.DateTime.new_now_local()
         self.clock_lbl.set_text(now.format("%H:%M:%S\n%d.%m.%Y"))
+        for other in getattr(self.shell, "secondaries", {}).values():
+            other.clock_lbl.set_text(self.clock_lbl.get_text())
         GLib.timeout_add(1000 - now.get_microsecond() // 1000 + 5, self.tick)
         return False
 
@@ -4610,8 +5306,60 @@ class Taskbar:
         if name:
             img.set_from_icon_name(name)
         self.status[what] = (data.get("tooltip") or "").replace("\\n", "\n")
-        self.quick_btn.set_tooltip_text("\n".join(t for t in (self.status.get(k) for k in ("net", "vol", "bat")) if t))
+        self.update_quick_tooltip()
         return False
+
+    def update_quick_tooltip(self):
+        lines = [self.status.get("net"), self.net_speed, self.status.get("vol"), self.status.get("bat")]
+        self.quick_btn.set_tooltip_text("\n".join(t for t in lines if t))
+
+    # network speed in the tooltip: measured only while the pointer is on
+    # the Wi-Fi / volume / battery button (once a second)
+    def speed_start(self, *_):
+        if not self.speed_timer:
+            self.speed_last = None
+            self.speed_sample()
+            self.speed_timer = GLib.timeout_add(1000, self.speed_sample)
+
+    def speed_stop(self, *_):
+        if self.speed_timer:
+            GLib.source_remove(self.speed_timer)
+            self.speed_timer = 0
+
+    @staticmethod
+    def net_bytes():
+        """Received / sent bytes of the real network adapters (Wi-Fi,
+        Ethernet – not the VPN tunnel, its traffic goes through them anyway)."""
+        rx = tx = 0
+        for dev in os.listdir("/sys/class/net"):
+            if not os.path.exists(f"/sys/class/net/{dev}/device"):
+                continue
+            try:
+                with open(f"/sys/class/net/{dev}/statistics/rx_bytes") as f:
+                    rx += int(f.read())
+                with open(f"/sys/class/net/{dev}/statistics/tx_bytes") as f:
+                    tx += int(f.read())
+            except (OSError, ValueError):
+                pass
+        return rx, tx
+
+    @staticmethod
+    def rate(n):
+        for unit, size in (("MB/s", 1e6), ("KB/s", 1e3)):
+            if n >= size:
+                v = n / size
+                return f"{v:.1f} {unit}" if v < 100 else f"{v:.0f} {unit}"
+        return f"{n:.0f} B/s"
+
+    def speed_sample(self):
+        now = (time.monotonic(), *self.net_bytes())
+        if self.speed_last:
+            dt = max(0.1, now[0] - self.speed_last[0])
+            down, up = (now[1] - self.speed_last[1]) / dt, (now[2] - self.speed_last[2]) / dt
+            self.net_speed = f"↓ {self.rate(down)}   ↑ {self.rate(up)}"
+            self.update_quick_tooltip()
+        self.speed_last = now
+        return True
 
     # ── tray ──
     def tray_changed(self):
@@ -4953,10 +5701,18 @@ class WinShell(Gtk.Application):
         self.start = StartMenu(self, self)
         self.calendar = CalendarFlyout(self, self)
         self.taskbar = Taskbar(self, self)
+        self.secondaries = {}               # connector -> SecondaryTaskbar
+        self.primary = ""
+        self.flyout_screen = None
+        self.arrange_tries = 0
+        self.arrange_bars()
+        Gdk.Display.get_default().get_monitors().connect("items-changed", self.screens_changed)
         import tray as tray_mod
         self.tray = tray_mod.Tray(lambda: GLib.idle_add(self.taskbar.tray_changed))
         import thispc                       # "This PC" for Dolphin: drive tiles with free space
         self.thispc = thispc.ThisPC()
+        self.display_settings = DisplaySettings(self, self)
+        self.project = ProjectMenu(self, self)
 
         if os.path.exists(FIFO) and not os.path.isfile(FIFO):
             os.unlink(FIFO)
@@ -5019,11 +5775,110 @@ class WinShell(Gtk.Application):
                 print("winshell:", e, file=sys.stderr)
         return True
 
+    # ── several screens ──
+    def screens_changed(self, *_):
+        """A screen was plugged in or out: taskbars again (debounced – the
+        list changes several times while a screen comes up)."""
+        if self.arrange_id:
+            GLib.source_remove(self.arrange_id)
+        self.arrange_id = GLib.timeout_add(800, self.arrange_bars)
+
+    def drop_bar(self, connector):
+        """Close a screen's (slim) taskbar now; arrange_bars() makes a new
+        one when the screen is back."""
+        bar = self.secondaries.pop(connector, None)
+        if bar:
+            bar.win.set_visible(False)
+            bar.destroy()
+
+    def arrange_bars(self):
+        """The full taskbar on the main display, a slim one on every other."""
+        self.arrange_id = 0
+        mons = displays.monitors()
+        if not mons:
+            # no screen on any more (e.g. "Second screen only" and that screen
+            # was unplugged): the laptop's own screen comes back on
+            for m in displays.all_monitors():
+                hypr_eval(f"hl.monitor({displays.on_spec(m)})")
+            self.arrange_id = GLib.timeout_add(1200, self.arrange_bars)
+            return False
+        names = [m["name"] for m in mons]
+        self.primary = displays.primary_name(mons)
+        main = gdk_monitor(self.primary)
+        if main:
+            for w in (self.taskbar.win, self.taskbar.ov_win, self.osd.win, self.fingerprint.win):
+                LS.set_monitor(w, main)
+        for n in list(self.secondaries):
+            # also when the screen was off and on again meanwhile: it is a new
+            # screen for GTK then, and the old taskbar had slipped onto
+            # another screen (a second taskbar above the main one)
+            if n not in names or n == self.primary or gdk_monitor(n) is not self.secondaries[n].monitor:
+                self.secondaries.pop(n).destroy()
+        for n in names:
+            if n != self.primary and n not in self.secondaries and gdk_monitor(n):
+                self.secondaries[n] = SecondaryTaskbar(self, self, n)
+        # a screen that just came (back) on may not be known to GTK yet – then
+        # it got no taskbar at all: look again in a moment
+        if any(not gdk_monitor(n) for n in names) and self.arrange_tries < 8:
+            self.arrange_tries += 1
+            self.arrange_id = GLib.timeout_add(700, self.arrange_bars)
+        else:
+            self.arrange_tries = 0
+        self.flyouts_on(None)
+        self.taskbar.refresh()
+        return False
+
+    def screens_snapshot(self):
+        """Which desktop is on which screen, which one each screen shows and
+        where the focus is – Hyprland shuffles that when a screen changes."""
+        mons = hypr_json("monitors") or []
+        return {"ws": {w["id"]: w.get("monitor") for w in hypr_json("workspaces") or []
+                       if (w.get("id") or 0) > 0},
+                "shown": {m["name"]: (m.get("activeWorkspace") or {}).get("id") for m in mons},
+                "focused": next((m["name"] for m in mons if m.get("focused")), None)}
+
+    def restore_screens(self, snap):
+        """Put the desktops back (on screens that are still on)."""
+        mons = hypr_json("monitors") or []
+        names = {m["name"] for m in mons}
+        now = {w["id"]: w.get("monitor") for w in hypr_json("workspaces") or [] if (w.get("id") or 0) > 0}
+        for wid, mon in snap["ws"].items():
+            if mon in names and wid in now and now[wid] != mon:
+                dispatch(f'hl.dsp.workspace.move({{ workspace = "{wid}", monitor = "{mon}" }})')
+        shown = {m["name"]: (m.get("activeWorkspace") or {}).get("id") for m in hypr_json("monitors") or []}
+        order = sorted(snap["shown"].items(), key=lambda kv: kv[0] == snap["focused"])    # focused one last
+        focus_moved = False
+        for mon, wid in order:
+            if mon in names and wid and shown.get(mon) != wid and snap["ws"].get(wid) == mon:
+                dispatch(f'hl.dsp.focus({{ workspace = "{wid}" }})')
+                focus_moved = True
+        cur = next((m["name"] for m in hypr_json("monitors") or [] if m.get("focused")), None)
+        if snap["focused"] in names and (focus_moved or cur != snap["focused"]):
+            dispatch(f'hl.dsp.focus({{ monitor = "{snap["focused"]}" }})')
+
+    def flyouts_on(self, connector):
+        """Start menu, calendar and quick settings open on the screen whose
+        taskbar was clicked (None: the main display); the notification
+        center goes along with the calendar."""
+        connector = connector or self.primary
+        mon = gdk_monitor(connector)
+        if not mon or connector == self.flyout_screen:
+            return
+        self.flyout_screen = connector
+        for w in (self.start.win, self.calendar.win, self.qs.win, self.qs.backdrop):
+            LS.set_monitor(w, mon)
+        if ncplace.load().get("output") != connector:
+            ncplace.save(output=connector)
+            ncplace.sync()                  # swaync re-reads its screen
+
     def close_flyouts(self):
         """Close every open menu (start menu, quick settings with its Wi-Fi /
         Bluetooth / sound pages, calendar, clipboard, tray flyout), like
         Windows does when Alt+Tab starts."""
-        for f in (self.start, self.qs, self.calendar, self.clip, self.shutdown, self.taskview):
+        for f in (self.start, self.qs, self.calendar, self.clip, self.shutdown, self.taskview,
+                  getattr(self, "project", None)):
+            if f is None:
+                continue
             if f.visible:
                 f.hide()
         self.taskbar.close_overflow()
@@ -5048,8 +5903,10 @@ class WinShell(Gtk.Application):
             if arg == "hide":
                 self.qs.hide()
             elif arg in ("main", "wifi", "bluetooth", "sound"):
+                self.flyouts_on(None)
                 self.qs.show(arg)
             else:
+                self.flyouts_on(None)
                 self.qs.toggle()
         elif what == "shutdown-dialog":         # Alt + F4 on the desktop
             self.shutdown.hide() if arg == "hide" else self.shutdown.toggle()
@@ -5062,6 +5919,34 @@ class WinShell(Gtk.Application):
                 self.desk.stop()
         elif what == "taskview":                # Win + Tab
             self.taskview.hide() if arg == "hide" else self.taskview.toggle()
+        elif what == "displays":                # Win + I → Displays
+            ds = self.display_settings
+            ds.show()
+            if arg == "test" and len(args) > 3:     # displays test <screen> <scale> [Hz]: set + Apply
+                for i, m in enumerate(ds.items):
+                    if m["name"] == args[2]:
+                        ds.sel = i
+                        m["scale"] = min(m["scales"], key=lambda v: abs(v - float(args[3])))
+                        if len(args) > 4:
+                            m["rate"] = min(m["rates"], key=lambda v: abs(v - float(args[4])))
+                        ds.update_info()
+                        ds.apply()
+            elif arg == "ui" and len(args) > 3:     # displays ui <screen> <rate index>: as if clicked
+                for i, m in enumerate(ds.items):
+                    if m["name"] == args[2]:
+                        ds.sel = i
+                        ds.update_info()
+                        ds.area.queue_draw()
+                        ds.rate_dd.set_selected(int(args[3]))
+                        print(f"winshell: displays ui: rate now {m['rate']}, rates {ds.rates}, "
+                              f"apply sensitive {ds.apply_btn.get_sensitive()}, sig changed "
+                              f"{ds.signature() != ds.orig}", file=sys.stderr, flush=True)
+                        ds.apply_btn.emit("clicked")
+                        print(f"winshell: displays ui: confirming {bool(ds.confirming)}", file=sys.stderr, flush=True)
+            elif arg in ("keep", "revert"):
+                getattr(ds, arg)()
+        elif what == "project":                 # Win + P
+            self.project.hide() if arg == "hide" else self.project.toggle()
         elif what == "freeze":                  # screenshot.sh: still picture while picking a region
             self.freeze.hide() if arg == "off" else self.freeze.show(args[1:])
         elif what == "thumbs":                  # hyprland.lua: a window is about to change
@@ -5076,9 +5961,17 @@ class WinShell(Gtk.Application):
             if self.qs.visible:
                 self.qs.refresh()
         elif what == "calendar":
-            self.calendar.hide() if arg == "hide" else self.calendar.toggle()
+            if arg == "hide":
+                self.calendar.hide()
+            else:
+                self.flyouts_on(None)
+                self.calendar.toggle()
         elif what == "menu":
-            self.start.hide() if arg == "hide" else self.start.toggle()
+            if arg == "hide":
+                self.start.hide()
+            else:
+                self.flyouts_on(None)
+                self.start.toggle()
         elif what == "tray":                    # hidden-icons flyout / an icon's menu / hide|show <id>
             if arg in ("hide", "show") and len(args) > 2:
                 self.taskbar.move_tray("tray:" + args[2], hidden=arg == "hide")

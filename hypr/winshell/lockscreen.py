@@ -89,6 +89,7 @@ _pam.pam_start.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.POINTER(PamC
                            ctypes.POINTER(ctypes.c_void_p)]
 _pam.pam_authenticate.argtypes = [ctypes.c_void_p, ctypes.c_int]
 _pam.pam_end.argtypes = [ctypes.c_void_p, ctypes.c_int]
+_pam.pam_acct_mgmt.argtypes = [ctypes.c_void_p, ctypes.c_int]
 
 
 def pam_check(password):
@@ -111,6 +112,10 @@ def pam_check(password):
     if _pam.pam_start(PAM_SERVICE.encode(), USER.encode(), ctypes.byref(c), ctypes.byref(handle)) != 0:
         return False
     rc = _pam.pam_authenticate(handle, 0)
+    if rc == 0:
+        # the password is right – is the account still allowed in (not
+        # locked or expired)? Like every other login screen does.
+        rc = _pam.pam_acct_mgmt(handle, 0)
     _pam.pam_end(handle, rc)
     return rc == 0
 

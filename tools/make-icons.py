@@ -36,8 +36,62 @@ for r in (5, 9.5, 14):
 b += f'<path d="M16.5 14.5l4 4M20.5 14.5l-4 4" stroke="{W}" stroke-width="{SW}"/>'
 save("wifi-off", b)
 # Ethernet: monitor with cable
-save("ethernet", f'<rect x="3" y="4.5" width="18" height="12" rx="1.5" stroke="{W}" stroke-width="{SW}"/>'
-                 f'<path d="M12 16.5v3M8 19.5h8" stroke="{W}" stroke-width="{SW}"/>')
+# ── App icons in colour (taskbar, Alt+Tab) ───────────────────────────
+# Terminal, in the style of Windows Terminal: a dark window with a strip of
+# three tabs in greys, a ">" prompt and a cursor block
+save("terminal",
+     '<defs><clipPath id="tw"><rect x="2" y="4.25" width="20" height="15.5" rx="1.7"/></clipPath>'
+     '<linearGradient id="tb" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#454545"/>'
+     '<stop offset="1" stop-color="#2f2f2f"/></linearGradient>'
+     '<linearGradient id="tc" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#f2f2f2"/>'
+     '<stop offset="1" stop-color="#bdbdbd"/></linearGradient></defs>'
+     '<g transform="translate(12 12) scale(1.17) translate(-12 -12)">'      # as big as the box allows
+     '<g clip-path="url(#tw)"><rect x="2" y="4.25" width="20" height="15.5" fill="url(#tb)"/>'
+     '<rect x="2" y="4.25" width="6.9" height="2.7" fill="#d0d0d0"/>'
+     '<rect x="8.9" y="4.25" width="6.6" height="2.7" fill="#9c9c9c"/>'
+     '<rect x="15.5" y="4.25" width="6.5" height="2.7" fill="#6e6e6e"/></g>'
+     '<path d="M5.4 9.7l3.9 3.1-3.9 3.1" stroke="url(#tc)" stroke-width="1.9"/>'
+     '<rect x="11.3" y="15.2" width="6.4" height="1.8" rx="0.4" fill="#e2e2e2"/></g>')
+# Settings, in the style of Windows 11: a grey gear with six broad teeth, a
+# light ring and a blue middle
+_g = []
+for _i in range(180):
+    _a = _i * 2 * math.pi / 180
+    _r = 9.35 + 1.55 * math.tanh(2.4 * (math.cos(6 * _a) + 0.3))     # broad teeth, shallow gaps
+    _g.append(f"{12 + _r * math.sin(_a):.2f} {12 - _r * math.cos(_a):.2f}")
+save("settings-app",
+     '<defs><linearGradient id="sg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#8b949b"/>'
+     '<stop offset="1" stop-color="#69727a"/></linearGradient>'
+     '<linearGradient id="sr" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#c9d0d4"/>'
+     '<stop offset="1" stop-color="#f4f6f7"/></linearGradient>'
+     '<linearGradient id="sb" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#1273c9"/>'
+     '<stop offset="1" stop-color="#0b4f96"/></linearGradient></defs>'
+     '<g transform="translate(12 12) scale(1.09) translate(-12 -12)">'      # as big as the box allows
+     f'<path d="M{"L".join(_g)}z" fill="url(#sg)"/>'
+     '<circle cx="12" cy="12" r="5.4" fill="url(#sr)"/><circle cx="12" cy="12" r="3.65" fill="url(#sb)"/></g>')
+
+# Win + P (project): which screens show the picture – bright: on, faint: off
+def screen(x, y, op):
+    return (f'<rect x="{x}" y="{y}" width="9.5" height="7" rx="1" stroke="{W}" stroke-opacity="{op}" '
+            f'stroke-width="{SW}"/><path d="M{x + 3.25} {y + 9.5}h3" stroke="{W}" stroke-opacity="{op}" '
+            f'stroke-width="{SW}"/>')
+save("project-pc", screen(1.5, 7, 1) + screen(13, 7, 0.3))
+save("project-second", screen(1.5, 7, 0.3) + screen(13, 7, 1))
+save("project-extend", screen(1.5, 7, 1) + screen(13, 7, 1)
+     + f'<path d="M11 10.5h2" stroke="{W}" stroke-width="{SW}"/>')
+save("project-duplicate", '<mask id="dupm"><rect width="24" height="24" fill="white"/>'
+     '<rect x="8.5" y="8" width="11" height="8" rx="1" fill="black" stroke="black" stroke-width="3"/></mask>'
+     f'<g mask="url(#dupm)"><rect x="3.5" y="5" width="11" height="8" rx="1" stroke="{W}" stroke-width="{SW}"/></g>'
+     f'<rect x="8.5" y="8" width="11" height="8" rx="1" stroke="{W}" stroke-width="{SW}"/>'
+     f'<path d="M12.25 19h3.5" stroke="{W}" stroke-width="{SW}"/>')
+
+# Ethernet like Windows 11: a screen on a stand, open at the top right where
+# a network plug sits; the plug's cable runs straight down to the floor
+save("ethernet", f'<path d="M14 3.3H3.7A1.7 1.7 0 0 0 2 5v10.2a1.7 1.7 0 0 0 1.7 1.7h13.4" '
+                 f'stroke="{W}" stroke-width="{SW}"/>'
+                 f'<path d="M8.3 17v4.1M14.9 17v4.1M6 21.1h10.9" stroke="{W}" stroke-width="{SW}"/>'
+                 f'<rect x="15.7" y="2.3" width="6.3" height="7.2" rx="2.4" stroke="{W}" stroke-width="{SW}"/>'
+                 f'<path d="M15.7 5.5H22M18.85 9.5v11.6" stroke="{W}" stroke-width="{SW}"/>')
 
 # ── Speaker ──────────────────────────────────────────────────────────
 spk = (f'<path d="M3.5 9.25h3L10.75 5.5v13L6.5 14.75h-3a.75.75 0 0 1-.75-.75v-4a.75.75 0 0 1 .75-.75z" '

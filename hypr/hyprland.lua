@@ -23,6 +23,9 @@ hl.monitor({
     position = "auto",
     scale    = "auto",
 })
+-- where the screens stand and which resolution: set in Display settings
+-- (Win + I → Displays), kept in monitors.lua (not in the repo – per machine)
+pcall(dofile, home .. "/.config/hypr/monitors.lua")
 
 ---------------------------------------------------------------------
 -- Environment
@@ -233,7 +236,9 @@ hl.window_rule({
 -- Mica/Acrylic blur for taskbar, start menu, flyouts and Alt+Tab
 hl.layer_rule({ name = "blur-startmenu", match = { namespace = "^rofi$" },                      blur = true, ignore_alpha = 0.2 })
 hl.layer_rule({ name = "blur-swaync",    match = { namespace = "^swaync-.*$" },                 blur = true, ignore_alpha = 0.2 })
-hl.layer_rule({ name = "blur-winshell",  match = { namespace = "^winshell-(qs|switcher|start|calendar|clipboard|taskview)$" }, blur = true, ignore_alpha = 0.2 })
+-- the notification center animates itself, in step with the calendar below
+hl.layer_rule({ name = "no-anim-swaync-cc", match = { namespace = "^swaync-control-center$" }, no_anim = true })
+hl.layer_rule({ name = "blur-winshell",  match = { namespace = "^winshell-(qs|switcher|start|calendar|clipboard|taskview|project)$" }, blur = true, ignore_alpha = 0.2 })
 hl.layer_rule({ name = "blur-osd",        match = { namespace = "^winshell-(osd|fingerprint)$" }, blur = true, ignore_alpha = 0.2 })
 -- winshell animates its flyouts itself (they glide out of the taskbar)
 hl.layer_rule({ name = "no-anim-winshell", match = { namespace = "^winshell-.*$" }, no_anim = true })
@@ -475,9 +480,17 @@ local function set_geometry(addr, x, y, w, h)
     hl.dispatch(hl.dsp.window.move({ x = x, y = y, window = sel }))
 end
 
+-- winshell's own dialogs (Display settings): a fixed size, like a Windows
+-- dialog – no maximize, no snapping, no full screen
+local function fixed_size(w)
+    return w and w.class == "io.github.noe1.winshell"
+end
+hl.window_rule({ name = "winshell-dialogs", match = { class = "^io\\.github\\.noe1\\.winshell$" },
+                 float = true, center = true })
+
 function WinMax(action, w)
     w = w or hl.get_active_window()
-    if not w or not w.mapped then return end
+    if not w or not w.mapped or fixed_size(w) then return end
     local a = w.address
     if action == "toggle" then
         -- maximized also when its normal size got lost (e.g. a config reload)
@@ -528,6 +541,15 @@ end
 hl.on("window.fullscreen", function(ev)
     local w = event_window(ev) or hl.get_active_window()
     if not w or fs_hook_paused[w.address] then return end
+    if fixed_size(w) then
+        if w.fullscreen ~= 0 then           -- e.g. Win + Shift + Up: straight back
+            local a = w.address
+            fs_hook_paused[a] = true
+            hl.dispatch(hl.dsp.window.fullscreen_state({ internal = 0, client = 0, window = "address:" .. a }))
+            later(300, function() fs_hook_paused[a] = nil end)
+        end
+        return
+    end
     if w.fullscreen == 1 then
         -- Undo Hyprland's own maximize, then maximize Windows-style once it
         -- is gone. Events caused by these two steps arrive late; ignore them,
@@ -736,7 +758,7 @@ end
 
 function WinSnap(zone, w)
     w = w or hl.get_active_window()
-    if not w or not w.mapped then return end
+    if not w or not w.mapped or fixed_size(w) then return end
     local a = w.address
     local mon = w.monitor or hl.get_active_monitor()
     if zone == "max" then
@@ -1315,6 +1337,14 @@ hl.bind(win .. " + 3", hl.dsp.exec_cmd(scripts .. "/pinned.sh open '^kitty$' kit
 -- Win + Tab: task view like Windows – the windows of this desktop and all
 -- desktops at the bottom (winshell's TaskView); Win + Tab again closes it
 hl.bind(win .. " + Tab", function() winshell_send("taskview") end)
+-- Win + P: project like Windows – PC screen only, duplicate, extend, second
+-- screen only (Win + P again moves the choice); arranging is in Display settings
+hl.bind(win .. " + P", function() winshell_send("project") end)
+-- Ctrl + Win + Shift + B, like Windows' graphics reset: a screen hangs (still
+-- picture, black, no taskbar)? This reloads the config, switches the screens
+-- off and on and restarts winshell. Runs on its own, also while locked or
+-- when winshell hangs.
+hl.bind("CTRL + " .. win .. " + SHIFT + B", hl.dsp.exec_cmd(scripts .. "/reset-display.sh"), { locked = true })
 
 -- Win + Print: save a screenshot of the whole screen
 hl.bind(win .. " + Print", hl.dsp.exec_cmd(scripts .. "/screenshot.sh full"))

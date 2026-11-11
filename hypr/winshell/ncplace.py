@@ -10,7 +10,11 @@ calendar folds and tells swaync to reload it.
 import json
 import os
 import subprocess
+import sys
 import threading
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import displays  # noqa: E402
 
 SRC = os.path.expanduser("~/.config/swaync/config.json")
 DST = os.path.join(os.environ.get("XDG_RUNTIME_DIR", "/tmp"), "winshell-swaync.json")
@@ -47,12 +51,22 @@ def save(**kw):
         return st
 
 
+def output_name(mons=None):
+    """The screen the notifications show on: where the calendar was opened
+    last (state "output"), else the main display."""
+    mons = displays.monitors() if mons is None else mons
+    want = load().get("output")
+    if want in [m["name"] for m in mons]:
+        return want
+    return displays.primary_name(mons)
+
+
 def screen_height():
-    """Usable height of the focused screen (without the taskbar), logical px."""
+    """Usable height of that screen (without the taskbar), logical px."""
     try:
-        out = subprocess.run(["hyprctl", "monitors", "-j"], capture_output=True, text=True, timeout=3).stdout
-        mons = json.loads(out)
-        m = next((m for m in mons if m.get("focused")), mons[0])
+        mons = displays.monitors()
+        name = output_name(mons)
+        m = next((m for m in mons if m["name"] == name), mons[0])
         # the taskbar may not be up yet (winshell starting, login): then
         # Hyprland reserves nothing and the panel landed 48 px too low – in
         # the calendar. Always count the taskbar's height.
@@ -74,6 +88,10 @@ def write(calendar_height=None):
         cfg = json.load(f)
     if st.get("empty", True):
         cfg["control-center-height"] = EMPTY_HEIGHT
+    out = output_name()
+    if out:                                 # several screens: the main one / the calendar's
+        cfg["control-center-preferred-output"] = out
+        cfg["notification-window-preferred-output"] = out
     # Anchored at the top (then new notifications are listed at the top,
     # like Windows), pushed down so its bottom edge sits above the calendar.
     free = screen_height()

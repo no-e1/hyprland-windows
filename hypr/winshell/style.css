@@ -764,3 +764,44 @@ window.shutdown-backdrop { background: rgba(0, 0, 0, 0.35); }
 }
 .shutdown-foot button { min-height: 32px; }
 .shutdown-foot button:focus-visible { outline: 2px solid #ffffff; outline-offset: 1px; }
+
+/* ── Display settings (Win + I → Displays) ───────────────────────── */
+window.display-settings { background: #202020; color: #ffffff; font-family: "Inter", sans-serif; }
+.ds-body { padding: 24px 28px; }
+.ds-title { font-size: 26px; font-weight: 600; }
+.ds-hint { color: rgba(255, 255, 255, 0.72); font-size: 13px; }
+.ds-canvas { background: #2b2b2b; border-radius: 8px; border: 1px solid rgba(255, 255, 255, 0.06); }
+.ds-info { font-size: 13px; color: rgba(255, 255, 255, 0.85); }
+.ds-check { font-size: 13px; }
+.ds-button {
+    min-height: 32px; padding: 0 18px; border-radius: 4px; font-size: 13px;
+    background: rgba(255, 255, 255, 0.07); border: 1px solid rgba(255, 255, 255, 0.08); box-shadow: none;
+    color: #ffffff;
+}
+.ds-button:hover { background: rgba(255, 255, 255, 0.11); }
+.ds-accent { background: #4cc2ff; color: #000000; border-color: #4cc2ff; }
+.ds-accent:hover { background: #47b1e8; }
+.ds-accent:disabled { background: rgba(255, 255, 255, 0.06); color: rgba(255, 255, 255, 0.4); border-color: transparent; }
+.ds-identify {
+    font-family: "Inter Display", Inter; font-size: 120px; font-weight: 600; color: #ffffff;
+    min-width: 180px; padding: 4px 24px; border-radius: 12px;
+    background: rgba(32, 32, 32, 0.92); border: 1px solid rgba(255, 255, 255, 0.12);
+}
+.ds-drop button { min-height: 30px; padding: 0 10px; border-radius: 4px;
+                  background: rgba(255, 255, 255, 0.07); border: 1px solid rgba(255, 255, 255, 0.08); }
+
+/* ── Win + P (project) ───────────────────────────────────────────── */
+.project { min-width: 300px; padding: 16px 18px 14px 18px; }
+.project-title { font-size: 14px; font-weight: 600; margin: 0 0 4px 2px; }
+button.project-tile {
+    min-height: 56px; border-radius: 6px; padding: 0;
+    background: rgba(255, 255, 255, 0.06); border: 1px solid rgba(255, 255, 255, 0.07); box-shadow: none;
+    transition: background-color 150ms ease-out;
+}
+button.project-tile:hover { background: rgba(255, 255, 255, 0.1); }
+button.project-tile.on { background: #4cc2ff; border-color: #4cc2ff; }
+button.project-tile.on image { -gtk-icon-filter: invert(1); }
+button.project-tile.selected { box-shadow: 0 0 0 2px #ffffff; }
+.ds-confirm { padding: 12px 14px; border-radius: 6px; background: rgba(255, 255, 255, 0.06);
+              border: 1px solid rgba(255, 255, 255, 0.08); }
+.ds-confirm-title { font-size: 14px; font-weight: 600; }

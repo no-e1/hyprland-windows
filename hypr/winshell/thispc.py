@@ -94,6 +94,14 @@ def drives():
     return out
 
 
+def clean(text):
+    """A drive label is chosen by whoever made the drive (a USB stick from
+    someone else): no line breaks or other control characters may reach the
+    .desktop file – a label with a line break could add lines of its own
+    (e.g. "Exec=…")."""
+    return "".join(c if c.isprintable() else " " for c in str(text)).strip() or "Drive"
+
+
 def icon_svg(used, kind, system):
     """Windows 11's drive: a flat grey drive seen from the front (lighter top,
     darker base, a small light), the Windows logo on the system drive; below
@@ -144,6 +152,9 @@ class ThisPC:
         self.last = items
         keep = set()
         for i, (key, name, detail, used, kind, target) in enumerate(items):
+            name, detail = clean(name), clean(detail)
+            if not all(c.isprintable() for c in target):
+                continue                    # a mount point with control characters: skip it
             svg = icon_svg(used, kind, target == "/")
             ico = os.path.join(ICONS, hashlib.sha1(svg.encode()).hexdigest()[:12] + ".svg")
             if not os.path.exists(ico):
