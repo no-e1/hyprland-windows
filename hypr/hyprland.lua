@@ -194,8 +194,30 @@ hl.config({
 -- The touchpad keeps libinput's default speed (close to Windows' default)
 hl.device({ name = "syna8018:00-06cb:ce67-touchpad", sensitivity = 0 })
 
--- Touchpad: 4-finger swipe switches virtual desktops (like Windows)
-hl.gesture({ fingers = 4, direction = "horizontal", action = "workspace" })
+-- Touchpad: 4-finger swipe switches virtual desktops (like Windows) – on
+-- all screens at once (a desktop spans all of them; Hyprland's own
+-- "workspace" swipe only moved the screen you're on). Fingers to the left:
+-- the desktop on the right. One desktop per swipe; a short flick counts
+-- when lifted.
+local DESK4_SWIPE, DESK4_FLICK = 60, 20
+local desk4_acc, desk4_done = 0, false
+local function desk4_go(acc)
+    desk4_done = true
+    DesktopStep(acc < 0 and 1 or -1)
+end
+hl.gesture({ fingers = 4, direction = "horizontal", action = {
+    start = function() desk4_acc, desk4_done = 0, false end,
+    update = function(e)
+        if desk4_done then return end
+        desk4_acc = desk4_acc + ((e.delta and e.delta.x) or 0)
+        if math.abs(desk4_acc) >= DESK4_SWIPE then desk4_go(desk4_acc) end
+    end,
+    finish = function(e)
+        if not desk4_done and not (e and e.cancelled) and math.abs(desk4_acc) >= DESK4_FLICK then
+            desk4_go(desk4_acc)
+        end
+    end,
+} })
 
 ---------------------------------------------------------------------
 -- Window rules: every window floats freely (no tiling), like Windows
@@ -259,6 +281,27 @@ hl.layer_rule({ name = "no-anim-slurp",    match = { namespace = "^selection$" }
 local saved_geometry = {}       -- address -> geometry before maximizing
 local fs_hook_paused = {}       -- address -> true while we change its state ourselves
 local hidden_maximized = {}     -- address -> true: was maximized when it got minimized
+-- address -> { ws, x, y }: where a minimized window was. The hidden workspace
+-- sits on one screen and shifts a window from another screen onto that one;
+-- it comes back on its own screen, right where it was.
+local hidden_from = {}
+-- the workspace the screen of that slot shows now (nil: that screen is off)
+local function shown_ws_of_slot(id)
+    if not id or id <= 0 or not DESK_STRIDE then return nil end
+    local s = id // DESK_STRIDE
+    for _, m in ipairs(hl.get_monitors() or {}) do
+        local a = m.active_workspace and m.active_workspace.id
+        if a and a > 0 and a // DESK_STRIDE == s then return a end
+    end
+end
+-- where a hidden window is to come back: x, y (nil: as it is)
+local function hidden_place(w, pos)
+    local p = (pos and pos[w.address]) or hidden_from[w.address]
+    if p and w.workspace and w.workspace.name == "special:minimized" then
+        local ws = p.ws or (pos and pos.ws and pos.ws[w.address])
+        if not ws or shown_ws_of_slot(ws) then return p.x, p.y end
+    end
+end
 
 -- Tell the app it is maximized (no shadow margins, "restore" button) while
 -- Hyprland keeps treating it as a normal window (normal stacking order).
@@ -317,13 +360,32 @@ end
 -- their input ends up shifted, so nudge the size by one pixel and back –
 -- the second resize goes out a moment later, otherwise Hyprland merges both
 -- and the window grows by a pixel on every restore.
-function RestoreWindow(w, ws_id)
+function RestoreWindow(w, ws_id, pos)
     if ThumbsPause then ThumbsPause() end
     local a, sel = w.address, "address:" .. w.address
-    local x, y = w.at.x, w.at.y     -- numbers: the window object reads live values
-    hl.dispatch(hl.dsp.window.move({ workspace = ws_id, follow = false, window = sel }))
-    set_alpha(a, 1)                 -- faded out by "show desktop": fades back in
+    -- numbers: the window object reads live values. pos: where it was before
+    -- it was hidden – the hidden workspace sits on one screen and shifts a
+    -- window from another screen onto that one
+    local x, y = w.at.x, w.at.y
+    local from = hidden_from[a]
+    hidden_from[a] = nil
+    if from then
+        local back = shown_ws_of_slot(from.ws)
+        if back then                -- its screen is on: there, where it was
+            ws_id, pos = back, pos or { x = from.x, y = from.y }
+        end
+    end
+    if pos then x, y = pos.x, pos.y end
+    -- straight to its place: no sliding over from the other screen
+    hl.dispatch(hl.dsp.window.set_prop({ prop = "no_anim", value = "1", window = sel }))
+    hl.dispatch(hl.dsp.window.move({ workspace = tostring(ws_id), follow = false, window = sel }))
     hl.dispatch(hl.dsp.window.move({ x = x, y = y, window = sel }))
+    set_alpha(a, 1)                 -- faded out by "show desktop": fades back in
+    later(400, function()
+        if hl.get_window(sel) then
+            hl.dispatch(hl.dsp.window.set_prop({ prop = "no_anim", value = "unset", window = sel }))
+        end
+    end)
     if hidden_maximized[a] then
         hidden_maximized[a] = nil
         fs_hook_paused[a] = true
@@ -378,6 +440,10 @@ function HideWindow(addr, keep_focus)
     local function hide()
         if hide_cancel[addr] then hide_cancel[addr] = nil return end
         if ThumbsPause then ThumbsPause() end
+        local cur = hl.get_window("address:" .. addr)
+        if cur and cur.workspace and (cur.workspace.id or 0) > 0 then
+            hidden_from[addr] = { ws = cur.workspace.id, x = cur.at.x, y = cur.at.y }
+        end
         hl.dispatch(hl.dsp.window.move({ workspace = "special:minimized", follow = false,
                                          window = "address:" .. addr }))
     end
@@ -980,12 +1046,16 @@ hl.bind(win .. " + S", function() winshell_send("menu") end)
 -- Show desktop (Win + D): hide every window of this desktop, press again to
 -- bring them back exactly as they were. Win + M minimizes all,
 -- Win + Shift + M restores them.
-local desktop_hidden = nil      -- { windows = {addresses, bottom to top}, active = address }
+-- A desktop spans all screens: Win + D takes the windows of every screen.
+local desktop_hidden = nil      -- { windows = {addresses, bottom to top}, ws = {address -> workspace id}, active = address }
 local function windows_here()
-    local ws = hl.get_active_workspace()
+    local shown = {}            -- the workspaces the screens show (this desktop)
+    for _, m in ipairs(hl.get_monitors() or {}) do
+        if m.active_workspace and m.active_workspace.id then shown[m.active_workspace.id] = true end
+    end
     local list = {}
     for _, w in ipairs(hl.get_windows() or {}) do
-        if w.mapped and w.workspace and ws and w.workspace.id == ws.id then
+        if w.mapped and w.workspace and shown[w.workspace.id] then
             table.insert(list, w)
         end
     end
@@ -1004,19 +1074,27 @@ local function save_desktop()
     local f = io.open(DESK_STATE, "w")
     if not f then return end
     f:write("active ", desktop_hidden.active or "-", "\n")
-    for _, a in ipairs(desktop_hidden.windows) do f:write("win ", a, "\n") end
+    for _, a in ipairs(desktop_hidden.windows) do
+        local p = (desktop_hidden.pos or {})[a]
+        f:write("win ", a, " ", (desktop_hidden.ws or {})[a] or "-",
+                p and (" " .. p.x .. " " .. p.y) or "", "\n")
+    end
     f:close()
 end
 local function load_desktop()
     local f = io.open(DESK_STATE, "r")
     if not f then return end
-    local saved = { windows = {} }
+    local saved = { windows = {}, ws = {}, pos = {} }
     for line in f:lines() do
-        local kind, a = line:match("^(%S+) (%S+)")
+        local kind, a, ws, px, py = line:match("^(%S+) (%S+) ?(%S*) ?(%-?%d*) ?(%-?%d*)")
+        if kind == "win" and tonumber(px) and tonumber(py) then
+            saved.pos[a] = { x = tonumber(px), y = tonumber(py) }
+        end
         if kind == "active" and a ~= "-" then
             saved.active = a
         elseif kind == "win" then
             table.insert(saved.windows, a)
+            saved.ws[a] = tonumber(ws)
         end
     end
     f:close()
@@ -1030,10 +1108,11 @@ local desk_out = nil            -- windows waiting to be hidden: { gen, windows 
 local desk_in = nil             -- windows waiting to come back: { gen, windows, active }
 
 -- "address|x|y|w|h|title bar|class" for winshell's animation
-local function desk_tokens(list)
+local function desk_tokens(list, pos)
     local t = {}
     for _, w in ipairs(list) do
-        table.insert(t, string.format("%s|%d|%d|%d|%d|%d|%s", w.address, w.at.x, w.at.y,
+        local x, y = hidden_place(w, pos)   -- a hidden one: where it comes back
+        table.insert(t, string.format("%s|%d|%d|%d|%d|%d|%s", w.address, x or w.at.x, y or w.at.y,
             w.size.x, w.size.y, has_bar(w) and BAR_HEIGHT or 0, (w.class or "?"):gsub("[|%s]", "_")))
     end
     return table.concat(t, " ")
@@ -1046,9 +1125,13 @@ local function hide_all()
     desk_gen = desk_gen + 1
     local gen = desk_gen
     local active = hl.get_active_window()
-    local saved = { windows = {}, active = active and active.address }
+    local saved = { windows = {}, ws = {}, pos = {}, active = active and active.address }
     local list = windows_here()             -- back to front
-    for _, w in ipairs(list) do table.insert(saved.windows, w.address) end
+    for _, w in ipairs(list) do
+        table.insert(saved.windows, w.address)
+        saved.ws[w.address] = w.workspace.id    -- comes back on its own screen …
+        saved.pos[w.address] = { x = w.at.x, y = w.at.y }    -- … right where it was
+    end
     if #list > 0 then
         desk_out = { gen = gen, windows = saved.windows }
         winshell_send("desk out DesktopOutNow " .. gen .. " " .. desk_tokens(list))
@@ -1167,7 +1250,7 @@ local function restore_hidden()
         DesktopInNow(gen)
         return
     end
-    winshell_send("desk in DesktopInNow " .. gen .. " " .. desk_tokens(todo))
+    winshell_send("desk in DesktopInNow " .. gen .. " " .. desk_tokens(todo, saved.pos))
     later(700, function() DesktopInNow(gen) end)        -- winshell didn't answer
 end
 function DesktopInNow(gen)
@@ -1175,11 +1258,21 @@ function DesktopInNow(gen)
     if not d or d.gen ~= gen then return end
     desk_in = nil
     local ws = hl.get_active_workspace()
+    -- every window back on its own screen, on the desktop you're on now
+    -- (its screen is off now: the one you're on)
+    local shown = {}                        -- slot -> the workspace that screen shows
+    for _, m in ipairs(hl.get_monitors() or {}) do
+        local id = m.active_workspace and m.active_workspace.id
+        if id and id > 0 then shown[id // DESK_STRIDE] = id end
+    end
     for _, w in ipairs(d.windows) do        -- back ones first: the stacking order comes back
         local cur = hl.get_window("address:" .. w.address)
         if cur and cur.workspace then
             if cur.workspace.name == "special:minimized" then
-                RestoreWindow(cur, ws.id)
+                local was = d.saved and d.saved.ws and d.saved.ws[w.address]
+                local back = was and was > 0 and shown[was // DESK_STRIDE]
+                -- its own screen: where it was; another one: where the hidden one has it
+                RestoreWindow(cur, back or ws.id, back and d.saved.pos and d.saved.pos[w.address] or nil)
             else
                 set_alpha(w.address, 1)     -- never left (its hide was cancelled)
             end
@@ -1371,20 +1464,38 @@ hl.bind(win .. " + mouse:272", hl.dsp.window.drag(),   { mouse = true })
 hl.bind(win .. " + mouse:273", hl.dsp.window.resize(), { mouse = true })
 
 ---------------------------------------------------------------------
--- Virtual desktops like Windows: a desktop stays until you close it, even
--- when it's empty (Hyprland drops empty workspaces, so every desktop gets a
--- "persistent" rule; the list is kept across config reloads).
--- winshell's task view (Win + Tab) uses DesktopAdd / DesktopClose.
+-- Virtual desktops like Windows: a desktop spans all screens. Switching
+-- the desktop switches every screen at once; a desktop stays until you
+-- close it, even when it's empty.
+-- Hyprland has workspaces per screen, so desktop d is one workspace per
+-- screen: slot * DESK_STRIDE + d (laptop screen: 1, 2, 3 …, the next
+-- screen: 101, 102 …), each kept on its screen by a persistent rule.
+-- A screen that goes off (Win + P, unplugged): its windows go to the main
+-- screen, same desktop – and back when the screen comes back.
+-- Screens changing never change the desktop you're on.
+-- winshell's task view (Win + Tab) uses DesktopAdd / DesktopClose / DesktopShow.
 ---------------------------------------------------------------------
 local desktops_file = runtime .. "/hypr-desktops"
+local slots_file = runtime .. "/hypr-desktop-slots"
 MAX_DESKTOPS = 6                    -- no more desktops than this (winshell knows it too)
-local desktop_rules = {}            -- workspace id -> its persistent rule
+DESK_STRIDE = 100                   -- winshell knows it too
+local desktop_set = {}              -- desktop number -> true
+local slot_of = {}                  -- screen (connector) -> slot
+local desk_rules = {}               -- workspace id -> { mon, rule }
+local exiled = {}                   -- window address -> { mon = its screen (off), ws = where it went }
+local desk_quiet = false            -- we switch the screens ourselves
+local desk_hold = 0                 -- screens are changing: Hyprland shuffles workspaces
+local desk_now = nil                -- the desktop you are on
 
-local function desktop_ids()
+local function desk_of_ws(id)
+    if not id or id <= 0 then return nil end
+    local d = id % DESK_STRIDE
+    return d > 0 and d or nil
+end
+
+function DesktopIds()
     local ids = {}
-    for _, w in ipairs(hl.get_workspaces() or {}) do
-        if w.id and w.id > 0 then ids[#ids + 1] = w.id end
-    end
+    for d in pairs(desktop_set) do ids[#ids + 1] = d end
     table.sort(ids)
     return ids
 end
@@ -1392,87 +1503,299 @@ end
 local function save_desktops()
     local f = io.open(desktops_file, "w")
     if not f then return end
-    for id in pairs(desktop_rules) do f:write(id, "\n") end
+    for _, d in ipairs(DesktopIds()) do f:write(d, "\n") end
     f:close()
 end
 
-local function keep_desktop(id)
-    if not desktop_rules[id] then
-        desktop_rules[id] = hl.workspace_rule({ workspace = tostring(id), persistent = true })
+-- the screens that show something of their own (on, not duplicating another)
+local function screens()
+    local list = {}
+    for _, m in ipairs(hl.get_monitors() or {}) do
+        if m.enabled ~= false and not m.is_mirror then list[#list + 1] = m end
+    end
+    return list
+end
+
+local function primary_screen(list)
+    local f = io.open((os.getenv("XDG_CONFIG_HOME") or (os.getenv("HOME") .. "/.config"))
+                      .. "/winshell/display.json", "r")
+    local want
+    if f then
+        want = (f:read("a") or ""):match('"primary"%s*:%s*"([^"]+)"')
+        f:close()
+    end
+    for _, m in ipairs(list) do if m.name == want then return m end end
+    for _, m in ipairs(list) do if m.name:match("^eDP") then return m end end
+    return list[1]
+end
+
+local function save_slots()
+    local f = io.open(slots_file, "w")
+    if not f then return end
+    for n, s in pairs(slot_of) do f:write(n, " ", s, "\n") end
+    f:close()
+end
+
+-- a screen keeps its slot for the whole session (its workspace numbers)
+local function slot(name)
+    if not slot_of[name] then
+        local used = {}
+        for _, s in pairs(slot_of) do used[s] = true end
+        local s = name:match("^eDP") and 0 or 1
+        if s == 1 and not used[0] then
+            local laptop = false
+            for _, m in ipairs(hl.get_monitors() or {}) do
+                if m.name:match("^eDP") then laptop = true end
+            end
+            if not laptop then s = 0 end            -- no laptop screen: the first one is slot 0
+        end
+        while used[s] do s = s + 1 end
+        slot_of[name] = s
+        save_slots()
+    end
+    return slot_of[name]
+end
+
+local function ws_on(name, d) return slot(name) * DESK_STRIDE + d end
+
+-- every desktop on every screen that is on: a persistent workspace there
+local function sync_rules()
+    local want = {}
+    for _, m in ipairs(screens()) do
+        for d in pairs(desktop_set) do want[ws_on(m.name, d)] = m.name end
+    end
+    for id, r in pairs(desk_rules) do
+        if want[id] ~= r.mon then
+            r.rule:set_enabled(false)
+            desk_rules[id] = nil
+        end
+    end
+    for id, mon in pairs(want) do
+        if not desk_rules[id] then
+            desk_rules[id] = { mon = mon, rule = hl.workspace_rule({ workspace = tostring(id),
+                                                                    monitor = mon, persistent = true }) }
+        end
     end
 end
 
--- desktop 1 always, plus the ones from before a config reload
-keep_desktop(1)
+local function focused_screen()
+    for _, m in ipairs(screens()) do if m.focused then return m end end
+end
+
+function CurrentDesktop()
+    local ws = hl.get_active_workspace()
+    local d = ws and desk_of_ws(ws.id)
+    if d and desktop_set[d] then return d end
+    return desk_now or DesktopIds()[1] or 1
+end
+
+-- A window belongs to the screen its middle is on: one dragged or snapped
+-- over to the other screen still sat in the workspace of the screen it came
+-- from (Hyprland draws it where it lies) – and stayed on screen when the
+-- desktop switched. It moves to that screen's workspace of its desktop.
+local function windows_to_their_screen()
+    local list = screens()
+    for _, w in ipairs(hl.get_windows() or {}) do
+        local id = w.workspace and w.workspace.id
+        local d = desk_of_ws(id)
+        if d and w.mapped and type(w.at) == "table" and type(w.size) == "table" then
+            local x, y = w.at.x, w.at.y
+            local cx, cy = x + w.size.x / 2, y + w.size.y / 2
+            for _, m in ipairs(list) do
+                local sc = (m.scale and m.scale > 0) and m.scale or 1
+                if cx >= m.x and cx < m.x + m.width / sc and cy >= m.y and cy < m.y + m.height / sc then
+                    local want = ws_on(m.name, d)
+                    if want ~= id then
+                        local sel = "address:" .. w.address
+                        hl.dispatch(hl.dsp.window.move({ workspace = tostring(want), follow = false, window = sel }))
+                        if w.floating then          -- right where it was
+                            hl.dispatch(hl.dsp.window.move({ x = x, y = y, window = sel }))
+                        end
+                        exiled[w.address] = nil
+                    end
+                    break
+                end
+            end
+        end
+    end
+end
+
+-- show desktop d on every screen (the screen you're on gets the focus)
+function DesktopShow(d)
+    if not desktop_set[d] then return end
+    local was = desk_quiet
+    desk_quiet = true
+    windows_to_their_screen()
+    desk_now = d
+    local focus_id
+    for _, m in ipairs(screens()) do
+        local id = ws_on(m.name, d)
+        if m.focused then
+            focus_id = id
+        elseif not (m.active_workspace and m.active_workspace.id == id) then
+            m:set_workspace(tostring(id))
+        end
+    end
+    if focus_id then
+        local cur = hl.get_active_workspace()
+        if not (cur and cur.id == focus_id) then
+            hl.dispatch(hl.dsp.focus({ workspace = tostring(focus_id) }))
+        end
+    end
+    desk_quiet = was
+end
+
+-- After screens went on / off / duplicating: every window back on its screen
+-- (or, while that one is off, on the main screen), each workspace on its
+-- screen, and every screen shows the desktop you were on.
+function DesktopsArrange()
+    local list = screens()
+    if #list == 0 then return end
+    local was = desk_quiet
+    desk_quiet = true
+    for _, w in ipairs(hl.get_windows() or {}) do          -- a desktop with windows stays
+        local d = w.workspace and desk_of_ws(w.workspace.id)
+        if d and not desktop_set[d] then desktop_set[d] = true end
+    end
+    if not next(desktop_set) then desktop_set[1] = true end
+    if not desk_now or not desktop_set[desk_now] then desk_now = CurrentDesktop() end
+    local on = {}
+    for _, m in ipairs(list) do on[m.name] = true; slot(m.name) end
+    local lead = primary_screen(list).name
+    local by_slot = {}
+    for n, s in pairs(slot_of) do by_slot[s] = n end
+    sync_rules()
+    for _, w in ipairs(hl.get_windows() or {}) do
+        local id = w.workspace and w.workspace.id
+        local d = desk_of_ws(id)
+        if d then
+            local e = exiled[w.address]
+            if e and e.ws ~= id then exiled[w.address], e = nil, nil end   -- you moved it since
+            local home = e and e.mon or by_slot[id // DESK_STRIDE]
+            local mon = (home and on[home]) and home or lead
+            local want = ws_on(mon, d)
+            if want ~= id then
+                hl.dispatch(hl.dsp.window.move({ workspace = tostring(want), follow = false,
+                                                 window = "address:" .. w.address }))
+                exiled[w.address] = (home and not on[home]) and { mon = home, ws = want } or nil
+            end
+        end
+    end
+    for _, ws in ipairs(hl.get_workspaces() or {}) do       -- workspaces back on their screen
+        local id = ws.id
+        if id and id > 0 then
+            local owner = by_slot[id // DESK_STRIDE]
+            if owner and on[owner] and ws.monitor and ws.monitor.name ~= owner then
+                hl.dispatch(hl.dsp.workspace.move({ workspace = tostring(id), monitor = owner }))
+            end
+        end
+    end
+    save_desktops()
+    DesktopShow(desk_now)
+    desk_quiet = was
+end
+
+-- screens are about to change / changing (winshell's Win + P, Display
+-- settings): nothing Hyprland does meanwhile counts as switching desktops
+function DesktopsHold(ms)
+    desk_hold = desk_hold + 1
+    later(ms or 1500, function()
+        desk_hold = math.max(0, desk_hold - 1)
+        pcall(DesktopsArrange)
+    end)
+end
+
+local function screens_changed()
+    later(250, function() pcall(DesktopsArrange) end)
+    DesktopsHold(1500)
+end
+hl.on("monitor.added", screens_changed)
+hl.on("monitor.removed", screens_changed)
+
+-- a desktop switched on one screen (4-finger swipe, keys, task view):
+-- the other screens follow. winshell calls it too on every workspace
+-- event – the swipe doesn't always reach the hook here.
+function DesktopSync()
+    if desk_quiet or desk_hold > 0 then return end
+    local m = focused_screen()
+    local ws = m and m.active_workspace
+    local d = ws and desk_of_ws(ws.id)
+    if not d or not desktop_set[d] or ws.id ~= ws_on(m.name, d) then return end
+    for _, o in ipairs(screens()) do
+        if not (o.active_workspace and o.active_workspace.id == ws_on(o.name, d)) then
+            DesktopShow(d)
+            return
+        end
+    end
+    desk_now = d
+end
+hl.on("workspace.active", function() DesktopSync() end)
+
+-- the desktops and screens from before a config reload
 do
     local f = io.open(desktops_file, "r")
     if f then
         for line in f:lines() do
-            local id = tonumber(line)
-            if id and id > 0 then keep_desktop(id) end
+            local d = tonumber(line)
+            if d and d > 0 and d < DESK_STRIDE then desktop_set[d] = true end
         end
         f:close()
     end
+    f = io.open(slots_file, "r")
+    if f then
+        for line in f:lines() do
+            local n, s = line:match("^(%S+) (%d+)$")
+            if n then slot_of[n] = tonumber(s) end
+        end
+        f:close()
+    end
+    if not next(desktop_set) then desktop_set[1] = true end
 end
+pcall(DesktopsArrange)
+hl.on("hyprland.start", function() pcall(DesktopsArrange) end)
 
 -- A new desktop after the last one. switch = false (task view): it only
--- appears, you stay where you are, like Windows. A persistent rule alone
--- doesn't create the workspace, so it is visited for an instant – with the
--- desktop animation off, nothing shows on screen.
+-- appears, you stay where you are, like Windows. Its persistent workspaces
+-- appear right away.
 function DesktopAdd(switch)
-    local ids = desktop_ids()
+    local ids = DesktopIds()
     if #ids >= MAX_DESKTOPS then return end
-    local id = (ids[#ids] or 0) + 1
-    keep_desktop(id)
+    local d = (ids[#ids] or 0) + 1
+    if d >= DESK_STRIDE then return end
+    desktop_set[d] = true
     save_desktops()
-    if switch then
-        hl.dispatch(hl.dsp.focus({ workspace = tostring(id) }))
-        return
-    end
-    local cur = hl.get_active_workspace()
-    hl.animation({ leaf = "workspaces", enabled = false })
-    hl.dispatch(hl.dsp.focus({ workspace = tostring(id) }))
-    if cur and cur.id then
-        hl.dispatch(hl.dsp.focus({ workspace = tostring(cur.id) }))
-    end
-    hl.animation(WORKSPACE_ANIM)
+    sync_rules()
+    if switch then DesktopShow(d) end
 end
 
 -- Close a desktop: its windows move to the desktop on the left (the first
--- one's to the right), like Windows.
-function DesktopClose(id)
-    local ids = desktop_ids()
-    if #ids < 2 then return end
+-- one's to the right), each staying on its screen, like Windows.
+function DesktopClose(d)
+    local ids = DesktopIds()
+    if #ids < 2 or not desktop_set[d] then return end
     local idx
-    for i, v in ipairs(ids) do if v == id then idx = i end end
-    if not idx then return end
+    for i, v in ipairs(ids) do if v == d then idx = i end end
     local target = ids[idx - 1] or ids[idx + 1]
     for _, w in ipairs(hl.get_windows() or {}) do
-        if w.workspace and w.workspace.id == id then
-            hl.dispatch(hl.dsp.window.move({ workspace = tostring(target), follow = false,
+        local id = w.workspace and w.workspace.id
+        if desk_of_ws(id) == d then
+            hl.dispatch(hl.dsp.window.move({ workspace = tostring(id - d + target), follow = false,
                                              window = "address:" .. w.address }))
         end
     end
-    local cur = hl.get_active_workspace()
-    if cur and cur.id == id then
-        hl.dispatch(hl.dsp.focus({ workspace = tostring(target) }))
-    end
-    if desktop_rules[id] then
-        desktop_rules[id]:set_enabled(false)
-        desktop_rules[id] = nil
-    end
+    if CurrentDesktop() == d then DesktopShow(target) end
+    desktop_set[d] = nil
     save_desktops()
+    sync_rules()
 end
 
 -- Ctrl + Win + Left / Right: the neighbouring desktop (only existing ones,
 -- like Windows – no new desktop past the last one)
 function DesktopStep(delta)
-    local ids = desktop_ids()
-    local cur = hl.get_active_workspace()
-    if not cur or not cur.id then return end
+    local ids, cur = DesktopIds(), CurrentDesktop()
     for i, v in ipairs(ids) do
-        if v == cur.id and ids[i + delta] then
-            hl.dispatch(hl.dsp.focus({ workspace = tostring(ids[i + delta]) }))
+        if v == cur and ids[i + delta] then
+            DesktopShow(ids[i + delta])
             return
         end
     end
@@ -1483,16 +1806,19 @@ hl.bind("CTRL + " .. win .. " + Left",  function() DesktopStep(-1) end)
 hl.bind("CTRL + " .. win .. " + D",     function() DesktopAdd(true) end)
 
 -- Win + Shift + Left / Right: move the window to the neighbouring desktop
--- (existing ones only – "r+1" made a new desktop past the last one, past the limit)
+-- (same screen; existing desktops only), you go along
 function DesktopMoveWindow(delta)
     local w = hl.get_active_window()
-    local cur = hl.get_active_workspace()
-    if not w or not cur or not cur.id then return end
-    local ids = desktop_ids()
+    local id = w and w.workspace and w.workspace.id
+    local d = desk_of_ws(id)
+    if not d then return end
+    local ids = DesktopIds()
     for i, v in ipairs(ids) do
-        if v == cur.id and ids[i + delta] then
-            hl.dispatch(hl.dsp.window.move({ workspace = tostring(ids[i + delta]),
+        if v == d and ids[i + delta] then
+            hl.dispatch(hl.dsp.window.move({ workspace = tostring(id - d + ids[i + delta]), follow = false,
                                              window = "address:" .. w.address }))
+            DesktopShow(ids[i + delta])
+            hl.dispatch(hl.dsp.focus({ window = "address:" .. w.address }))
             return
         end
     end

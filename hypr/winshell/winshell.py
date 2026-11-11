@@ -11,6 +11,7 @@ Runs as a background daemon. Control it with winshell-ctl:
 """
 import fcntl
 import json
+import types
 import math
 import os
 import signal
@@ -955,6 +956,8 @@ class Switcher:
                 if ev == "configreloaded":
                     self.paused_until = time.monotonic() + 3   # grim can crash during a reload
                 elif ev == "workspacev2" and data and SHELL and getattr(SHELL, "deskslide", None):
+                    # a desktop spans all screens: the others follow (hyprland.lua)
+                    GLib.idle_add(lambda: hypr_eval("DesktopSync()") and False)
                     wid = data.split(",")[0]
                     if wid.lstrip("-").isdigit():
                         GLib.idle_add(SHELL.deskslide.changed, int(wid),
@@ -2865,25 +2868,61 @@ class StartMenu:
 
 # ── Volume / brightness flyout (bottom center, like Windows 11) ───────────
 class OSD:
+    """The flyout at the bottom: volume, brightness, … only on the main
+    screen (it sits there, arrange_bars); "Desktop 2" on every screen – a
+    desktop spans all of them."""
     def __init__(self, app):
+        self.app = app
         self.timer = None
-        self.win = layer_window(app, "winshell-osd", LS.Layer.OVERLAY,
-                                anchors=(LS.Edge.BOTTOM,), margins={LS.Edge.BOTTOM: 24})
-        box = Gtk.Box(spacing=14)
-        box.add_css_class("osd")
-        self.img = icon("win11-volume-3", 18)
-        self.bar = Gtk.ProgressBar(hexpand=True, valign=Gtk.Align.CENTER)
-        self.lbl = label("", "osd-value", xalign=1.0, ellipsize=False)
-        self.lbl.set_width_chars(4)          # "100", "High": same width
-        # microphone on/off: a text instead of the bar ("Microphone muted")
-        self.msg = label("", "osd-message", xalign=0.5, ellipsize=False)
-        self.box = box
-        box.append(self.img)
-        box.append(self.bar)
-        box.append(self.lbl)
-        box.append(self.msg)
-        self.win.set_child(box)
+        self.main = self.pill()
+        self.win = self.main.win
+        self.others = {}                    # connector -> pill on the other screens
         self.watch_kbd_backlight()
+
+    def pill(self):
+        p = types.SimpleNamespace()
+        p.win = layer_window(self.app, "winshell-osd", LS.Layer.OVERLAY,
+                             anchors=(LS.Edge.BOTTOM,), margins={LS.Edge.BOTTOM: 24})
+        p.box = Gtk.Box(spacing=14)
+        p.box.add_css_class("osd")
+        p.img = icon("win11-volume-3", 18)
+        p.bar = Gtk.ProgressBar(hexpand=True, valign=Gtk.Align.CENTER)
+        p.lbl = label("", "osd-value", xalign=1.0, ellipsize=False)
+        p.lbl.set_width_chars(4)            # "100", "High": same width
+        # microphone on/off: a text instead of the bar ("Microphone muted")
+        p.msg = label("", "osd-message", xalign=0.5, ellipsize=False)
+        for w in (p.img, p.bar, p.lbl, p.msg):
+            p.box.append(w)
+        p.win.set_child(p.box)
+        p.mon = None
+        return p
+
+    def other_pills(self):
+        """A pill for every screen besides the main one (made on demand,
+        dropped when the screen is gone)."""
+        primary = getattr(self.app, "primary", None)
+        mons = Gdk.Display.get_default().get_monitors()
+        out, seen = [], set()
+        for i in range(mons.get_n_items()):
+            m = mons.get_item(i)
+            c = m.get_connector()
+            if not c or c == primary:
+                continue
+            seen.add(c)
+            p = self.others.get(c)
+            if p and p.mon is not m:            # off and on again: a new screen for GTK
+                p.win.destroy()
+                p = None
+            if not p:
+                p = self.pill()
+                p.mon = m
+                LS.set_monitor(p.win, m)
+                self.others[c] = p
+            out.append(p)
+        for c in list(self.others):
+            if c not in seen:
+                self.others.pop(c).win.destroy()
+        return out
 
     # The laptop switches its keyboard light itself (Fn+Space) – no key
     # reaches Hyprland. UPower reports every change on D-Bus; show the same
@@ -2929,33 +2968,136 @@ class OSD:
     def show(self, kind):
         bg(lambda: self.read(kind), self.update)
 
-    def update(self, res, text=None):
-        name, value, muted = res
-        self.img.set_from_icon_name(name)
-        message = value is None             # microphone: on / muted, no level
-        self.bar.set_visible(not message)
-        self.lbl.set_visible(not message)
-        self.msg.set_visible(message)
-        # a text pill is only as wide as icon + text: even room on both sides
-        (self.box.add_css_class if message else self.box.remove_css_class)("osd-text")
-        self.win.set_default_size(1, 1)     # shrink again after the wider volume pill
-        if message:
-            self.msg.set_text(text if text is not None else
-                              ("Microphone muted" if muted else "Microphone on"))
-        else:
-            self.bar.set_fraction(max(0, min(100, value)) / 100)
-            (self.bar.add_css_class if muted else self.bar.remove_css_class)("muted")
-            self.lbl.set_text(text if text is not None else str(value))
-        self.win.present()
+    def update(self, res, text=None, everywhere=False):
+        """everywhere: on every screen (the desktop changed), else only on
+        the main one."""
+        pills = [self.main] + (self.other_pills() if everywhere else [])
+        for p in self.others.values():
+            if p not in pills:
+                p.win.set_visible(False)
+        for p in pills:
+            self.fill(p, res, text)
         if self.timer:
             GLib.source_remove(self.timer)
         self.timer = GLib.timeout_add(1600, self.hide)
 
+    @staticmethod
+    def fill(p, res, text):
+        name, value, muted = res
+        p.img.set_from_icon_name(name)
+        message = value is None             # microphone: on / muted, no level
+        p.bar.set_visible(not message)
+        p.lbl.set_visible(not message)
+        p.msg.set_visible(message)
+        # a text pill is only as wide as icon + text: even room on both sides
+        (p.box.add_css_class if message else p.box.remove_css_class)("osd-text")
+        p.win.set_default_size(1, 1)        # shrink again after the wider volume pill
+        if message:
+            p.msg.set_text(text if text is not None else
+                           ("Microphone muted" if muted else "Microphone on"))
+        else:
+            p.bar.set_fraction(max(0, min(100, value)) / 100)
+            (p.bar.add_css_class if muted else p.bar.remove_css_class)("muted")
+            p.lbl.set_text(text if text is not None else str(value))
+        p.win.present()
+
     def hide(self):
         self.timer = None
-        self.win.set_visible(False)
+        for p in [self.main] + list(self.others.values()):
+            p.win.set_visible(False)
         return False
 
+
+
+# ── Long notifications ──────────────────────────────────────────────────────
+class NotifyGuard:
+    """Keeps a notification from filling the screen. swaync cuts every line
+    to one line, but not the number of lines: a chat message made of
+    hundreds of line breaks (Discord) became a popup as high as the screen.
+    Like Windows, a notification shows its first few lines only.
+
+    winshell listens to the session bus (a D-Bus monitor) for notifications
+    going to swaync; a long one is replaced right away (same id) by an exact
+    copy – icon, the sender's picture, actions, hints – with only the text
+    cut to MAX_LINES lines and "…"."""
+    MAX_LINES = 3
+    MAX_CHARS = 280
+
+    def __init__(self):
+        self.calls = {}                 # (sender, serial) -> Notify arguments (GLib.Variant)
+        self.conn = None
+        try:
+            addr = Gio.dbus_address_get_for_bus_sync(Gio.BusType.SESSION, None)
+            self.conn = Gio.DBusConnection.new_for_address_sync(
+                addr, Gio.DBusConnectionFlags.AUTHENTICATION_CLIENT |
+                Gio.DBusConnectionFlags.MESSAGE_BUS_CONNECTION, None, None)
+            self.conn.add_filter(self.on_message)
+            # asynchronous: the filter runs in GDBus' own thread and needs
+            # Python meanwhile – a blocking call here would wait for itself
+            self.conn.call(
+                "org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus.Monitoring",
+                "BecomeMonitor", GLib.Variant("(asu)", ([
+                    "type='method_call',interface='org.freedesktop.Notifications',member='Notify'",
+                    "type='method_return',sender='org.freedesktop.Notifications'"], 0)),
+                None, Gio.DBusCallFlags.NONE, 5000, None, self.on_monitor)
+        except GLib.Error as e:
+            print("winshell: notification guard:", e.message, file=sys.stderr, flush=True)
+
+    def on_monitor(self, conn, res):
+        try:
+            conn.call_finish(res)
+        except GLib.Error as e:
+            print("winshell: notification guard:", e.message, file=sys.stderr, flush=True)
+
+    @classmethod
+    def trimmed(cls, body):
+        lines = [ln.strip() for ln in body.splitlines()]
+        lines = [ln for ln in lines if ln]
+        if (len(lines) <= cls.MAX_LINES and len(body) <= cls.MAX_CHARS * 2
+                and body.count("\n") < 2 * cls.MAX_LINES):
+            return None                 # short enough: leave it alone
+        text = "\n".join(lines[:cls.MAX_LINES])
+        if len(text) > cls.MAX_CHARS:
+            text = text[:cls.MAX_CHARS].rstrip()
+        return text + " …"
+
+    def on_message(self, _conn, msg, incoming):
+        # (a GDBus worker thread: only note things down here)
+        if not incoming or msg.get_sender() == "org.freedesktop.DBus":
+            return msg                  # our own call and the bus' answer to it go through
+        try:
+            kind = msg.get_message_type()
+            if kind == Gio.DBusMessageType.METHOD_CALL:
+                args = msg.get_body()
+                if args is not None and args.n_children() == 8:
+                    if len(self.calls) > 64:
+                        self.calls.clear()
+                    self.calls[(msg.get_sender(), msg.get_serial())] = args
+            elif kind == Gio.DBusMessageType.METHOD_RETURN:
+                args = self.calls.pop((msg.get_destination(), msg.get_reply_serial()), None)
+                body = msg.get_body()
+                if args is not None and body is not None:
+                    short = self.trimmed(args.get_child_value(4).get_string())
+                    if short is not None:
+                        nid = body.get_child_value(0).get_uint32()
+                        GLib.idle_add(self.replace, args, nid, short)
+        except Exception as e:          # noqa: BLE001 – never break the bus connection
+            print("winshell: notification guard:", e, file=sys.stderr, flush=True)
+        return None                     # a monitor only listens
+
+    @staticmethod
+    def replace(args, nid, short):
+        kids = [args.get_child_value(i) for i in range(8)]
+        kids[1] = GLib.Variant("u", nid)
+        kids[4] = GLib.Variant("s", short)
+        try:
+            bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+            bus.call("org.freedesktop.Notifications", "/org/freedesktop/Notifications",
+                     "org.freedesktop.Notifications", "Notify", GLib.Variant.new_tuple(*kids),
+                     None, Gio.DBusCallFlags.NONE, 3000, None, None)
+        except GLib.Error as e:
+            print("winshell: notification guard:", e.message, file=sys.stderr, flush=True)
+        return False
 
 
 # ── Desktops (Hyprland workspaces) ──────────────────────────────────────────
@@ -2970,24 +3112,50 @@ except (OSError, ValueError, TypeError, AttributeError):
     WINDOW_DESKTOP = {}
 
 
+# Like Windows a desktop spans all screens: desktop d is workspace
+# slot * DESK_STRIDE + d on every screen (hyprland.lua).
+DESK_STRIDE = 100
+HYPR_DESKTOPS = os.path.join(RUNTIME, "hypr-desktops")
+
+
+def desk(ws_id):
+    """Workspace id -> desktop number (None for special / unknown)."""
+    if not isinstance(ws_id, int) or ws_id <= 0:
+        return None
+    return ws_id % DESK_STRIDE or None
+
+
+def desktop_list():
+    """The desktops there are (hyprland.lua keeps the list), ascending."""
+    try:
+        with open(HYPR_DESKTOPS) as f:
+            ids = sorted({int(x) for x in f.read().split() if x.isdigit() and int(x) > 0})
+    except OSError:
+        ids = []
+    if not ids:
+        ids = sorted({desk(w.get("id")) for w in hypr_json("workspaces") or []} - {None})
+    return ids
+
+
 def desktop_of(c):
-    """The desktop (workspace id) a window belongs to – for a minimized
-    window the one it was on. None if unknown."""
+    """The desktop a window belongs to – for a minimized window the one it
+    was on. None if unknown."""
     ws = c.get("workspace") or {}
-    if not ws.get("name", "").startswith("special:") and ws.get("id") is not None:
-        if WINDOW_DESKTOP.get(c["address"]) != ws["id"]:
-            WINDOW_DESKTOP[c["address"]] = ws["id"]
+    d = desk(ws.get("id")) if not ws.get("name", "").startswith("special:") else None
+    if d is not None:
+        if WINDOW_DESKTOP.get(c["address"]) != d:
+            WINDOW_DESKTOP[c["address"]] = d
             try:
                 with open(DESKTOPS_FILE, "w") as f:
                     json.dump(WINDOW_DESKTOP, f)
             except OSError:
                 pass
-        return ws["id"]
+        return d
     return WINDOW_DESKTOP.get(c["address"])
 
 
 def current_desktop():
-    return (hypr_json("activeworkspace") or {}).get("id")
+    return desk((hypr_json("activeworkspace") or {}).get("id"))
 
 
 class FixedPicture(Gtk.Picture):
@@ -3105,7 +3273,7 @@ class TaskView:
         return wins
 
     def desktop_ids(self):
-        ids = {w.get("id") for w in hypr_json("workspaces") or [] if (w.get("id") or 0) > 0}
+        ids = set(desktop_list())
         if self.cur:
             ids.add(self.cur)
         return sorted(ids)
@@ -3214,7 +3382,7 @@ class TaskView:
         def go():
             if minimized and ws and ws != self.cur:
                 # restored onto the desktop it belongs to, not this one
-                dispatch(f'hl.dsp.focus({{ workspace = "{ws}" }})')
+                hypr_eval(f"DesktopShow({ws})")
                 GLib.timeout_add(60, lambda: self.shell.switcher.focus(c["address"], c["class"], 4) and False)
             else:
                 self.shell.switcher.focus(c["address"], c["class"], tries=4)
@@ -3306,7 +3474,7 @@ class TaskView:
         if ws == self.cur:
             self.close_then(lambda: None)
         else:
-            self.close_then(lambda: dispatch(f'hl.dsp.focus({{ workspace = "{ws}" }})'))
+            self.close_then(lambda: hypr_eval(f"DesktopShow({ws})"))
 
     def new_desktop(self):
         """A new, empty desktop after the last one (hyprland.lua DesktopAdd);
@@ -3424,14 +3592,19 @@ class DesktopSlide(Gtk.Widget):
 
     def changed(self, ws, when):
         """workspacev2 from Hyprland (when: monotonic s it arrived)."""
+        ws = desk(ws)               # every screen reports its own workspace of the desktop
+        if ws is None:
+            return False
         prev, self.prev = self.prev, ws
         if not prev or ws == prev or ws <= 0:
             return False
+        if time.monotonic() < getattr(self.shell, "screens_busy", 0):
+            return False            # screens are being switched: not a desktop change by you
         if self.shell.taskview.visible:
             return False            # the task view switches behind its own picture
-        ids = sorted({w.get("id") for w in hypr_json("workspaces") or [] if (w.get("id") or 0) > 0})
+        ids = desktop_list()
         name = f"Desktop {ids.index(ws) + 1}" if ws in ids else f"Desktop {ws}"
-        self.shell.osd.update(("win11-desktops", None, False), text=name)
+        self.shell.osd.update(("win11-desktops", None, False), text=name, everywhere=True)
         if not self.wallpaper():
             return False
         self.dir = 1 if ws > prev else -1    # to the right: the new one comes from the right
@@ -3797,53 +3970,86 @@ class DesktopAnim:
     IN = 0.28
 
     def __init__(self, app, shell):
+        self.app = app
         self.shell = shell
-        self.win = layer_window(app, "winshell-desk", LS.Layer.OVERLAY,
-                                anchors=(LS.Edge.TOP, LS.Edge.BOTTOM, LS.Edge.LEFT, LS.Edge.RIGHT),
-                                exclusive=-1)
-        self.win.add_css_class("snap-window")           # transparent
-        self.canvas = DeskCanvas()
-        self.canvas.set_hexpand(True)
-        self.canvas.set_vexpand(True)
-        self.win.set_child(self.canvas)
-        self.win.connect("realize", lambda *_: self.passthrough())
+        # one full-screen layer per screen: every window flies into the
+        # taskbar of its own screen (Win + D takes all screens, like Windows)
+        self.layers = {}            # connector -> layer (win, canvas, mon)
+        self.active = []            # the layers of the current run
         self.tick = 0
+        self.tick_canvas = None
         self.fade_tick = 0
+        self.fade_canvas = None
         self.t0 = 0
         self.dur = self.OUT
         self.done = None
         self.gen = 0
         self.serial = 0             # counts runs: late timers of an old run do nothing
 
-    def passthrough(self):
+    @property
+    def win(self):
+        main = self.layers.get(getattr(self.shell, "primary", None))
+        return main.win if main else None
+
+    def layer(self, connector):
+        mon = gdk_monitor(connector)
+        if not mon:
+            return None
+        ly = self.layers.get(connector)
+        if ly and ly.mon is not mon:            # off and on again: a new screen for GTK
+            ly.win.destroy()
+            ly = None
+        if not ly:
+            ly = types.SimpleNamespace(connector=connector, mon=mon)
+            ly.win = layer_window(self.app, "winshell-desk", LS.Layer.OVERLAY,
+                                  anchors=(LS.Edge.TOP, LS.Edge.BOTTOM, LS.Edge.LEFT, LS.Edge.RIGHT),
+                                  exclusive=-1)
+            LS.set_monitor(ly.win, mon)
+            ly.win.add_css_class("snap-window")         # transparent
+            ly.canvas = DeskCanvas()
+            ly.canvas.set_hexpand(True)
+            ly.canvas.set_vexpand(True)
+            ly.win.set_child(ly.canvas)
+            ly.win.connect("realize", lambda *_, l=ly: self.passthrough(l))
+            self.layers[connector] = ly
+        return ly
+
+    @staticmethod
+    def passthrough(ly):
         import cairo
-        surf = self.win.get_surface()
+        surf = ly.win.get_surface()
         if surf:
             surf.set_input_region(cairo.Region())
 
-    def button(self, cls):
+    def bar_of(self, connector):
+        if connector == getattr(self.shell, "primary", None):
+            return self.shell.taskbar
+        return getattr(self.shell, "secondaries", {}).get(connector) or self.shell.taskbar
+
+    def button(self, cls, connector=None):
         tb = self.shell.taskbar
-        if tb:
-            b = tb.buttons.get(tb.key_for({"class": cls}))
+        bar = self.bar_of(connector) if connector else tb
+        if tb and bar:
+            b = bar.buttons.get(tb.key_for({"class": cls}))
             if b and b.get_mapped():
                 return b
         return None
 
-    def target(self, cls, mon_h):
-        """The taskbar button of that app (screen coordinates)."""
-        tb, b = self.shell.taskbar, self.button(cls)
-        if b:
-            ok_, r = b.compute_bounds(tb.win)
+    def target(self, cls, connector, mon_w, mon_h):
+        """The taskbar button of that app on that screen (screen coordinates)."""
+        bar, b = self.bar_of(connector), self.button(cls, connector)
+        if b and bar:
+            ok_, r = b.compute_bounds(bar.win)
             if ok_:
-                top = mon_h - tb.win.get_height()
+                top = mon_h - bar.win.get_height()
                 cx, cy = r.get_x() + r.get_width() / 2, top + r.get_y() + r.get_height() / 2
                 return (cx - 20, cy - 14, 40, 28)
-        return (self.win.get_width() / 2 - 20, mon_h - 34, 40, 28)
+        return (mon_w / 2 - 20, mon_h - 34, 40, 28)
 
     def bounce(self, classes, kind, delay):
         """The taskbar icons of these apps dip ("dip": a window lands in
         them) or hop ("hop": a window comes out) – CSS animation, style.css."""
-        buttons = {b for b in (self.button(c) for c in classes) if b}
+        buttons = {b for b in (self.button(c, con) for con, c in classes) if b}
 
         def start():
             for b in buttons:
@@ -3856,48 +4062,80 @@ class DesktopAnim:
         GLib.timeout_add(max(1, int(delay * 1000)), start)
 
     def parse(self, tokens):
-        items = []
-        mon_h = self.win.get_height() or self.shell.switcher.monitor_size()[1]
+        """Items per screen: {connector: [item]} – the screen the middle of
+        the window is on, coordinates relative to that screen."""
+        mons = [m for m in hypr_json("monitors") or [] if not m.get("disabled")]
         thumbs = self.shell.switcher.thumbs if self.shell.switcher else {}
+        out = {}
         for tok in tokens:
             p = tok.split("|", 6)
             if len(p) < 7:
                 continue
             addr, x, y, w, h, bar, cls = p[0], *map(float, p[1:6]), p[6]
-            items.append({"addr": addr, "cls": cls, "tex": thumbs.get(addr), "bar": bar,
-                          "win": (x, y, w, h), "icon": self.target(cls, mon_h)})
-        return items
+            cx, cy = x + w / 2, y + h / 2
+            mon = None
+            for m in mons:
+                sc = m.get("scale") or 1
+                mw, mh = m["width"] / sc, m["height"] / sc
+                if m["x"] <= cx < m["x"] + mw and m["y"] <= cy < m["y"] + mh:
+                    mon = (m, mw, mh)
+                    break
+            if not mon:
+                m = next((m for m in mons if m["name"] == getattr(self.shell, "primary", None)),
+                         mons[0] if mons else None)
+                if not m:
+                    continue
+                sc = m.get("scale") or 1
+                mon = (m, m["width"] / sc, m["height"] / sc)
+            m, mw, mh = mon
+            out.setdefault(m["name"], []).append(
+                {"addr": addr, "cls": cls, "tex": thumbs.get(addr), "bar": bar,
+                 "win": (x - m["x"], y - m["y"], w, h), "icon": self.target(cls, m["name"], mw, mh)})
+        return out
 
     def run(self, kind, callback, gen, tokens):
         self.gen = gen
         self.serial += 1
         self.shell.switcher.pause_thumbs(self.OUT + self.IN + 0.4)
-        items = self.parse(tokens)
-        if not items:
+        groups = self.parse(tokens)
+        layers = {}
+        for con, items in groups.items():
+            ly = self.layer(con)
+            if ly:
+                layers[con] = (ly, items)
+        if not layers:
             hypr_eval(f"{callback}({gen})")
             return
         rising = kind == "in"
         # pictures still on screen (a run in progress, or just landed): the
         # same windows go on from where they are instead of starting over
-        now = {it["addr"]: (self.canvas.rect_of(it), self.canvas.alpha_of(it) * self.canvas.fade)
-               for it in self.canvas.items}
-        for it in items:
-            it["a"], it["b"] = (it["icon"], it["win"]) if rising else (it["win"], it["icon"])
-            if it["addr"] in now:
-                it["a"], it["alpha0"] = now[it["addr"]]
-        if self.fade_tick:
-            self.canvas.remove_tick_callback(self.fade_tick)
-            self.fade_tick = 0
-        self.canvas.items = items
-        self.canvas.rising = rising
-        self.canvas.t = 0.0
-        self.canvas.fade = 1.0
+        now = {}
+        for ly in self.active:
+            for it in ly.canvas.items:
+                now[it["addr"]] = (ly.connector, ly.canvas.rect_of(it),
+                                   ly.canvas.alpha_of(it) * ly.canvas.fade)
+        self.stop_ticks()
+        for ly in self.active:                  # screens without windows this time
+            if ly.connector not in layers:
+                ly.canvas.items = []
+                ly.win.set_visible(False)
+        self.active = []
+        classes = set()
+        for con, (ly, items) in layers.items():
+            for it in items:
+                it["a"], it["b"] = (it["icon"], it["win"]) if rising else (it["win"], it["icon"])
+                old = now.get(it["addr"])
+                if old and old[0] == con:
+                    it["a"], it["alpha0"] = old[1], old[2]
+                classes.add((con, it["cls"]))
+            c = ly.canvas
+            c.items, c.rising, c.t, c.fade = items, rising, 0.0, 1.0
+            ly.win.present()
+            self.passthrough(ly)
+            c.queue_draw()
+            self.active.append(ly)
         self.dur = self.IN if rising else self.OUT
         self.done = None
-        self.win.present()
-        self.passthrough()
-        self.canvas.queue_draw()
-        classes = {it["cls"] for it in items}
         if not rising:
             # the pictures cover the windows now: hide the real ones
             GLib.timeout_add(34, lambda: (hypr_eval(f"{callback}({gen})"), False)[1])
@@ -3908,16 +4146,24 @@ class DesktopAnim:
             self.done = lambda: hypr_eval(f"{callback}({gen})")
             self.bounce(classes, "hop", 0)                  # as they take off
         self.t0 = 0
-        if not self.tick:
-            self.tick = self.canvas.add_tick_callback(self.on_tick)
+        self.tick_canvas = self.active[0].canvas      # one clock drives all screens
+        self.tick = self.tick_canvas.add_tick_callback(self.on_tick)
+
+    def stop_ticks(self):
+        if self.tick and self.tick_canvas:
+            self.tick_canvas.remove_tick_callback(self.tick)
+        if self.fade_tick and self.fade_canvas:
+            self.fade_canvas.remove_tick_callback(self.fade_tick)
+        self.tick = self.fade_tick = 0
 
     def on_tick(self, _w, clock):
         now = clock.get_frame_time() / 1e6
         if not self.t0:
             self.t0 = now
         t = min(1.0, (now - self.t0) / self.dur)
-        self.canvas.t = t
-        self.canvas.queue_draw()
+        for ly in self.active:
+            ly.canvas.t = t
+            ly.canvas.queue_draw()
         if t < 1.0:
             return True
         self.tick = 0
@@ -3944,32 +4190,37 @@ class DesktopAnim:
             now = clock.get_frame_time() / 1e6
             if not t0:
                 t0.append(now)
-            self.canvas.fade = max(0.0, 1.0 - (now - t0[0]) / 0.12)
-            self.canvas.queue_draw()
-            if self.canvas.fade > 0:
+            fade = max(0.0, 1.0 - (now - t0[0]) / 0.12)
+            for ly in self.active:
+                ly.canvas.fade = fade
+                ly.canvas.queue_draw()
+            if fade > 0:
                 return True
             self.fade_tick = 0
             self.close()
             return False
-        if self.canvas.items and not self.fade_tick:
-            self.fade_tick = self.canvas.add_tick_callback(step)
+        if self.active and any(ly.canvas.items for ly in self.active) and not self.fade_tick:
+            self.fade_canvas = self.active[0].canvas
+            self.fade_tick = self.fade_canvas.add_tick_callback(step)
         return False
 
     def close(self):
-        if self.fade_tick:
-            self.canvas.remove_tick_callback(self.fade_tick)
-            self.fade_tick = 0
-        self.canvas.fade = 1.0
-        self.canvas.items = []
-        self.win.set_visible(False)
+        if self.fade_tick and self.fade_canvas:
+            self.fade_canvas.remove_tick_callback(self.fade_tick)
+        self.fade_tick = 0
+        for ly in self.layers.values():
+            ly.canvas.fade = 1.0
+            ly.canvas.items = []
+            ly.win.set_visible(False)
+        self.active = []
         return False
 
     def stop(self):
         self.done = None
         self.serial += 1
-        if self.tick:
-            self.canvas.remove_tick_callback(self.tick)
-            self.tick = 0
+        if self.tick and self.tick_canvas:
+            self.tick_canvas.remove_tick_callback(self.tick)
+        self.tick = 0
         self.close()
 
 
@@ -4755,6 +5006,7 @@ class ProjectMenu:
         self.shell = shell
         self.visible = False
         self.sel = 0
+        self.moved = 0.0
         self.win = layer_window(app, "winshell-project", LS.Layer.OVERLAY,
                                 anchors=(LS.Edge.BOTTOM, LS.Edge.RIGHT),
                                 margins={LS.Edge.BOTTOM: 12, LS.Edge.RIGHT: 12})
@@ -4776,6 +5028,17 @@ class ProjectMenu:
             lbl.set_lines(2)
             lbl.set_justify(Gtk.Justification.CENTER)
             outer.append(lbl)
+            # the whole cell is the target, the text below the tile too
+            click = Gtk.GestureClick()
+            click.connect("released", lambda g, *_a, m=mode: (g.set_state(Gtk.EventSequenceState.CLAIMED),
+                                                              self.choose(m)))
+            lbl.add_controller(click)
+            # the white frame follows the pointer: Enter then takes the tile
+            # the mouse is on (it took the current mode before, whatever the
+            # mouse pointed at)
+            hover = Gtk.EventControllerMotion()
+            hover.connect("enter", lambda *_a, n=n: (setattr(self, "sel", n), self.update()))
+            outer.add_controller(hover)
             grid.attach(outer, n % 2, n // 2, 1, 1)
             self.tiles.append(tile)
         panel.append(grid)
@@ -4814,6 +5077,13 @@ class ProjectMenu:
             (t.add_css_class if i == self.sel else t.remove_css_class)("selected")
 
     def move(self, d):
+        # Win + P while the menu is open can arrive twice (Hyprland's key
+        # binding and the key itself): one step, not two – that jumped from
+        # "Extend" past "Second screen only" to "PC screen only"
+        now = time.monotonic()
+        if now - self.moved < 0.12:
+            return
+        self.moved = now
         self.sel = (self.sel + d) % len(self.MODES)
         self.update()
 
@@ -4821,6 +5091,7 @@ class ProjectMenu:
         if keyval == Gdk.KEY_Escape:
             self.hide()
         elif keyval in (Gdk.KEY_Return, Gdk.KEY_KP_Enter, Gdk.KEY_space):
+            print(f"winshell: project key {keyval}", file=sys.stderr, flush=True)
             self.choose(self.MODES[self.sel][0])
         elif keyval in (Gdk.KEY_Right, Gdk.KEY_Down, Gdk.KEY_Tab, Gdk.KEY_p, Gdk.KEY_P):
             self.move(1 if keyval != Gdk.KEY_Down else 2)
@@ -4831,17 +5102,28 @@ class ProjectMenu:
     def choose(self, mode):
         self.hide()
         specs = displays.project_specs(mode)
+        print(f"winshell: project {mode} (sel {self.sel}): {specs}", file=sys.stderr, flush=True)
         if not specs:
             return                          # only one screen, or it is like that already
         displays.save(project=mode)
         snap = self.shell.screens_snapshot()
+        mirrored = {m["name"] for m in displays.all_monitors()
+                    if (m.get("mirrorOf") or "none") != "none"}
         for sp in specs:
-            off = re.match(r'\{ output = "([^"]+)", disabled = true', sp)
-            if off:
-                self.shell.drop_bar(off.group(1))
+            name = re.match(r'\{ output = "([^"]+)"', sp).group(1)
+            if re.match(r'\{ output = "[^"]+", disabled = true', sp):
+                self.shell.drop_bar(name)
+            elif name in mirrored and 'mirror = ""' in sp:
+                # a duplicated screen that stands on its own again: off and
+                # on – just un-mirrored, Hyprland doesn't announce it to the
+                # programs again (no taskbar, no windows on it)
+                hypr_eval(f'hl.monitor({{ output = "{name}", disabled = true }})')
+                GLib.timeout_add(700, lambda sp=sp: hypr_eval(f"hl.monitor({sp})") and False)
+                continue
             hypr_eval(f"hl.monitor({sp})")
         self.shell.flyout_screen = None
-        GLib.timeout_add(900, lambda: (self.shell.restore_screens(snap), self.shell.arrange_bars(), False)[-1])
+        GLib.timeout_add(1800 if mirrored else 900,
+                         lambda: (self.shell.restore_screens(snap), self.shell.arrange_bars(), False)[-1])
 
 
 MONITORS_LUA = os.path.expanduser("~/.config/hypr/monitors.lua")
@@ -5690,6 +5972,7 @@ class WinShell(Gtk.Application):
         self.switcher = Switcher(self, icons)
         self.qs = QuickSettings(self)
         self.osd = OSD(self)
+        self.notify_guard = NotifyGuard()        # no notification as high as the screen
         self.snap = SnapPreview(self)
         self.freeze = Freeze(self)
         self.fingerprint = FingerprintPopup(self)
@@ -5790,6 +6073,9 @@ class WinShell(Gtk.Application):
         if bar:
             bar.win.set_visible(False)
             bar.destroy()
+            # look again shortly: if the screen is (back) on, it gets a new
+            # taskbar – otherwise it stayed without one (e.g. after Duplicate → Extend)
+            GLib.timeout_add(1500, lambda: self.screens_changed() and False)
 
     def arrange_bars(self):
         """The full taskbar on the main display, a slim one on every other."""
@@ -5832,29 +6118,19 @@ class WinShell(Gtk.Application):
         """Which desktop is on which screen, which one each screen shows and
         where the focus is – Hyprland shuffles that when a screen changes."""
         mons = hypr_json("monitors") or []
+        self.screens_busy = time.monotonic() + 4       # no "Desktop 2" slide meanwhile
+        hypr_eval("DesktopsHold(3500)")                 # Hyprland's shuffling isn't a desktop switch
         return {"ws": {w["id"]: w.get("monitor") for w in hypr_json("workspaces") or []
                        if (w.get("id") or 0) > 0},
                 "shown": {m["name"]: (m.get("activeWorkspace") or {}).get("id") for m in mons},
                 "focused": next((m["name"] for m in mons if m.get("focused")), None)}
 
     def restore_screens(self, snap):
-        """Put the desktops back (on screens that are still on)."""
-        mons = hypr_json("monitors") or []
-        names = {m["name"] for m in mons}
-        now = {w["id"]: w.get("monitor") for w in hypr_json("workspaces") or [] if (w.get("id") or 0) > 0}
-        for wid, mon in snap["ws"].items():
-            if mon in names and wid in now and now[wid] != mon:
-                dispatch(f'hl.dsp.workspace.move({{ workspace = "{wid}", monitor = "{mon}" }})')
-        shown = {m["name"]: (m.get("activeWorkspace") or {}).get("id") for m in hypr_json("monitors") or []}
-        order = sorted(snap["shown"].items(), key=lambda kv: kv[0] == snap["focused"])    # focused one last
-        focus_moved = False
-        for mon, wid in order:
-            if mon in names and wid and shown.get(mon) != wid and snap["ws"].get(wid) == mon:
-                dispatch(f'hl.dsp.focus({{ workspace = "{wid}" }})')
-                focus_moved = True
-        cur = next((m["name"] for m in hypr_json("monitors") or [] if m.get("focused")), None)
-        if snap["focused"] in names and (focus_moved or cur != snap["focused"]):
-            dispatch(f'hl.dsp.focus({{ monitor = "{snap["focused"]}" }})')
+        """After screens were switched: hyprland.lua puts every window and
+        desktop back on its screen; every screen shows the desktop you were
+        on (a desktop spans all screens, switching screens never changes it)."""
+        self.screens_busy = time.monotonic() + 2.5
+        hypr_eval("DesktopsArrange()")
 
     def flyouts_on(self, connector):
         """Start menu, calendar and quick settings open on the screen whose
@@ -5946,7 +6222,16 @@ class WinShell(Gtk.Application):
             elif arg in ("keep", "revert"):
                 getattr(ds, arg)()
         elif what == "project":                 # Win + P
-            self.project.hide() if arg == "hide" else self.project.toggle()
+            if arg == "hide":
+                self.project.hide()
+            elif arg in [m[0] for m in ProjectMenu.MODES]:     # project pc|duplicate|extend|second
+                self.project.choose(arg)
+            elif arg == "click" and len(args) > 2:  # project click <n>: open, click tile n
+                if not self.project.visible:
+                    self.project.toggle()
+                self.project.tiles[int(args[2])].emit("clicked")
+            else:
+                self.project.toggle()
         elif what == "freeze":                  # screenshot.sh: still picture while picking a region
             self.freeze.hide() if arg == "off" else self.freeze.show(args[1:])
         elif what == "thumbs":                  # hyprland.lua: a window is about to change

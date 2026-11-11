@@ -198,9 +198,10 @@ def spec(i, **extra):
     # the exact refresh rate (59.951, not 59.95) and scale (1.33333333):
     # rounded ones made Hyprland pick another mode / refuse the scale
     # "disabled = false": without it a screen that was switched off (Win + P,
-    # a reset) stays off – Hyprland keeps the old "disabled" otherwise
+    # a reset) stays off – Hyprland keeps the old "disabled" otherwise; the
+    # same for mirror = "": without it a duplicated screen stays duplicated
     s = (f'{{ output = "{i["name"]}", mode = "{i["pw"]}x{i["ph"]}@{i["rate"]:.3f}", '
-         f'position = "{i["lx"]}x{i["ly"]}", scale = {i["scale"]:.8g}, disabled = false')
+         f'position = "{i["lx"]}x{i["ly"]}", scale = {i["scale"]:.8g}, disabled = false, mirror = ""')
     for k, v in extra.items():
         s += f', {k} = ' + (f'"{v}"' if isinstance(v, str) else ("true" if v is True else str(v)))
     return s + " }"
@@ -214,10 +215,12 @@ def on_spec(m, saved=None):
         rest = saved[m["name"]]
         if "disabled" not in rest:
             rest += ", disabled = false"
+        if "mirror" not in rest:
+            rest += ', mirror = ""'
         return '{ output = "%s", %s }' % (m["name"], rest)
     if m.get("disabled") or not m.get("width"):
         return (f'{{ output = "{m["name"]}", mode = "preferred", position = "auto", scale = "auto", '
-                f'disabled = false }}')
+                f'disabled = false, mirror = "" }}')
     return spec(items_from([m])[0])
 
 
@@ -270,8 +273,9 @@ def project_specs(mode, mons=None):
         specs = [on(m) for m in outer] + [off(m) for m in inner]
     elif mode == "duplicate":
         specs = [on(m) for m in inner] + [
-            f'{{ output = "{m["name"]}", mode = "preferred", position = "auto", scale = "auto", mirror = "{main}" }}'
-            for m in outer if m.get("mirrorOf") in (None, "none")]
+            f'{{ output = "{m["name"]}", mode = "preferred", position = "auto", scale = "auto", '
+            f'disabled = false, mirror = "{main}" }}'
+            for m in outer if m.get("disabled") or m.get("mirrorOf") in (None, "none")]
     else:
         specs = [on(m) for m in mons]       # extend
     return [sp for sp in specs if sp]
