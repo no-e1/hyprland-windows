@@ -3741,7 +3741,9 @@ class DesktopAnim:
         if not rising:
             # the pictures cover the windows now: hide the real ones
             GLib.timeout_add(34, lambda: (hypr_eval(f"{callback}({gen})"), False)[1])
-            self.bounce(classes, "dip", self.OUT * 0.6)     # as the windows land
+            # together with the windows, like Windows: the icon is lowest
+            # (40 % into its 460 ms) right when they land (OUT = 240 ms)
+            self.bounce(classes, "dip", 0.05)
         else:
             self.done = lambda: hypr_eval(f"{callback}({gen})")
             self.bounce(classes, "hop", 0)                  # as they take off
