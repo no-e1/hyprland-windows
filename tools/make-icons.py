@@ -95,6 +95,15 @@ for pct in range(0, 101, 10):
 st = f'stroke="{W}" stroke-width="{SW}"'
 save("close", f'<path d="M6.5 6.5l11 11M17.5 6.5l-11 11" {st}/>')
 save("add", f'<path d="M12 4.5v15M4.5 12h15" {st}/>')
+# fingerprint on the lock screen (Windows Hello): ready, not recognized, recognized
+FP = ("M5.2 6.6A8.5 8.5 0 0 1 18.8 6.6M3.6 11a8.5 8.5 0 0 1 .5-2.3M20.4 11.5c0 1.7-.2 3.3-.6 4.8"
+      "M7.4 19.6c-.9-1.6-1.4-3.6-1.4-5.8V12a6 6 0 0 1 12 0v1.3"
+      "M17.7 16.8c-.3 1.3-.8 2.5-1.4 3.6M9 12a3 3 0 0 1 6 0v1.6c0 2.6-.7 4.9-2 6.9"
+      "M12 12v1.6c0 2.3-.6 4.3-1.7 6.1")
+save("fingerprint", f'<path d="{FP}" {st}/>')
+save("fingerprint-fail", f'<path d="{FP}" stroke="#ff6b6b" stroke-width="{SW}"/>')
+save("fingerprint-ok", '<circle cx="12" cy="12" r="9.25" stroke="#6ccb5f" stroke-width="1.5"/>'
+                       '<path d="M7.8 12.4l2.8 2.8 5.6-5.8" stroke="#6ccb5f" stroke-width="1.8"/>')
 # desktops: two screens, one behind the other (the "Desktop 2" pill)
 save("desktops", f'<rect x="3" y="7" width="14" height="10" rx="1.5" {st}/>'
                  f'<path d="M7 4.5h12.5A1.5 1.5 0 0 1 21 6v8.5" {st}/><path d="M8 20h4" {st}/>')         # "New desktop" in the task view

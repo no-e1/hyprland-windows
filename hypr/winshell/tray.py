@@ -2,9 +2,10 @@
 app menus (com.canonical.dbusmenu) shown on right click.
 
 Apps such as Discord, Steam or Mullvad put their tray icon on D-Bus as a
-StatusNotifierItem. winshell owns org.kde.StatusNotifierWatcher (the
-registry apps announce themselves to) and draws the icons itself. If another
-program already owns the watcher, winshell just reads the items from it.
+StatusNotifierItem and announce it to org.kde.StatusNotifierWatcher. That
+registry is normally sni-watcher.py (its own service, started first, never
+restarts); winshell then reads the items from it and draws the icons. Only if
+no watcher is there, winshell is the watcher itself.
 """
 import sys
 import traceback
@@ -120,6 +121,9 @@ class Tray:
     # ── watcher (we own the registry) ──
     def on_name_acquired(self, conn, _name):
         self.own_watcher = True
+        if not self.reg_id:         # dropped when the name was lost first (kded6 had it)
+            self.reg_id = self.conn.register_object(WATCHER_PATH, self.node.interfaces[0],
+                                                    self.on_method, self.on_get_property, None)
         conn.emit_signal(None, WATCHER_PATH, WATCHER, "StatusNotifierHostRegistered", None)
 
     def on_name_lost(self, _conn, _name):

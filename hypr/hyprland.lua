@@ -52,6 +52,9 @@ hl.on("hyprland.start", function()
     hl.exec_cmd(scripts .. "/swaync.sh")       -- notifications (placed above the calendar)
     -- winshell: taskbar, start menu, Alt+Tab, quick settings, calendar;
     -- restarts itself if it ever crashes (like explorer.exe)
+    -- the tray's registry first, as a service of its own: apps announce their
+    -- tray icon to it once, it must outlive winshell restarts
+    hl.exec_cmd("python3 -I " .. home .. "/.config/hypr/winshell/sni-watcher.py")
     hl.exec_cmd(winshell .. " supervise")
     hl.exec_cmd("hypridle")                    -- lock / screen off when idle
     hl.exec_cmd(scripts .. "/lock.sh --standby")   -- lock screen waits ready: Win + L locks at once
@@ -119,6 +122,9 @@ hl.config({
         -- if the lock screen ever crashes, another one (hyprlock, see
         -- scripts/lock.sh) may take over the lock instead of a red screen
         allow_session_lock_restore = true,
+        -- the lock screen fades in over the desktop and out again on unlock,
+        -- like Windows (lockscreen.py is fully opaque once it has faded in)
+        session_lock_xray = true,
     },
 })
 
@@ -228,7 +234,7 @@ hl.window_rule({
 hl.layer_rule({ name = "blur-startmenu", match = { namespace = "^rofi$" },                      blur = true, ignore_alpha = 0.2 })
 hl.layer_rule({ name = "blur-swaync",    match = { namespace = "^swaync-.*$" },                 blur = true, ignore_alpha = 0.2 })
 hl.layer_rule({ name = "blur-winshell",  match = { namespace = "^winshell-(qs|switcher|start|calendar|clipboard|taskview)$" }, blur = true, ignore_alpha = 0.2 })
-hl.layer_rule({ name = "blur-osd",        match = { namespace = "^winshell-osd$" },             blur = true, ignore_alpha = 0.2 })
+hl.layer_rule({ name = "blur-osd",        match = { namespace = "^winshell-(osd|fingerprint)$" }, blur = true, ignore_alpha = 0.2 })
 -- winshell animates its flyouts itself (they glide out of the taskbar)
 hl.layer_rule({ name = "no-anim-winshell", match = { namespace = "^winshell-.*$" }, no_anim = true })
 -- …except the task view (Win + Tab): it fades in and out as a whole, like

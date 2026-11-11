@@ -13,6 +13,7 @@ import fcntl
 import json
 import math
 import os
+import signal
 import pwd
 import re
 import socket
@@ -3472,6 +3473,103 @@ class Freeze:
         self.wins = []
 
 
+# ── Fingerprint pop-up (sudo, polkit … ask for a finger) ───────────────────
+class FingerprintPopup:
+    """Like Windows Hello: when something asks for your fingerprint (sudo in
+    the terminal, an admin prompt), a small pop-up with the fingerprint shows
+    at the bottom in the middle – it pulses while it waits, shakes red when
+    the finger isn't recognized and turns into a green check when it is.
+    Only while a finger is wanted: fprintd says so on the system bus
+    (finger-needed, VerifyStatus). The lock screen has its own."""
+    def __init__(self, app):
+        self.hide_id = 0
+        self.busy = False               # the check or the shake is playing
+        self.win = layer_window(app, "winshell-fingerprint", LS.Layer.OVERLAY,
+                                anchors=(LS.Edge.BOTTOM,), margins={LS.Edge.BOTTOM: 72})
+        box = Gtk.Box(halign=Gtk.Align.CENTER)
+        box.add_css_class("fp-pop")
+        self.box = box
+        self.img = Gtk.Image(icon_name="win11-fingerprint", pixel_size=36)
+        self.img.add_css_class("fp")
+        box.append(self.img)
+        self.win.set_child(box)
+        try:
+            bus = Gio.bus_get_sync(Gio.BusType.SYSTEM, None)
+        except GLib.Error:
+            return
+        self.bus = bus
+        bus.signal_subscribe("net.reactivated.Fprint", "org.freedesktop.DBus.Properties",
+                             "PropertiesChanged", None, "net.reactivated.Fprint.Device",
+                             Gio.DBusSignalFlags.NONE, self.on_props)
+        bus.signal_subscribe("net.reactivated.Fprint", "net.reactivated.Fprint.Device",
+                             "VerifyStatus", None, None, Gio.DBusSignalFlags.NONE, self.on_status)
+
+    LOCKED = os.path.join(RUNTIME, "lockscreen.active")    # lockscreen.py while it locks
+
+    def on_props(self, _c, _s, _p, _i, _sig, params):
+        _iface, changed, _inv = params.unpack()
+        if "finger-needed" not in changed:
+            return
+        if os.path.exists(self.LOCKED):
+            # the lock screen asks for the finger itself (and shows it): no
+            # pop-up – it was still visible for a moment after unlocking
+            if self.win.get_visible():
+                self.hide()
+            return
+        if changed["finger-needed"]:
+            self.show()
+        elif not self.busy:
+            self.later_hide(400)
+
+    def on_status(self, _c, _s, _p, _i, _sig, params):
+        result, _done = params.unpack()
+        if not self.win.get_visible() or os.path.exists(self.LOCKED):
+            return
+        if result == "verify-match":
+            self.state("win11-fingerprint-ok", "ok")
+            self.busy = True
+            self.later_hide(700)
+        elif result == "verify-no-match":
+            self.state("win11-fingerprint-fail", "shake")
+            self.busy = True
+
+            def back():
+                self.busy = False
+                if self.win.get_visible() and not self.hide_id:
+                    self.state("win11-fingerprint", "waiting")
+                return False
+            GLib.timeout_add(900, back)
+
+    def state(self, icon_name, css):
+        self.img.set_from_icon_name(icon_name)
+        for c in ("waiting", "shake", "ok"):
+            self.img.remove_css_class(c)
+        GLib.timeout_add(16, lambda: self.img.add_css_class(css) and False)
+
+    def show(self):
+        if self.hide_id:
+            GLib.source_remove(self.hide_id)
+            self.hide_id = 0
+        self.busy = False
+        self.state("win11-fingerprint", "waiting")
+        self.box.remove_css_class("shown")
+        self.win.present()
+        GLib.timeout_add(16, lambda: self.box.add_css_class("shown") and False)
+
+    def later_hide(self, ms):
+        if self.hide_id:
+            GLib.source_remove(self.hide_id)
+        self.hide_id = GLib.timeout_add(ms, self.hide)
+
+    def hide(self):
+        self.hide_id = 0
+        self.busy = False
+        self.box.remove_css_class("shown")          # slides down and fades (CSS)
+        GLib.timeout_add(200, lambda: (not self.box.has_css_class("shown")
+                                       and self.win.set_visible(False)) and False)
+        return False
+
+
 # ── Snap preview (dragging a window to a screen edge) ──────────────────────
 class SnapPreview:
     """The translucent area that shows where a dragged window will snap
@@ -4380,10 +4478,35 @@ class Taskbar:
             items.append(("Unpin from taskbar" if pinned else "Pin to taskbar",
                           lambda: self.set_pinned(key, not pinned)))
         if wins:
+            # like Windows 11 ("End task"): ends the app's process even when
+            # it hangs – every window of that app, on every desktop
+            items.append(("End task", lambda: self.end_task(key)))
             items.append(("Close window" if len(wins) == 1 else "Close all windows",
                           lambda: [spawn(f"hyprctl dispatch 'hl.dsp.window.close({{ window = \"address:{w['address']}\" }})'")
                                    for w in wins]))
         popup_menu(anchor, items)
+
+    def end_task(self, key):
+        """Ask the app's processes to quit (SIGTERM), and force it (SIGKILL)
+        if one is still there 2 s later – it hangs."""
+        pids = {c.get("pid") for c in hypr_json("clients") or []
+                if c.get("pid", 0) > 1 and self.key_for(c) == key}
+        pids.discard(os.getpid())
+        for pid in pids:
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except OSError:
+                pass
+
+        def force():
+            for pid in pids:
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                except OSError:
+                    pass                    # gone already
+            return False
+        if pids:
+            GLib.timeout_add(2000, force)
 
     def set_pinned(self, key, on):
         pinned = [k for k in self.cfg["pinned"] if k != key]
@@ -4821,6 +4944,7 @@ class WinShell(Gtk.Application):
         self.osd = OSD(self)
         self.snap = SnapPreview(self)
         self.freeze = Freeze(self)
+        self.fingerprint = FingerprintPopup(self)
         self.taskview = TaskView(self, self)
         self.deskslide = DesktopSlide(self, self)
         self.desk = DesktopAnim(self, self)

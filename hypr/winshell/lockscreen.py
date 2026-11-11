@@ -15,7 +15,8 @@ starts hyprlock instead – the screen never ends up unlocked or stuck.
   lockscreen.py --standby    load everything and wait; SIGUSR1 locks at once
                              (lock.sh keeps one ready, so Win + L is instant)
   lockscreen.py --preview    show it in a normal window, nothing is locked
-                             (add "signin" to start at the sign-in step)
+                             (add "signin" to start at the sign-in step,
+                             "fpdemo" to play the fingerprint animations)
 """
 import ctypes
 import ctypes.util
@@ -37,6 +38,9 @@ STANDBY = "--standby" in sys.argv
 RUN = os.environ.get("XDG_RUNTIME_DIR", "/tmp")
 STANDBY_PID = os.path.join(RUN, "lockscreen-standby.pid")   # waiting, ready to lock
 RESULT = os.path.join(RUN, "lockscreen.result")             # "unlocked" after a real unlock
+STANDBY_LOCK = None                                         # held while waiting (main)
+ACTIVE = os.path.join(RUN, "lockscreen.active")             # exists while it locks: winshell's
+                                                            # fingerprint pop-up stays out of it
 if PREVIEW:
     gi.require_version("Gtk4LayerShell", "1.0")
     from gi.repository import Gtk4LayerShell as LS  # noqa: E402
@@ -48,6 +52,7 @@ USER = pwd.getpwuid(os.getuid()).pw_name
 CACHE = os.path.expanduser("~/.cache/hyprlock")
 PAM_SERVICE = "password-auth"       # Fedora's stack without the fingerprint step
 SIGNIN_IDLE = 45                    # s without input: back to the lock screen
+LEAVE_MS = 270                      # unlock fade-out (.lock-root.leaving)
 
 
 def display_name():
@@ -120,8 +125,9 @@ class Fingerprint:
         "verify-remove-and-retry": "Lift your finger and try again",
     }
 
-    def __init__(self, on_match, on_message):
+    def __init__(self, on_match, on_message, on_ready=None, on_fail=None):
         self.on_match, self.on_message = on_match, on_message
+        self.on_ready, self.on_fail = on_ready, on_fail
         self.dev = None
         self.closed = False
         threading.Thread(target=self.open, daemon=True).start()
@@ -151,6 +157,8 @@ class Fingerprint:
         self.dev = dev
         dev.connect("g-signal", self.on_signal)
         self.verify()
+        if self.on_ready:
+            self.on_ready()
         return False
 
     def verify(self):
@@ -173,6 +181,8 @@ class Fingerprint:
         if result == "verify-match":
             self.on_match()
             return
+        if result == "verify-no-match" and self.on_fail:
+            self.on_fail()
         if result in self.MESSAGES:
             self.on_message(self.MESSAGES[result])
         if done:                                    # start over for the next try
@@ -225,7 +235,40 @@ def status_icons():
 
 # ── the screen ────────────────────────────────────────────────────────────
 CSS = """
-window.lock { background: #18181c; }
+/* Windows-like: the lock screen fades in over the desktop on Win + L and out
+   again on unlock (Hyprland misc.session_lock_xray shows the desktop behind
+   the see-through parts – only while it fades; then it's fully opaque) */
+window.lock { background: transparent; }
+.lock-root { background: #18181c; opacity: 0; transition: opacity 240ms ease-out; }
+.lock-root.shown { opacity: 1; }
+.lock-root.leaving { opacity: 0; transition: opacity 260ms ease-in; }
+/* fingerprint (Windows Hello): pulses while waiting, shakes red when not
+   recognized, pops into a green check when it is */
+.fp-box { margin-top: 14px; margin-bottom: 4px; }
+.fp-low { margin-bottom: 56px; transition: opacity 220ms ease-out; }
+.signin .fp-low { opacity: 0; }
+@keyframes fp-pulse {
+    0%   { opacity: 0.55; }
+    50%  { opacity: 1; }
+    100% { opacity: 0.55; }
+}
+@keyframes fp-shake {
+    0%   { transform: translateX(0); }
+    15%  { transform: translateX(-7px); }
+    30%  { transform: translateX(6px); }
+    45%  { transform: translateX(-5px); }
+    60%  { transform: translateX(3px); }
+    75%  { transform: translateX(-2px); }
+    100% { transform: translateX(0); }
+}
+@keyframes fp-pop {
+    0%   { transform: scale(0.6); opacity: 0.3; }
+    60%  { transform: scale(1.12); opacity: 1; }
+    100% { transform: scale(1); opacity: 1; }
+}
+.fp.waiting { animation: fp-pulse 2000ms ease-in-out infinite; }
+.fp.shake { animation: fp-shake 420ms ease-out; }
+.fp.ok { animation: fp-pop 320ms ease-out; }
 .tint { background: rgba(0, 0, 0, 0.12); transition: background-color 300ms ease-out; }
 .signin .tint { background: rgba(0, 0, 0, 0.28); }
 .bg-blur { opacity: 0; transition: opacity 320ms ease-out; }
@@ -270,7 +313,7 @@ class LockScreen:
         self.face = os.path.join(CACHE, "face")
         self.blur_tex = None
         threading.Thread(target=self.make_blur, daemon=True).start()
-        self.fp = None if PREVIEW else Fingerprint(self.unlock, self.say)
+        self.fp = None if PREVIEW else Fingerprint(self.fp_match, self.say, self.fp_ready, self.fp_fail)
         self.start_signin = start_signin
 
     # blurred copy of the background for the sign-in step (Pillow, small)
@@ -343,6 +386,14 @@ class LockScreen:
         name = Gtk.Label(label=display_name())
         name.add_css_class("name")
         s2.append(name)
+        # fingerprint (Windows Hello): shown once the reader is ready
+        fp_img = Gtk.Image(icon_name="win11-fingerprint", pixel_size=36)
+        fp_img.add_css_class("fp")
+        fp_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, halign=Gtk.Align.CENTER)
+        fp_box.add_css_class("fp-box")
+        fp_box.append(fp_img)
+        fp_box.set_visible(False)
+        s2.append(fp_box)
         entry = None
         if primary:
             entry = Gtk.PasswordEntry(show_peek_icon=True, placeholder_text="Password", halign=Gtk.Align.CENTER)
@@ -355,6 +406,17 @@ class LockScreen:
         s2.append(msg)
         s2.set_can_target(False)
         root.add_overlay(s2)
+
+        # the same fingerprint symbol at the bottom of the first screen (the
+        # one with the clock); it goes with the clock when the sign-in comes
+        fp_low = Gtk.Image(icon_name="win11-fingerprint", pixel_size=32)
+        fp_low.add_css_class("fp")
+        fp_low_box = Gtk.Box(halign=Gtk.Align.CENTER, valign=Gtk.Align.END)
+        fp_low_box.add_css_class("fp-low")
+        fp_low_box.append(fp_low)
+        fp_low_box.set_can_target(False)
+        fp_low_box.set_visible(False)
+        root.add_overlay(fp_low_box)
 
         # Wi-Fi and battery, bottom right (just shown, not clickable)
         st = Gtk.Box(halign=Gtk.Align.END, valign=Gtk.Align.END)
@@ -375,9 +437,56 @@ class LockScreen:
         click.connect("pressed", lambda *_: self.show_signin())
         root.add_controller(click)
         screen = {"root": root, "clock": clock, "date": date, "entry": entry, "msg": msg,
+                  "fp_box": fp_box, "fp_img": fp_img, "fp_low_box": fp_low_box,
+                  "fp_imgs": (fp_img, fp_low),
                   "blur": blur, "s1": s1, "s2": s2, "net": net, "bat": bat, "keys": keys}
         self.screens.append(screen)
         return root, keys
+
+    # ── fingerprint animations ──
+    def fp_ready(self):
+        for s in self.screens:
+            s["fp_box"].set_visible(True)
+            s["fp_low_box"].set_visible(True)
+            for img in s["fp_imgs"]:
+                img.add_css_class("waiting")            # slow pulse
+
+    def fp_fail(self):
+        """Not recognized: red, a short shake, then back to waiting."""
+        for s in self.screens:
+            for img in s["fp_imgs"]:
+                img.set_from_icon_name("win11-fingerprint-fail")
+                img.remove_css_class("waiting")
+                img.remove_css_class("shake")
+                GLib.timeout_add(16, lambda i=img: i.add_css_class("shake") and False)
+        GLib.timeout_add(900, self.fp_reset)
+
+    def fp_reset(self):
+        for s in self.screens:
+            for img in s["fp_imgs"]:
+                img.remove_css_class("shake")
+                img.set_from_icon_name("win11-fingerprint")
+                img.add_css_class("waiting")
+        return False
+
+    def fp_match(self):
+        """Recognized: a green check pops in (where the symbol is), then unlock."""
+        for s in self.screens:
+            for img in s["fp_imgs"]:
+                img.remove_css_class("waiting")
+                img.remove_css_class("shake")
+                img.set_from_icon_name("win11-fingerprint-ok")
+                img.add_css_class("ok")
+        GLib.timeout_add(420, lambda: self.unlock() and False)
+
+    def fade_in(self):
+        for s in self.screens:
+            s["root"].add_css_class("shown")
+        return False
+
+    def fade_out(self):
+        for s in self.screens:
+            s["root"].add_css_class("leaving")
 
     def tick(self):
         now = GLib.DateTime.new_now_local()
@@ -527,6 +636,11 @@ class App(Gtk.Application):
                 os.unlink(STANDBY_PID)          # used up: lock.sh starts the next one
             except OSError:
                 pass
+            if STANDBY_LOCK:
+                STANDBY_LOCK.close()            # … and that one may wait now
+        if not PREVIEW:
+            open(ACTIVE, "w").close()
+            OWN_ACTIVE[0] = True
         self.screen = LockScreen(self, start_signin=PREVIEW and "signin" in sys.argv)
         display = Gdk.Display.get_default()
         monitors = [display.get_monitors().get_item(i) for i in range(display.get_monitors().get_n_items())]
@@ -547,9 +661,15 @@ class App(Gtk.Application):
                 self.lock.assign_window_to_monitor(win, mon)
         self.screen.tick()
         self.screen.update_status()
+        GLib.timeout_add(30, self.screen.fade_in)
         GLib.timeout_add_seconds(10, self.screen.update_status)
         if self.screen.start_signin:
             GLib.timeout_add(300, lambda: self.screen.show_signin() and False)
+        if PREVIEW and "fpdemo" in sys.argv:    # ready, not recognized, recognized
+            sc = self.screen
+            sc.unlock = lambda: None
+            for ms, fn in ((500, sc.fp_ready), (2500, sc.fp_fail), (4200, sc.fp_match)):
+                GLib.timeout_add(ms, lambda f=fn: f() and False)
         return False                            # (as a signal handler: run once)
 
     def preview_window(self, mon):
@@ -566,15 +686,31 @@ class App(Gtk.Application):
         win.set_child(child)
         win.add_controller(keys)
         win.present()
+        GLib.timeout_add(30, self.screen.fade_in)
 
     def finish(self):
+        if getattr(self, "leaving", False):
+            return                              # password and fingerprint at once
+        self.leaving = True
+        # fade out first (the desktop shows through), then unlock
+        self.screen.fade_out()
+        GLib.timeout_add(LEAVE_MS, self.unlock_now)
+
+    def unlock_now(self):
         if self.lock:
             self.lock.unlock()
+        if OWN_ACTIVE[0]:
+            try:
+                os.unlink(ACTIVE)
+            except OSError:
+                pass
+            OWN_ACTIVE[0] = False
         self.unlocked = True
         if STANDBY:
             with open(RESULT, "w") as f:        # lock.sh can't see a standby's exit code
                 f.write("unlocked")
         GLib.timeout_add(150, lambda: self.quit_with(0))
+        return False
 
     def quit_with(self, code):
         self.exit_code = code
@@ -584,6 +720,30 @@ class App(Gtk.Application):
 
 
 def main():
+    try:
+        return run()
+    finally:
+        if OWN_ACTIVE[0]:
+            try:
+                os.unlink(ACTIVE)
+            except OSError:
+                pass
+
+
+OWN_ACTIVE = [False]                    # this process made ACTIVE (it locked)
+
+
+def run():
+    if STANDBY:
+        # only one lock screen may wait: a second one started right after the
+        # first (before it wrote its pid file) stayed around forever
+        import fcntl
+        global STANDBY_LOCK
+        STANDBY_LOCK = open(os.path.join(RUN, "lockscreen-standby.lock"), "w")
+        try:
+            fcntl.flock(STANDBY_LOCK, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            return 0
     app = App()
     app.exit_code = 1
     app.run([])

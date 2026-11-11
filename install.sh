@@ -50,6 +50,14 @@ ts=$(date +%Y,%-m,%-d,%-H,%-M,%-S.000)
 printf '[Dolphin]\nTimestamp=%s\nVersion=4\nViewMode=0\nVisibleRoles=%s\n' "$ts" "$roles" > "$vp/global/.directory"
 printf '[Dolphin]\nTimestamp=%s\nVersion=4\nViewMode=2\nVisibleRoles=%s\n' "$ts" "$roles" > "$vp/remote/.directory"
 
+# no "connected to Wi-Fi" / "disconnected" pop-ups from KDE's network
+# service (kded6, it runs along); errors and captive portals still show
+if command -v kwriteconfig6 >/dev/null; then
+    for e in ConnectionActivated ConnectionDeactivated NoLongerConnected; do
+        kwriteconfig6 --file networkmanagement.notifyrc --group "Event/$e" --key Action None
+    done
+fi
+
 # swaync started by D-Bus uses the same placement as the autostart
 mkdir -p "$HOME/.config/systemd/user"
 ln -sfn "$REPO/systemd/swaync.service.d" "$HOME/.config/systemd/user/swaync.service.d"
