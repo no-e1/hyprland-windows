@@ -28,7 +28,7 @@ window.winshell {
 .card-title { font-size: 12px; }
 /* × on a card (Alt+Tab): on hover and on the selected one, like Windows */
 button.card-close {
-    min-width: 24px; min-height: 22px; padding: 0; margin: -2px -4px -2px 0;
+    min-width: 24px; min-height: 24px; padding: 0; margin: -4px -4px -4px 0;   /* square */
     border-radius: 4px; border: none; box-shadow: none;
     background: transparent; opacity: 0; transition: opacity 90ms ease-out;
 }
