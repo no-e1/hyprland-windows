@@ -10,7 +10,16 @@ def svg(body):
     return ('<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" '
             'fill="none" stroke-linecap="round" stroke-linejoin="round">' + body + '</svg>\n')
 
+# the status icons next to the clock a bit bigger (from the middle), so they
+# match the network icons, which fill nearly the whole box
+SCALE_UP = {"volume-": 1.12}       # (the battery is drawn that big already)
+
+
 def save(name, body):
+    for prefix, k in SCALE_UP.items():
+        if name.startswith(prefix):
+            body = f'<g transform="translate(12 12) scale({k}) translate(-12 -12)">{body}</g>'
+            break
     with open(os.path.join(OUT, f"win11-{name}.svg"), "w") as f:
         f.write(svg(body))
 
@@ -35,6 +44,32 @@ for r in (5, 9.5, 14):
     b += arc(12, WIFI_Y, r, -48, 48, W, WIFI_DIM)
 b += f'<path d="M16.5 14.5l4 4M20.5 14.5l-4 4" stroke="{W}" stroke-width="{SW}"/>'
 save("wifi-off", b)
+
+# Wi-Fi connected, but no internet: full Wi-Fi with a "?" badge at the bottom
+# right, cut out of the arcs around it (like Windows' badges)
+_bx, _by, _br = 18.2, 17.6, 4.6
+_q = ('<path d="M16.75 16.35a1.5 1.5 0 1 1 2.35 1.25c-.55.35-.9.7-.9 1.35v.25" '
+      'stroke="black" stroke-width="1.35" fill="none"/><circle cx="18.2" cy="20.85" r=".8" fill="black"/>')
+_wifi_full = f'<circle cx="12" cy="{WIFI_Y - 0.6}" r="1.35" fill="{W}"/>'
+for _r in (5, 9.5, 14):
+    _wifi_full += arc(12, WIFI_Y, _r, -48, 48, W, 1.0)
+save("wifi-noinet",
+     f'<mask id="wnm"><rect width="24" height="24" fill="white"/>'
+     f'<circle cx="{_bx}" cy="{_by}" r="{_br + 1.3}" fill="black"/></mask>'
+     f'<g mask="url(#wnm)">{_wifi_full}</g>'
+     f'<mask id="wnq"><rect width="24" height="24" fill="white"/>{_q}</mask>'
+     f'<circle cx="{_bx}" cy="{_by}" r="{_br}" fill="{W}" mask="url(#wnq)"/>')
+
+# no connection at all (no Wi-Fi, no cable): Windows' globe with a "no" sign
+save("no-internet",                     # as big as the other status icons
+     '<mask id="nim"><rect width="24" height="24" fill="white"/>'
+     '<circle cx="18.4" cy="18.4" r="6.1" fill="black"/></mask>'
+     f'<g mask="url(#nim)" stroke="{W}" stroke-width="{SW}">'
+     '<circle cx="10.6" cy="10.6" r="9.1"/>'
+     '<ellipse cx="10.6" cy="10.6" rx="3.9" ry="9.1"/>'
+     '<path d="M1.5 10.6h18.2M3 6h15.2M3 15.2h15.2"/></g>'
+     f'<circle cx="18.4" cy="18.4" r="4.4" stroke="{W}" stroke-width="{SW}"/>'
+     f'<path d="M15.3 21.5l6.2-6.2" stroke="{W}" stroke-width="{SW}"/>')
 # Ethernet: monitor with cable
 # ── App icons in colour (taskbar, Alt+Tab) ───────────────────────────
 # Terminal, in the style of Windows Terminal: a dark window with a strip of
@@ -104,11 +139,23 @@ save("project-duplicate", '<mask id="dupm"><rect width="24" height="24" fill="wh
 
 # Ethernet like Windows 11: a screen on a stand, open at the top right where
 # a network plug sits; the plug's cable runs straight down to the floor
-save("ethernet", f'<path d="M14 3.3H3.7A1.7 1.7 0 0 0 2 5v10.2a1.7 1.7 0 0 0 1.7 1.7h13.4" '
-                 f'stroke="{W}" stroke-width="{SW}"/>'
-                 f'<path d="M8.3 17v4.1M14.9 17v4.1M6 21.1h10.9" stroke="{W}" stroke-width="{SW}"/>'
-                 f'<rect x="15.7" y="2.3" width="6.3" height="7.2" rx="2.4" stroke="{W}" stroke-width="{SW}"/>'
-                 f'<path d="M15.7 5.5H22M18.85 9.5v11.6" stroke="{W}" stroke-width="{SW}"/>')
+# measured from Windows 11's own icon (860 px picture, the strokes' middles),
+# scaled into the 24 px box with its proportions – the first version was a
+# little wider than Windows'
+_K = 21.6 / 172                         # nearly the whole box: as big as the other icons look
+def _ex(x): return f"{(24 - 179 * _K) / 2 + (x - 343) * _K:.2f}"
+def _ey(y): return f"{(24 - 172 * _K) / 2 + (y - 176) * _K:.2f}"
+_r = 12
+_eth = (f'<path d="M{_ex(452)} {_ey(193.5)}H{_ex(349 + _r)}A{_r * _K:.2f} {_r * _K:.2f} 0 0 0 {_ex(349)} {_ey(193.5 + _r)}'
+        f'V{_ey(310.5 - _r)}A{_r * _K:.2f} {_r * _K:.2f} 0 0 0 {_ex(349 + _r)} {_ey(310.5)}H{_ex(471)}" '
+        f'stroke="{W}" stroke-width="1.5"/>'
+        f'<path d="M{_ex(403)} {_ey(316)}V{_ey(342.5)}M{_ex(460)} {_ey(316)}V{_ey(342.5)}'
+        f'M{_ex(381)} {_ey(342.5)}H{_ex(472)}" stroke="{W}" stroke-width="1.5"/>'
+        f'<rect x="{_ex(469.5)}" y="{_ey(182)}" width="{46.5 * _K:.2f}" height="{62.5 * _K:.2f}" rx="{9 * _K:.2f}" '
+        f'stroke="{W}" stroke-width="1.5"/>'
+        f'<path d="M{_ex(469.5)} {_ey(202.5)}H{_ex(516)}M{_ex(492.5)} {_ey(244.5)}V{_ey(342.5)}" '
+        f'stroke="{W}" stroke-width="1.5"/>')
+save("ethernet", f'<g stroke-linecap="butt">{_eth}</g>')      # straight line ends, like Windows
 
 # ── Speaker ──────────────────────────────────────────────────────────
 spk = (f'<path d="M3.5 9.25h3L10.75 5.5v13L6.5 14.75h-3a.75.75 0 0 1-.75-.75v-4a.75.75 0 0 1 .75-.75z" '
@@ -130,37 +177,53 @@ save("mic-off", '<mask id="micoff"><rect width="24" height="24" fill="white"/>'
                 f'<g mask="url(#micoff)">{mic}</g>'
                 f'<path d="M4 3.5l16 17" stroke="{W}" stroke-width="{SW}"/>')
 
-# ── Battery (Windows 11 taskbar style) ───────────────────────────────
-# Wide, flat body with a thin outline and a small terminal on the right;
-# the level fills almost the whole inside (thin gap to the outline).
-# Charging: the level turns green with a bolt cut into the middle.
-# Plugged in but not charging (full): a small plug instead of the bolt.
-BODY = '<rect x="2.6" y="7.6" width="16.8" height="8.8" rx="2.4" stroke="{c}" stroke-width="1.2"/>'
-NUB = '<path d="M20.6 10.3h.6a1 1 0 0 1 1 1v1.4a1 1 0 0 1-1 1h-.6z" fill="{c}"/>'
-FILL_X, FILL_W = 4.4, 13.2      # same gap to the outline on the left and right (when full)
-BOLT = "M12.48 5.89L7.86 12.82h3.8l-.99 5.44 4.62-7.43h-3.8z"
-PLUG = "M9.5 8.8V6.3M12.5 8.8V6.3M8.1 8.8h5.8v2.2a2.9 2.9 0 0 1-5.8 0zM11 14v3.6"
-GREEN, RED = "#6ccb5f", "#ff6363"
-for pct in range(0, 101, 10):
-    for kind in ("", "-charging", "-plugged"):
-        col = GREEN if kind == "-charging" else RED if pct <= 10 and not kind else W
-        w = FILL_W * pct / 100
-        fill = (f'<rect x="{FILL_X}" y="9.4" width="{w:.2f}" height="5.2" rx="{min(1, w / 2):.2f}" fill="{col}"/>'
-                if w > 0.3 else "")
-        shape = BODY.format(c=W) + NUB.format(c=W) + fill
+# ── Battery (Windows 11's new battery icons) ─────────────────────────
+# Measured from Windows' own: a body about twice as wide as high with round
+# corners, the fill well inside the outline, a narrow terminal on the right.
+# The bolt (charging) and the plug (plugged in) stand in the middle and reach
+# out over the outline – outline and fill are cut out around them.
+#   battery-N           on battery: white
+#   battery-N-low       below 30 %: amber       (status.sh picks by the real
+#   battery-N-crit      15 % and less: red       level, not the rounded fill)
+#   battery-N-charging  green, the bolt in the middle
+#   battery-N-plugged   plugged in, not charging: white, the plug in the middle
+BX, BY, BW, BH, BR = 1.3, 6.95, 19.5, 10.1, 2.6       # body (outline's middle)
+BODY = f'<rect x="{BX}" y="{BY}" width="{BW}" height="{BH}" rx="{BR}" stroke="{{c}}" stroke-width="1.25"/>'
+NUB = (f'<path d="M{BX + BW + 0.6:.2f} 10.4h.55a.75.75 0 0 1 .75.75v1.7a.75.75 0 0 1-.75.75h-.55z" '
+       f'fill="{{c}}"/>')
+FX, FY, FW, FH = BX + 2.0, BY + 2.0, BW - 4.0, BH - 4.0   # the fill, well inside
+BOLT = "M12.2 3.1L7.8 11.2h3.1l-1.3 5.6 5-8.6h-3.15L13.2 3.1z"     # in the middle of the body
+PLUG_PRONGS = "M9.9 5.0V7.7M12.2 5.0V7.7"
+PLUG_HEAD = "M8.35 7.7h5.4v2.2a2.7 2.7 0 0 1-5.4 0z"
+PLUG_CORD = "M11.05 12.6v5.6"              # just below the battery, like Windows'
+GREEN, AMBER, RED = "#6ccb5f", "#f8b400", "#e74856"
+
+
+def battery(pct, kind):
+    col = {"-charging": GREEN, "-low": AMBER, "-crit": RED}.get(kind, W)
+    w = max(FW * pct / 100, 1.1 if pct > 0 else 0)      # always a visible sliver
+    fill = f'<rect x="{FX:.2f}" y="{FY:.2f}" width="{w:.2f}" height="{FH:.2f}" rx="0.9" fill="{col}"/>' if w else ""
+    shape = BODY.format(c=W) + NUB.format(c=W) + fill
+    if kind in ("-charging", "-plugged"):
         if kind == "-charging":
-            gap = f'<path d="{BOLT}" fill="black" stroke="black" stroke-width="1.8" stroke-linejoin="round"/>'
+            cut = f'<path d="{BOLT}" fill="black" stroke="black" stroke-width="2.2" stroke-linejoin="round"/>'
             glyph = f'<path d="{BOLT}" fill="{W}"/>'
-        elif kind == "-plugged":
-            gap = f'<path d="{PLUG}" fill="black" stroke="black" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/>'
-            glyph = f'<path d="{PLUG}" fill="{W}" stroke="{W}" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>'
         else:
-            gap = glyph = ""
-        if gap:
-            mid = f"m{pct}{kind}"
-            shape = (f'<mask id="{mid}"><rect width="24" height="24" fill="white"/>{gap}</mask>'
-                     f'<g mask="url(#{mid})">{shape}</g>{glyph}')
-        save(f"battery-{pct}{kind}", shape)
+            # slim like Windows': short prongs close together, a smaller
+            # head, and a clear gap around it all
+            cut = (f'<path d="{PLUG_PRONGS}{PLUG_CORD}" stroke="black" stroke-width="3.8"/>'
+                   f'<path d="{PLUG_HEAD}" fill="black" stroke="black" stroke-width="3.0" stroke-linejoin="round"/>')
+            glyph = (f'<path d="{PLUG_PRONGS}{PLUG_CORD}" stroke="{W}" stroke-width="1.3"/>'
+                     f'<path d="{PLUG_HEAD}" fill="{W}"/>')
+        mid = f"m{pct}{kind}"
+        shape = (f'<mask id="{mid}"><rect width="24" height="24" fill="white"/>{cut}</mask>'
+                 f'<g mask="url(#{mid})">{shape}</g>{glyph}')
+    return shape
+
+
+for pct in range(0, 101, 10):
+    for kind in ("", "-low", "-crit", "-charging", "-plugged"):
+        save(f"battery-{pct}{kind}", battery(pct, kind))
 
 # ── Quick settings and switcher glyphs ───────────────────────────────
 st = f'stroke="{W}" stroke-width="{SW}"'

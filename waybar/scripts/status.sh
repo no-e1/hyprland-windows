@@ -7,17 +7,26 @@
 json() { printf '{"text":" ","class":"%s","tooltip":"%s"}\n' "$1" "$2"; }
 
 net() {
-    local eth wifi sig ssid lvl
+    local eth wifi sig ssid lvl inet
     eth=$(nmcli -t -f TYPE,STATE dev 2>/dev/null | grep -c '^ethernet:connected$')
     wifi=$(nmcli -t -f ACTIVE,SIGNAL,SSID dev wifi list --rescan no 2>/dev/null | grep '^yes:' | head -n1)
+    # NetworkManager checks by itself whether the internet is really reachable
+    # (full / limited / portal / none) and reports changes on "nmcli monitor"
+    inet=$(nmcli -t networking connectivity 2>/dev/null)
     if [ "$eth" -gt 0 ]; then
         json ethernet "Ethernet\\nInternet access"
     elif [ -n "$wifi" ]; then
         sig=$(cut -d: -f2 <<<"$wifi"); ssid=$(cut -d: -f3- <<<"$wifi" | sed 's/\\:/:/g; s/"/\\"/g')
-        lvl=$(( sig >= 75 ? 4 : sig >= 50 ? 3 : sig >= 25 ? 2 : 1 ))
-        json "wifi-$lvl" "$ssid\\nInternet access"
+        if [ "$inet" = full ] || [ "$inet" = unknown ] || [ -z "$inet" ]; then
+            lvl=$(( sig >= 75 ? 4 : sig >= 50 ? 3 : sig >= 25 ? 2 : 1 ))
+            json "wifi-$lvl" "$ssid\\nInternet access"
+        else
+            # connected to the Wi-Fi, but no way out (like Windows: Wi-Fi with a badge)
+            json wifi-noinet "$ssid\\nNo internet"
+        fi
     else
-        json wifi-off "Not connected"
+        # neither Wi-Fi nor cable: Windows' globe with a "no" sign
+        json no-internet "Not connected\\nNo internet"
     fi
 }
 
@@ -40,7 +49,11 @@ bat() {
     case "$st" in
         Charging)      cls="$cls-charging"; tip="Battery: $cap% (charging)" ;;
         Full|"Not charging") cls="$cls-plugged"; tip="Battery: $cap% (plugged in)" ;;
-        *)             tip="Battery: $cap% remaining" ;;
+        *)             tip="Battery: $cap% remaining"
+                       # by the real level (the fill is rounded to 10 %):
+                       # orange below 30 %, red at 15 % and less
+                       if [ "$cap" -le 15 ]; then cls="$cls-crit"
+                       elif [ "$cap" -lt 30 ]; then cls="$cls-low"; fi ;;
     esac
     [ "$cap" -le 10 ] && [ "$st" = Discharging ] && cls="$cls critical"
     json "$cls" "$tip"

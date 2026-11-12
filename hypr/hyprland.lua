@@ -1853,9 +1853,25 @@ function DesktopsArrange()
             local mon = (home and on[home]) and home or lead
             local want = ws_on(mon, d)
             if want ~= id then
-                hl.dispatch(hl.dsp.window.move({ workspace = tostring(want), follow = false,
-                                                 window = "address:" .. w.address }))
-                exiled[w.address] = (home and not on[home]) and { mon = home, ws = want } or nil
+                local sel = "address:" .. w.address
+                local leaving = home and not on[home]
+                local rec
+                if leaving then
+                    -- remember its size and place on its screen: it gets them
+                    -- back when that screen comes back (like Windows)
+                    local m = w.monitor
+                    rec = { mon = home, ws = want, size = { w.size.x, w.size.y },
+                            rel = m and { w.at.x - m.x, w.at.y - m.y } or nil }
+                end
+                hl.dispatch(hl.dsp.window.move({ workspace = tostring(want), follow = false, window = sel }))
+                exiled[w.address] = rec
+                if e and not leaving and e.size and e.rel then          -- back on its own screen
+                    for _, m in ipairs(list) do
+                        if m.name == home then
+                            set_geometry(w.address, m.x + e.rel[1], m.y + e.rel[2], e.size[1], e.size[2])
+                        end
+                    end
+                end
             end
         end
     end
@@ -1871,6 +1887,41 @@ function DesktopsArrange()
     save_desktops()
     DesktopShow(desk_now)
     desk_quiet = was
+    later(350, function() pcall(FitWindowsToScreens) end)
+end
+
+-- After screens changed (a screen unplugged: its windows came over to the
+-- laptop's): every window fits the screen it is on now, like Windows –
+-- maximized ones fill it, snapped ones snap to the same side of it, others
+-- that are too big or not on it any more get its size at most, centered.
+-- Before, a window from the big screen kept its size and only its top left
+-- corner was to be seen on the small one.
+function FitWindowsToScreens()
+    for _, w in ipairs(hl.get_windows() or {}) do
+        local id = w.workspace and w.workspace.id
+        local a = w.address
+        if w.mapped and id and id > 0 and w.monitor and w.fullscreen == 0 then
+            if saved_geometry[a] or w.fullscreen_client == 1 then
+                KeepMaximized(a)
+            elseif snapped_to[a] then
+                local mx, my, mw, mh = mon_box(w.monitor)
+                local cx, cy = w.at.x + w.size.x / 2, w.at.y + w.size.y / 2
+                if cx < mx or cx >= mx + mw or cy < my or cy >= my + mh then
+                    WinSnap(snapped_to[a], w)
+                end
+            else
+                local x, y, ww, hh = work_area(w.monitor)
+                local bar = has_bar(w) and BAR_HEIGHT or 0
+                local mx, my, mw, mh = mon_box(w.monitor)
+                local cx, cy = w.at.x + w.size.x / 2, w.at.y + w.size.y / 2
+                local inside = cx >= mx and cx < mx + mw and cy >= my and cy < my + mh
+                if not inside or w.size.x > ww or w.size.y + bar > hh then
+                    local g = centered(w, { w.at.x, w.at.y, w.size.x, w.size.y })
+                    set_geometry(a, g[1], g[2], g[3], g[4])
+                end
+            end
+        end
+    end
 end
 
 -- screens are about to change / changing (winshell's Win + P, Display

@@ -6109,7 +6109,8 @@ class Taskbar:
         spawn(f"wpctl set-volume -l 1 @DEFAULT_AUDIO_SINK@ {step}")
         return True
 
-    STATUS_ICON = {"ethernet": "win11-ethernet", "wifi-off": "win11-wifi-off", "mute": "win11-volume-mute"}
+    STATUS_ICON = {"ethernet": "win11-ethernet", "wifi-off": "win11-wifi-off", "mute": "win11-volume-mute",
+                   "wifi-noinet": "win11-wifi-noinet", "no-internet": "win11-no-internet"}
 
     def watch_status(self, what):
         """Follow status.sh (it prints a line whenever Wi-Fi, volume or the
@@ -6135,7 +6136,7 @@ class Taskbar:
         cls = (data.get("class") or "").split()[0] if data.get("class") else ""
         name = self.STATUS_ICON.get(cls)
         if not name:
-            m = re.match(r"(wifi|vol|bat)-(\d+)(-charging|-plugged)?", cls)
+            m = re.match(r"(wifi|vol|bat)-(\d+)(-charging|-plugged|-low|-crit)?", cls)
             if m:
                 kind = {"wifi": "wifi", "vol": "volume", "bat": "battery"}[m.group(1)]
                 name = f"win11-{kind}-{m.group(2)}{m.group(3) or ''}"
@@ -6846,6 +6847,28 @@ class WinShell(Gtk.Application):
             self.start.filter()
         elif what == "backdrop":
             self.qs.backdrop_rofi(arg == "rofi")
+        elif what == "status" and len(args) > 2 and args[1] in ("net", "vol", "bat"):
+            # status <net|vol|bat> <class> [tooltip]: show that icon for a moment
+            # (to look at the icons); the real state comes back with the next change
+            self.taskbar.show_status(args[1], {"class": args[2], "tooltip": " ".join(args[3:])})
+        elif what == "status-refresh":          # back to the real state right away
+            def first_line(w):
+                # status.sh keeps watching: only its first line, then it ends
+                p = subprocess.Popen([STATUS, w], stdout=subprocess.PIPE, text=True,
+                                     stderr=subprocess.DEVNULL, env=child_env(), start_new_session=True)
+                try:
+                    line = p.stdout.readline()
+                finally:
+                    try:
+                        os.killpg(p.pid, signal.SIGTERM)
+                    except OSError:
+                        pass
+                try:
+                    GLib.idle_add(self.taskbar.show_status, w, json.loads(line))
+                except ValueError:
+                    pass
+            for w in ("net", "vol", "bat"):
+                threading.Thread(target=first_line, args=(w,), daemon=True).start()
         elif what == "notified":                # swaync script: a notification arrived
             self.limit_popups(args[1] if len(args) > 1 else "", args[2] if len(args) > 2 else "")
         elif what == "debug":
