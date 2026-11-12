@@ -70,22 +70,22 @@ save("settings-app",
      f'<path d="M{"L".join(_g)}z" fill="url(#sg)"/>'
      '<circle cx="12" cy="12" r="5.4" fill="url(#sr)"/><circle cx="12" cy="12" r="3.65" fill="url(#sb)"/></g>')
 
-# File Explorer like Windows 11: a yellow folder – the back with its tab a
-# deeper yellow, the front lighter – with a rounded blue bar in the middle
-# of its lower edge
+# File Explorer like Windows 11 (measured from its taskbar icon): the tab
+# a deep gold with a slanted edge; the front light yellow turning deeper
+# towards the bottom right, a step up next to the tab; at the bottom the
+# blue part – round at the top, flush with the folder's lower edge, light
+# to dark diagonally, a thin dark line across its middle
 save("explorer",
-     '<defs><linearGradient id="eb" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#f0ac1c"/>'
-     '<stop offset="1" stop-color="#d98c0b"/></linearGradient>'
-     '<linearGradient id="ef" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffe17e"/>'
-     '<stop offset="1" stop-color="#fcc23c"/></linearGradient>'
-     '<linearGradient id="el" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#3fa4f4"/>'
-     '<stop offset="1" stop-color="#0f62c3"/></linearGradient></defs>'
-     '<g transform="translate(12 12) scale(1.1) translate(-12 -12)">'      # as big as the box allows
-     '<path d="M3.6 4.2h5.1c.42 0 .82.17 1.1.47l1.55 1.63h9.05c.88 0 1.6.72 1.6 1.6v10.4c0 .88-.72 1.6-1.6 1.6'
-     'H3.6c-.88 0-1.6-.72-1.6-1.6V5.8c0-.88.72-1.6 1.6-1.6z" fill="url(#eb)"/>'
-     '<path d="M2 10.1c0-.88.72-1.6 1.6-1.6h16.8c.88 0 1.6.72 1.6 1.6v8.2c0 .88-.72 1.6-1.6 1.6H3.6'
-     'c-.88 0-1.6-.72-1.6-1.6z" fill="url(#ef)"/>'
-     '<rect x="5.6" y="13.9" width="12.8" height="6" rx="1.7" fill="url(#el)"/></g>')
+     '<defs><linearGradient id="et" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#dfa50c"/>'
+     '<stop offset="1" stop-color="#c48902"/></linearGradient>'
+     '<linearGradient id="ef" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ffd962"/>'
+     '<stop offset="1" stop-color="#f2ab0a"/></linearGradient>'
+     '<linearGradient id="el" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#1c95e0"/>'
+     '<stop offset="1" stop-color="#0457a0"/></linearGradient></defs>'
+     '<path d="M1.5 4.5Q1.5 3 3 3H8.4Q8.95 3 9.2 3.5L10 5.1V6.6H1.5Z" fill="url(#et)"/>'
+     '<path d="M1.5 6.25H9.25L10 5H21Q22.5 5 22.5 6.5V19.5Q22.5 21 21 21H3Q1.5 21 1.5 19.5Z" fill="url(#ef)"/>'
+     '<path d="M5 21V18Q5 15.5 7.5 15.5H16.5Q19 15.5 19 18V21Z" fill="url(#el)"/>'
+     '<path d="M7.6 18.05H16.4" stroke="#074f94" stroke-width="0.55" stroke-opacity="0.75"/>')
 
 # Win + P (project): which screens show the picture – bright: on, faint: off
 def screen(x, y, op):
@@ -173,8 +173,7 @@ FP = ("M5.2 6.6A8.5 8.5 0 0 1 18.8 6.6M3.6 11a8.5 8.5 0 0 1 .5-2.3M20.4 11.5c0 1
       "M12 12v1.6c0 2.3-.6 4.3-1.7 6.1")
 save("fingerprint", f'<path d="{FP}" {st}/>')
 save("fingerprint-fail", f'<path d="{FP}" stroke="#ff6b6b" stroke-width="{SW}"/>')
-save("fingerprint-ok", '<circle cx="12" cy="12" r="9.25" stroke="#6ccb5f" stroke-width="1.5"/>'
-                       '<path d="M7.8 12.4l2.8 2.8 5.6-5.8" stroke="#6ccb5f" stroke-width="1.8"/>')
+save("fingerprint-ok", f'<path d="{FP}" stroke="#6ccb5f" stroke-width="{SW}"/>')     # recognized: the print turns green
 # desktops: two screens, one behind the other (the "Desktop 2" pill)
 save("desktops", f'<rect x="3" y="7" width="14" height="10" rx="1.5" {st}/>'
                  f'<path d="M7 4.5h12.5A1.5 1.5 0 0 1 21 6v8.5" {st}/><path d="M8 20h4" {st}/>')         # "New desktop" in the task view

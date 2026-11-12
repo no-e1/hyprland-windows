@@ -794,8 +794,14 @@ class Switcher:
         disp = Gdk.Display.get_default()
         mon = None
         surf = self.win.get_surface()
-        if surf is not None:
+        if surf is not None and self.win.get_mapped():
             mon = disp.get_monitor_at_surface(surf)
+        if mon is None:
+            # not shown yet: it opens on the screen you're on – not on the
+            # first one (with the wider screen on the left, the cards were
+            # laid out for that one and ran off the laptop's screen)
+            focused = next((m["name"] for m in hypr_json("monitors") or [] if m.get("focused")), None)
+            mon = gdk_monitor(focused) if focused else None
         if mon is None:
             mons = disp.get_monitors()
             mon = mons.get_item(0) if mons.get_n_items() else None
