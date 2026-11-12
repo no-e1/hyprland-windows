@@ -271,29 +271,56 @@ def button(child, *classes, on_click=None, tooltip=None):
     return b
 
 
+SLIDE_WAIT = 3       # frames (at 60 Hz) until a freshly shown window is on screen
+
+
 def slide_in(widget):
-    """Windows 11 flyout entrance: glide up out of the taskbar and fade in."""
+    """Windows 11 flyout entrance: glide up out of the taskbar and fade in.
+
+    The motion starts only once the window's first frame is on screen: a
+    freshly shown layer window takes ~50-70 ms until then (measured), and
+    the transition (started after a fixed 16 ms) was half done by the first
+    visible frame – it looked like a jump halfway, then the rest, laggy.
+    GTK can't tell when that frame is shown (the panel is still outside
+    the window, nothing is drawn), so: SLIDE_WAIT frames after mapping."""
     leave = getattr(widget, "_leave_id", 0)
     if leave:                           # it was just going away: comes back instead
         GLib.source_remove(leave)
         widget._leave_id = 0
     widget.remove_css_class("leaving")
     widget.remove_css_class("shown")
-    GLib.timeout_add(16, lambda: widget.add_css_class("shown") and False)
+    old = getattr(widget, "_slide_tick", 0)
+    if old:
+        widget.remove_tick_callback(old)
+    left = [SLIDE_WAIT]
+
+    def tick(w, _clock):
+        left[0] -= 1
+        if left[0] > 0:
+            return True
+        w._slide_tick = 0
+        w.add_css_class("shown")
+        return False
+    widget._slide_tick = widget.add_tick_callback(tick)
 
 
-def slide_out(widget, win, ms=150):
+def slide_out(widget, win, ms=150, gone_cb=None):
     """…and the way out: glide back down a little while fading (style.css
-    .flyout.leaving), then the window goes – not gone from one frame to the next."""
+    .flyout.leaving), then the window goes – not gone from one frame to the next.
+    gone_cb: called instead of hiding the window (StartMenu keeps it mapped)."""
     if getattr(widget, "_leave_id", 0):
         return
+    tick = getattr(widget, "_slide_tick", 0)
+    if tick:                            # closed before it even started gliding in
+        widget.remove_tick_callback(tick)
+        widget._slide_tick = 0
     widget.add_css_class("leaving")
     widget.remove_css_class("shown")
 
     def gone():
         widget._leave_id = 0
         widget.remove_css_class("leaving")
-        win.set_visible(False)
+        (gone_cb or (lambda: win.set_visible(False)))()
         return False
     widget._leave_id = GLib.timeout_add(ms, gone)
 
@@ -786,7 +813,11 @@ class Switcher:
         card_w = self.W + 24 + 6                # card padding + border, column spacing
         card_h = self.H + 70
         fit = max(1, int((mon_w * 0.92 - 28) // card_w))
-        per_line = max(1, min(fit, len(self.items)))
+        # as many rows as needed anyway, but spread the windows evenly over
+        # them (7 windows with room for 6: 4 + 3, not 6 + 1)
+        n = max(1, len(self.items))
+        rows = -(-n // fit)
+        per_line = max(1, -(-n // rows))
         self.per_line = per_line
         self.flow.set_min_children_per_line(per_line)
         self.flow.set_max_children_per_line(per_line)
@@ -818,6 +849,7 @@ class Switcher:
             stack = Gtk.Stack()
             stack.set_size_request(self.W, self.H)
             stack.add_css_class("thumb")
+            stack.set_overflow(Gtk.Overflow.HIDDEN)   # clip the preview to the rounded corners
             big = Gtk.Image.new_from_gicon(self.icons.get(c["class"]))
             big.set_pixel_size(48)
             stack.add_named(big, "icon")
@@ -1432,7 +1464,8 @@ class QuickSettings:
 
     def hide(self):
         self.visible = False
-        self.win.set_visible(False)
+        if self.win.get_visible():
+            slide_out(self.panel, self.win)     # glides back down while fading, like the calendar
         self.backdrop.set_visible(False)
         self.backdrop_for = None
         self.stop_bt_search()
@@ -2276,7 +2309,9 @@ class CalendarFlyout:
 
         panel = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         panel.add_css_class("cal")
-        panel.add_css_class("flyout")
+        # no .flyout glide out of the taskbar: like Windows 11 it slides in
+        # from the right screen edge and back out – Hyprland's layer
+        # animation (hyprland.lua), in step with the notification center above
         panel.set_overflow(Gtk.Overflow.HIDDEN)
         self.panel = panel
         # header: the date and, like Windows, an arrow that folds the month away
@@ -2458,11 +2493,23 @@ class CalendarFlyout:
         self.render()
         self.visible = True
         self.shell.qs.catcher_for("calendar")
-        # the notification center sits right above: opened over D-Bus at the
-        # same moment (not by starting swaync-client, which came a beat
-        # late); it glides in with the same motion (swaync/style.css)
+        # the notification center sits right above: opened over D-Bus (not
+        # by starting swaync-client, which came a beat late). Both slide in
+        # from the right (hyprland.lua) – the calendar only appears once
+        # it is about to be (NC_DELAY) – it came ~20 ms later and lagged behind.
+        # (Waiting for Hyprland's "openlayer" event was too late: +35 ms.)
         self.notification_center(True)
-        slide_in(self.panel)
+        self.waiting_nc = True
+        GLib.timeout_add(self.NC_DELAY, self.nc_opened)
+
+    NC_DELAY = 18               # ms: swaync's control center maps ~20 ms after the D-Bus call
+
+    def nc_opened(self):
+        """swaync's control center is (about to be) on screen: now the
+        calendar, so both slide in together."""
+        if not (self.visible and getattr(self, "waiting_nc", False)):
+            return False
+        self.waiting_nc = False
         # measured once the window is up: before its first showing the
         # calendar reported a far too small height, and the notification
         # center was placed over it
@@ -2471,13 +2518,15 @@ class CalendarFlyout:
         # take the keyboard (after swaync opened) so Escape closes both
         LS.set_keyboard_mode(self.win, LS.KeyboardMode.EXCLUSIVE)
         self.win.present()
+        return False
 
     def hide(self):
         if not self.visible:
             return
         self.visible = False
+        self.waiting_nc = False
         LS.set_keyboard_mode(self.win, LS.KeyboardMode.NONE)
-        slide_out(self.panel, self.win)         # glides away (and the notifications fade out with it)
+        self.win.set_visible(False)             # slides out to the right (hyprland.lua), the notifications with it
         self.shell.qs.catcher_for(None)
         self.notification_center(False)
 
@@ -2573,8 +2622,12 @@ class StartMenu:
         self.shell = shell
         self.visible = False
         self.apps = []
+        # window right on top of the taskbar (the 12 px gap is the panel's
+        # margin, style.css .start): the menu slides out of the taskbar,
+        # clipped at its top edge
         self.win = layer_window(app, "winshell-start", LS.Layer.OVERLAY,
-                                anchors=(LS.Edge.BOTTOM,), margins={LS.Edge.BOTTOM: 12})
+                                anchors=(LS.Edge.BOTTOM,), margins={LS.Edge.BOTTOM: 0})
+        self.win.add_css_class("start-window")     # style.css: so it is on screen while empty
         # capture phase: the search field would otherwise swallow Escape
         keys = Gtk.EventControllerKey(propagation_phase=Gtk.PropagationPhase.CAPTURE)
         keys.connect("key-pressed", self.on_key)
@@ -2629,6 +2682,37 @@ class StartMenu:
         self.load_apps()
         self.monitor = Gio.AppInfoMonitor.get()
         self.monitor.connect("changed", lambda *_: self.load_apps())
+        # like Windows the menu is always ready: its window stays on screen,
+        # empty (the panel sits below its edge) and click-through (park).
+        # A freshly shown window took ~35-50 ms until Hyprland put it on
+        # screen, and only then could the menu start sliding – the Windows
+        # key felt slow. Now the slide starts with the key press.
+        GLib.idle_add(self.premap)
+
+    def premap(self):
+        self.win.present()
+        self.park()
+        return False
+
+    def repark(self):
+        """Out and straight back in (premap). Merely staying on screen after
+        closing, Hyprland kept the pointer on it and the next click went
+        nowhere; a fresh, empty window doesn't take it."""
+        self.win.set_visible(False)
+        GLib.timeout_add(30, lambda: (not self.visible and self.premap()) and False)
+
+    def park(self):
+        """Mapped but invisible: no input, no keyboard (clicks go through)."""
+        import cairo
+        surf = self.win.get_surface()
+        if surf:
+            surf.set_input_region(cairo.Region())
+
+    def unpark(self):
+        import cairo
+        surf = self.win.get_surface()
+        if surf:
+            surf.set_input_region(cairo.Region(cairo.RectangleInt(0, 0, 100000, 100000)))
 
     # ── search results (Windows 11: best match + list left, details right) ──
     MAX_RESULTS = 8
@@ -2939,8 +3023,19 @@ class StartMenu:
         self.mark_open(True)
         LS.set_keyboard_mode(self.win, LS.KeyboardMode.EXCLUSIVE)
         self.shell.qs.catcher_for("start")
-        slide_in(self.panel)
-        self.win.present()
+        if self.win.get_mapped():
+            # already on screen (premap): slide right away
+            leave = getattr(self.panel, "_leave_id", 0)
+            if leave:                   # it was just going away: comes back instead
+                GLib.source_remove(leave)
+                self.panel._leave_id = 0
+            self.panel.remove_css_class("leaving")
+            self.unpark()
+            self.panel.add_css_class("shown")
+        else:
+            slide_in(self.panel)
+            self.win.present()
+            self.unpark()
         self.search.grab_focus()
         adj = self.flow.get_parent().get_parent().get_vadjustment() if self.flow.get_parent() else None
         if adj:
@@ -2950,7 +3045,11 @@ class StartMenu:
         if not self.visible:
             return
         self.visible = False
-        self.win.set_visible(False)
+        # slides back down into the taskbar (style.css .start.flyout), then
+        # the window goes and comes straight back, empty and click-through,
+        # ready for the next time (repark)
+        self.park()
+        slide_out(self.panel, self.win, 180, gone_cb=self.repark)
         LS.set_keyboard_mode(self.win, LS.KeyboardMode.NONE)
         self.shell.qs.catcher_for(None)
         self.mark_open(False)
@@ -4165,10 +4264,8 @@ class DesktopAnim:
     def bounce(self, classes, kind, delay):
         """The taskbar icons of these apps dip ("dip": a window lands in
         them) or hop ("hop": a window comes out) – CSS animation, style.css.
-        On every screen's taskbar, not only the one where the window is."""
-        screens = [getattr(self.shell, "primary", None)] + list(getattr(self.shell, "secondaries", {}))
-        buttons = {b for _con, c in classes for scr in screens
-                   for b in [self.button(c, scr)] if b}
+        Only on the taskbar of the screen the window is (was) on."""
+        buttons = {b for con, c in classes for b in [self.button(c, con)] if b}
 
         def start():
             for b in buttons:
@@ -4176,7 +4273,7 @@ class DesktopAnim:
                 b.remove_css_class("tb-hop")
             # a frame later, so the same animation can start again
             GLib.timeout_add(20, lambda: [b.add_css_class("tb-" + kind) for b in buttons] and False)
-            GLib.timeout_add(400, lambda: [b.remove_css_class("tb-" + kind) for b in buttons] and False)
+            GLib.timeout_add(460, lambda: [b.remove_css_class("tb-" + kind) for b in buttons] and False)
             return False
         GLib.timeout_add(max(1, int(delay * 1000)), start)
 

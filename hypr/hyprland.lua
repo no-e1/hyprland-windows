@@ -261,11 +261,9 @@ hl.window_rule({
 -- Mica/Acrylic blur for taskbar, start menu, flyouts and Alt+Tab
 hl.layer_rule({ name = "blur-startmenu", match = { namespace = "^rofi$" },                      blur = true, ignore_alpha = 0.2 })
 hl.layer_rule({ name = "blur-swaync",    match = { namespace = "^swaync-.*$" },                 blur = true, ignore_alpha = 0.2 })
--- the notification center animates itself, in step with the calendar below
--- the notification center: no sliding layer animation (it slid the whole way
--- up from the screen edge – it glides in by itself, swaync/style.css), but it
--- fades out when it closes (Escape, together with the calendar below it)
-hl.layer_rule({ name = "fade-swaync-cc", match = { namespace = "^swaync-control-center$" }, animation = "fade" })
+-- the notification center slides in from the right screen edge and back out,
+-- like Windows 11 – in step with winshell's calendar below it (same rule)
+hl.layer_rule({ name = "slide-swaync-cc", match = { namespace = "^swaync-control-center$" }, animation = "slide right" })
 hl.layer_rule({ name = "blur-winshell",  match = { namespace = "^winshell-(qs|switcher|start|calendar|clipboard|taskview|project|preview)$" }, blur = true, ignore_alpha = 0.2 })
 hl.layer_rule({ name = "blur-osd",        match = { namespace = "^winshell-(osd|fingerprint)$" }, blur = true, ignore_alpha = 0.2 })
 -- winshell animates its flyouts itself (they glide out of the taskbar)
@@ -273,6 +271,9 @@ hl.layer_rule({ name = "no-anim-winshell", match = { namespace = "^winshell-.*$"
 -- …except the task view (Win + Tab): it fades in and out as a whole, like
 -- Windows (its contents move by themselves, see winshell's style.css)
 hl.layer_rule({ name = "fade-taskview",    match = { namespace = "^winshell-taskview$" }, no_anim = false, animation = "fade" })
+-- …and the calendar: slides in from the right edge and back out, together
+-- with the notification center above it (swaync-control-center)
+hl.layer_rule({ name = "slide-calendar",   match = { namespace = "^winshell-calendar$" }, no_anim = false, animation = "slide right" })
 -- slurp's selection overlay must vanish at once: otherwise it is still sliding
 -- out (dim + blue frame) while grim takes the screenshot
 hl.layer_rule({ name = "no-anim-slurp",    match = { namespace = "^selection$" },   no_anim = true })

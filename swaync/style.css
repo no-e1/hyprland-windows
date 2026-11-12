@@ -28,16 +28,8 @@
 }
 .control-center-list,
 .control-center-list-placeholder { background: transparent; }
-/* opens like winshell's calendar right below it (style.css .flyout.shown):
-   glides 60 px up out of the taskbar and fades in, 160 ms – Hyprland's own
-   layer animation is off for it (hyprland.lua), it slid the whole way up
-   from the screen edge and a beat after the calendar */
-@keyframes cc-in {
-    0%   { opacity: 0; transform: translateY(60px); }
-    50%  { opacity: 1; }
-    100% { opacity: 1; transform: none; }
-}
-.open .control-center { animation: cc-in 160ms cubic-bezier(0.1, 0.9, 0.2, 1); }
+/* slides in from the right screen edge (and back out) together with
+   winshell's calendar below it: Hyprland's layer animation, hyprland.lua */
 
 /* ── Header like Windows 11: "Notifications", [Clear all], bell ─ */
 .widget-title {

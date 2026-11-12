@@ -17,7 +17,7 @@ window.winshell {
 .switcher flowboxchild { padding: 0; background: transparent; }
 .card {
     padding: 8px 10px 10px 10px;
-    border-radius: 7px;
+    border-radius: 10px;
     border: 2px solid transparent;
 }
 .card:hover { background: rgba(255, 255, 255, 0.04); }
@@ -38,6 +38,8 @@ button.card-close:hover { background: #c42b1c; }
     background: rgba(0, 0, 0, 0.25);
     border-radius: 4px;
 }
+/* Alt+Tab: previews a little rounder, like Windows 11 */
+.switcher .thumb { border-radius: 7px; }
 
 /* ── Taskbar previews (hover over an app with windows) ────────────── */
 .tb-preview {
@@ -401,13 +403,32 @@ window.freeze-window { background: black; }
 /* desktop slide: stays on screen all the time; not 100 % transparent, or GTK
    never hands the compositor a buffer and the layer never appears */
 window.deskslide-window { background: rgba(0, 0, 0, 0.004); }
+/* the start menu's window stays on screen while the menu is closed (ready
+   for the Windows key, StartMenu.premap): same trick, or it never appears */
+window.start-window { background: rgba(0, 0, 0, 0.004); }
 
 /* ── Start menu ──────────────────────────────────────────────────── */
 .start {
+    margin-bottom: 12px;               /* above the taskbar (the window sits right on it) */
     min-width: 640px;
     background: rgba(36, 36, 36, 0.94);
     border: 1px solid rgba(255, 255, 255, 0.08);
     border-radius: 8px;
+}
+/* like Windows 11 the start menu really comes out of the taskbar: its whole
+   height up from below the window's bottom edge (= the taskbar's top), and
+   back down into it when it closes – no fade, the edge hides it. Fast at
+   first, then slowing down evenly. (It used to look laggy because the
+   motion began before the window was on screen – slide_in, winshell.py.) */
+.start.flyout { opacity: 1; transform: translateY(640px); }
+.start.flyout.shown {
+    transform: none;
+    transition: transform 200ms cubic-bezier(0, 0, 0.2, 1);
+}
+.start.flyout.leaving {
+    opacity: 1;
+    transform: translateY(640px);
+    transition: transform 170ms cubic-bezier(0.4, 0, 0.7, 0.5);
 }
 .start-body { padding: 28px 32px 8px 32px; }
 .start-search {
@@ -647,56 +668,58 @@ button.tb-peek {
 .tray-flyout flowboxchild { padding: 0; }
 /* like Windows 11: an app's icon dips when its window is minimized into it
    and hops when the window comes back out (DesktopAnim.bounce) */
-/* one calm move down (or up) and back, no bounce – Windows 11 is subtle
+/* one calm move down (or up), a moment's pause there, and back, no bounce – Windows 11 is subtle
    here. GTK has no per-step easing, so the curve is spelled out in steps */
 @keyframes tb-dip {
-    0% { transform: translateY(0.00px); }
-    5% { transform: translateY(1.32px); }
-    10% { transform: translateY(2.31px); }
-    15% { transform: translateY(3.02px); }
-    20% { transform: translateY(3.50px); }
-    25% { transform: translateY(3.79px); }
-    30% { transform: translateY(3.94px); }
-    35% { transform: translateY(3.99px); }
-    40% { transform: translateY(4.00px); }
-    45% { transform: translateY(3.92px); }
-    50% { transform: translateY(3.70px); }
-    55% { transform: translateY(3.38px); }
-    60% { transform: translateY(2.96px); }
-    65% { transform: translateY(2.50px); }
-    70% { transform: translateY(2.00px); }
-    75% { transform: translateY(1.50px); }
-    80% { transform: translateY(1.04px); }
-    85% { transform: translateY(0.62px); }
-    90% { transform: translateY(0.30px); }
-    95% { transform: translateY(0.08px); }
-    100% { transform: translateY(0.00px); }
+    0.0% { transform: translateY(0.00px); }
+    4.2% { transform: translateY(1.32px); }
+    8.4% { transform: translateY(2.31px); }
+    12.6% { transform: translateY(3.02px); }
+    16.8% { transform: translateY(3.50px); }
+    21.1% { transform: translateY(3.79px); }
+    25.3% { transform: translateY(3.94px); }
+    29.5% { transform: translateY(3.99px); }
+    33.7% { transform: translateY(4.00px); }
+    49.5% { transform: translateY(4.00px); }
+    53.7% { transform: translateY(3.92px); }
+    57.9% { transform: translateY(3.70px); }
+    62.1% { transform: translateY(3.38px); }
+    66.3% { transform: translateY(2.96px); }
+    70.5% { transform: translateY(2.50px); }
+    74.7% { transform: translateY(2.00px); }
+    78.9% { transform: translateY(1.50px); }
+    83.2% { transform: translateY(1.04px); }
+    87.4% { transform: translateY(0.62px); }
+    91.6% { transform: translateY(0.30px); }
+    95.8% { transform: translateY(0.08px); }
+    100.0% { transform: translateY(0.00px); }
 }
 @keyframes tb-hop {
-    0% { transform: translateY(-0.00px); }
-    5% { transform: translateY(-1.32px); }
-    10% { transform: translateY(-2.31px); }
-    15% { transform: translateY(-3.02px); }
-    20% { transform: translateY(-3.50px); }
-    25% { transform: translateY(-3.79px); }
-    30% { transform: translateY(-3.94px); }
-    35% { transform: translateY(-3.99px); }
-    40% { transform: translateY(-4.00px); }
-    45% { transform: translateY(-3.92px); }
-    50% { transform: translateY(-3.70px); }
-    55% { transform: translateY(-3.38px); }
-    60% { transform: translateY(-2.96px); }
-    65% { transform: translateY(-2.50px); }
-    70% { transform: translateY(-2.00px); }
-    75% { transform: translateY(-1.50px); }
-    80% { transform: translateY(-1.04px); }
-    85% { transform: translateY(-0.62px); }
-    90% { transform: translateY(-0.30px); }
-    95% { transform: translateY(-0.08px); }
-    100% { transform: translateY(-0.00px); }
+    0.0% { transform: translateY(-0.00px); }
+    4.2% { transform: translateY(-1.32px); }
+    8.4% { transform: translateY(-2.31px); }
+    12.6% { transform: translateY(-3.02px); }
+    16.8% { transform: translateY(-3.50px); }
+    21.1% { transform: translateY(-3.79px); }
+    25.3% { transform: translateY(-3.94px); }
+    29.5% { transform: translateY(-3.99px); }
+    33.7% { transform: translateY(-4.00px); }
+    49.5% { transform: translateY(-4.00px); }
+    53.7% { transform: translateY(-3.92px); }
+    57.9% { transform: translateY(-3.70px); }
+    62.1% { transform: translateY(-3.38px); }
+    66.3% { transform: translateY(-2.96px); }
+    70.5% { transform: translateY(-2.50px); }
+    74.7% { transform: translateY(-2.00px); }
+    78.9% { transform: translateY(-1.50px); }
+    83.2% { transform: translateY(-1.04px); }
+    87.4% { transform: translateY(-0.62px); }
+    91.6% { transform: translateY(-0.30px); }
+    95.8% { transform: translateY(-0.08px); }
+    100.0% { transform: translateY(-0.00px); }
 }
-button.tb-app.tb-dip image { animation: tb-dip 320ms linear; }
-button.tb-app.tb-hop image { animation: tb-hop 320ms linear; }
+button.tb-app.tb-dip image { animation: tb-dip 380ms linear; }
+button.tb-app.tb-hop image { animation: tb-hop 380ms linear; }
 button.tb-tray-arrow.open { background: rgba(255, 255, 255, 0.08); }
 /* like Windows 11: "^" turns into "v" while the flyout is open */
 button.tb-tray-arrow image { transition: transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1); }
