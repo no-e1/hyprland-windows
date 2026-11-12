@@ -575,6 +575,18 @@ end
 hl.window_rule({ name = "winshell-dialogs", match = { class = "^io\\.github\\.noe1\\.winshell$" },
                  float = true, center = true })
 
+-- A window coming out of maximized / snapped: its normal size (no bigger
+-- than the screen allows), centered on the screen it is on now – its old
+-- place may be on the other screen (or half on both) after it was moved.
+local function centered(w, g)
+    local x, y, ww, hh = work_area(w.monitor or hl.get_active_monitor())
+    local bar = has_bar(w) and BAR_HEIGHT or 0
+    local cw = math.min(g[3], ww)
+    local ch = math.min(g[4], hh - bar)
+    local top = y + math.floor((hh - (ch + bar)) / 2)
+    return { x + math.floor((ww - cw) / 2), top + bar, cw, ch }
+end
+
 function WinMax(action, w)
     w = w or hl.get_active_window()
     if not w or not w.mapped or fixed_size(w) then return end
@@ -610,6 +622,7 @@ function WinMax(action, w)
         -- no normal size known: a centered window, like Windows
         local g = saved_geometry[a] or { x + math.floor(ww * 0.15), y + math.floor(hh * 0.12),
                                          math.floor(ww * 0.7), math.floor(hh * 0.7) }
+        g = centered(w, g)                  -- in the middle of this screen
         saved_geometry[a] = nil
         client_maximized(a, false)
         set_geometry(a, g[1], g[2], g[3], g[4])
@@ -969,6 +982,7 @@ function WinUnsnap(w)
         local x, y, ww, hh = work_area(w.monitor or hl.get_active_monitor())
         g = { x + math.floor(ww * 0.2), y + math.floor(hh * 0.15), math.floor(ww * 0.6), math.floor(hh * 0.7) }
     end
+    g = centered(w, g)                      -- in the middle of the screen it is on
     set_geometry(a, g[1], g[2], g[3], g[4])
     if EnsureOnScreenSoon then EnsureOnScreenSoon(a) end
     return true
