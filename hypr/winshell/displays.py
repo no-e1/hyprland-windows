@@ -8,6 +8,7 @@ left of the layout is the main one.
 """
 import json
 import os
+import re
 import subprocess
 
 CONFIG = os.path.join(os.environ.get("XDG_CONFIG_HOME", os.path.expanduser("~/.config")),
@@ -279,3 +280,68 @@ def project_specs(mode, mons=None):
     else:
         specs = [on(m) for m in mons]       # extend
     return [sp for sp in specs if sp]
+
+
+# ── applying several screens one after the other ──
+def _geom(spec):
+    """(x, y, w, h) in logical px that a hl.monitor() table takes up – None
+    if it takes no room (off, duplicating) or isn't known ("auto")."""
+    if re.search(r'disabled = true', spec) or re.search(r'mirror = "[^"]+"', spec):
+        return None
+    pos = re.search(r'position = "(-?\d+)x(-?\d+)"', spec)
+    mode = re.search(r'mode = "(\d+)x(\d+)', spec)
+    sc = re.search(r'scale = ([\d.]+)', spec)
+    if not (pos and mode):
+        return None
+    k = float(sc.group(1)) if sc else 1.0
+    return (int(pos.group(1)), int(pos.group(2)), int(mode.group(1)) / k, int(mode.group(2)) / k)
+
+
+def _overlap(a, b):
+    return a[0] < b[0] + b[2] and b[0] < a[0] + a[2] and a[1] < b[1] + b[3] and b[1] < a[1] + a[3]
+
+
+def safe_order(specs, mons=None):
+    """The hl.monitor() tables in an order in which no two screens ever lie
+    on top of each other – they are set one after the other, and e.g. moving
+    the second screen to the left of the laptop's (0x0) while the laptop's
+    still stood at 0x0 made Hyprland warn "monitor layout is set up
+    incorrectly". When screens swap places, one is parked far to the right
+    for a moment first."""
+    mons = all_monitors() if mons is None else mons
+    cur = {}
+    for m in mons:
+        if m.get("disabled") or (m.get("mirrorOf") or "none") != "none":
+            continue
+        k = m.get("scale") or 1
+        cur[m["name"]] = (m["x"], m["y"], m["width"] / k, m["height"] / k)
+    todo = []
+    for sp in specs:
+        n = re.search(r'output = "([^"]+)"', sp)
+        if n:
+            todo.append((n.group(1), sp))
+    out = []
+    while todo:
+        for i, (n, sp) in enumerate(todo):
+            g = _geom(sp)
+            if g is None or not any(_overlap(g, cur[o]) for o in cur if o != n):
+                out.append(sp)
+                if g is None:
+                    cur.pop(n, None)
+                else:
+                    cur[n] = g
+                todo.pop(i)
+                break
+        else:
+            n, sp = todo[0]             # stuck (swapping places): park this one first
+            far = int(max((g[0] + g[2] for g in cur.values()), default=0)) + 1000
+            parked = re.sub(r'position = "[^"]*"', f'position = "{far}x0"', sp)
+            out.append(parked)
+            g = _geom(parked)
+            if g is None:
+                cur.pop(n, None)
+                todo.pop(0)
+                out[-1] = sp
+            else:
+                cur[n] = g
+    return out

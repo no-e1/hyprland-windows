@@ -3,3 +3,4 @@ __pycache__/
 hypr/.current_wallpaper
 .uuid
 hypr/monitors.lua
+hypr/mouse.lua

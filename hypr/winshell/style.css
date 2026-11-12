@@ -766,6 +766,19 @@ window.shutdown-backdrop { background: rgba(0, 0, 0, 0.35); }
 .shutdown-foot button:focus-visible { outline: 2px solid #ffffff; outline-offset: 1px; }
 
 /* ── Display settings (Win + I → Displays) ───────────────────────── */
+/* their title bar: like the hyprbars ones, only – and X (a fixed-size dialog) */
+.dlg-bar { min-height: 32px; padding: 0; margin: 0; background: #202020; }
+.dlg-title { font-family: "Inter", sans-serif; font-size: 10pt; color: #ffffff; padding-left: 12px; }
+button.dlg-btn {
+    min-width: 46px; min-height: 32px; padding: 0; margin: 0;
+    border-radius: 0; border: none; box-shadow: none; outline: none;
+    background: transparent; color: #ffffff;
+    font-family: "Symbols Nerd Font"; font-size: 10pt;
+}
+button.dlg-btn:hover { background: rgba(255, 255, 255, 0.08); }
+button.dlg-btn:active { background: rgba(255, 255, 255, 0.05); }
+button.dlg-close:hover { background: #c42b1c; }
+button.dlg-close:active { background: #b22a1b; }
 window.display-settings { background: #202020; color: #ffffff; font-family: "Inter", sans-serif; }
 .ds-body { padding: 24px 28px; }
 .ds-title { font-size: 26px; font-weight: 600; }

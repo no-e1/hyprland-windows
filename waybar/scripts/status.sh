@@ -46,15 +46,27 @@ bat() {
     json "$cls" "$tip"
 }
 
+# Ending this script ends everything it started (nmcli monitor, pactl
+# subscribe, udevadm monitor …) – before, those kept running forever when the
+# program reading this script went away: every winshell restart left a set
+# behind (1.4 GB after a day). winshell starts this script in a process group
+# of its own; the pipelines run in the background and `wait` lets the trap
+# run right away (bash runs traps only once a foreground command is done).
+if [ "$(ps -o pgid= $$ | tr -d ' ')" = "$$" ]; then
+    trap 'trap - TERM INT HUP EXIT; kill 0 2>/dev/null' TERM INT HUP EXIT
+fi
+
 case "$1" in
     net)
         net
         { nmcli monitor 2>/dev/null & while sleep 30; do echo tick; done; } |
-            while read -r _; do net; done ;;
+            while read -r _; do net; done &
+        wait ;;
     vol)
         vol
         pactl subscribe 2>/dev/null | grep --line-buffered -E "'change' on (sink|server)" |
-            while read -r _; do vol; done ;;
+            while read -r _; do vol; done &
+        wait ;;
     bat)
         # redraw as soon as the charger is plugged in or out (udev event),
         # plus every 30 s for the charge level
@@ -63,5 +75,6 @@ case "$1" in
           while sleep 30; do echo tick; done; } |
             while read -r line; do
                 case "$line" in UDEV*|tick) bat ;; esac
-            done ;;
+            done &
+        wait ;;
 esac

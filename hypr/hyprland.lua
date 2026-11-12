@@ -193,6 +193,9 @@ hl.config({
 
 -- The touchpad keeps libinput's default speed (close to Windows' default)
 hl.device({ name = "syna8018:00-06cb:ce67-touchpad", sensitivity = 0 })
+-- Mouse settings (Win + I → Mouse): primary button, pointer / touchpad
+-- speed, scroll speed – kept in mouse.lua (not in the repo – per machine)
+pcall(dofile, home .. "/.config/hypr/mouse.lua")
 
 -- Touchpad: 4-finger swipe switches virtual desktops (like Windows) – on
 -- all screens at once (a desktop spans all of them; Hyprland's own
@@ -497,7 +500,10 @@ local BAR_HEIGHT = 32
 OWN_TITLEBAR = { "brave-browser", "discord", "vesktop", "webcord", "steam",
                  "spotify", "obsidian", "slack", "firefox", "org.mozilla.firefox",
                  "code", "code-oss", "codium", "vscodium", "VSCodium",
-                 "com.visualstudio.CodeOSS" }   -- VSCodium on Wayland
+                 "com.visualstudio.CodeOSS",    -- VSCodium on Wayland
+                 -- winshell's settings dialogs: their own bar with – and X
+                 -- only (fixed size, no maximize, no snapping)
+                 "io.github.noe1.winshell" }
 OWN_TITLEBAR_PREFIX = { "org.gnome." }
 
 local function has_bar(w)
@@ -957,7 +963,7 @@ end
 -- back and stays under the cursor at the same relative spot
 function WinDragStart()
     local w = hl.get_active_window()
-    if not w then return end
+    if not w or fixed_size(w) then return end      -- a dialog: no snapping, no maximize
     if drag and drag.timer then drag.timer:set_enabled(false) end
     local c = hl.get_cursor_pos() or { x = 0, y = 0 }
     drag = { addr = w.address, ticks = 0, since = 0, c0 = { x = c.x, y = c.y }, moved = false }

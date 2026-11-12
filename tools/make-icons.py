@@ -70,6 +70,23 @@ save("settings-app",
      f'<path d="M{"L".join(_g)}z" fill="url(#sg)"/>'
      '<circle cx="12" cy="12" r="5.4" fill="url(#sr)"/><circle cx="12" cy="12" r="3.65" fill="url(#sb)"/></g>')
 
+# File Explorer like Windows 11: a yellow folder – the back with its tab a
+# deeper yellow, the front lighter – with a rounded blue bar in the middle
+# of its lower edge
+save("explorer",
+     '<defs><linearGradient id="eb" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#f0ac1c"/>'
+     '<stop offset="1" stop-color="#d98c0b"/></linearGradient>'
+     '<linearGradient id="ef" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffe17e"/>'
+     '<stop offset="1" stop-color="#fcc23c"/></linearGradient>'
+     '<linearGradient id="el" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#3fa4f4"/>'
+     '<stop offset="1" stop-color="#0f62c3"/></linearGradient></defs>'
+     '<g transform="translate(12 12) scale(1.1) translate(-12 -12)">'      # as big as the box allows
+     '<path d="M3.6 4.2h5.1c.42 0 .82.17 1.1.47l1.55 1.63h9.05c.88 0 1.6.72 1.6 1.6v10.4c0 .88-.72 1.6-1.6 1.6'
+     'H3.6c-.88 0-1.6-.72-1.6-1.6V5.8c0-.88.72-1.6 1.6-1.6z" fill="url(#eb)"/>'
+     '<path d="M2 10.1c0-.88.72-1.6 1.6-1.6h16.8c.88 0 1.6.72 1.6 1.6v8.2c0 .88-.72 1.6-1.6 1.6H3.6'
+     'c-.88 0-1.6-.72-1.6-1.6z" fill="url(#ef)"/>'
+     '<rect x="5.6" y="13.9" width="12.8" height="6" rx="1.7" fill="url(#el)"/></g>')
+
 # Win + P (project): which screens show the picture – bright: on, faint: off
 def screen(x, y, op):
     return (f'<rect x="{x}" y="{y}" width="9.5" height="7" rx="1" stroke="{W}" stroke-opacity="{op}" '

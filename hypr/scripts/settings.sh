@@ -10,6 +10,7 @@ items+=("󰖩  Wi-Fi")
 items+=("󰂯  Bluetooth")
 items+=("󰕾  Sound")
 items+=("󰍹  Displays")
+items+=("󰍽  Mouse")
 items+=("󰸉  Background")
 has nwg-look && items+=("󰏘  Appearance (colors, fonts)")
 items+=("󰛳  Network connections")
@@ -23,6 +24,7 @@ case "$choice" in
     *Bluetooth)           exec blueman-manager ;;
     *Sound)               exec pavucontrol ;;
     *Displays)         exec "$HOME/.config/hypr/winshell/winshell-ctl" displays ;;
+    *Mouse)            exec "$HOME/.config/hypr/winshell/winshell-ctl" mouse ;;
     *Background)     exec "$S/wallpaper.sh" pick ;;
     *Appearance*)             exec nwg-look ;;
     *connections) exec nm-connection-editor ;;

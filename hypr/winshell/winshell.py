@@ -308,6 +308,41 @@ def layer_window(app, namespace, layer, anchors=(), margins=None,
     return w
 
 
+def dialog_titlebar(win, title):
+    """The title bar of winshell's settings dialogs, looking like the others
+    (hyprbars: 32 px, 46 px wide caption buttons, close turns red) – but
+    like a fixed-size Windows dialog only – and X, no maximize. Hyprland
+    gives these windows no hyprbars bar (hyprland.lua); dragging this one
+    moves the window without snapping it to an edge or maximizing it."""
+    row = Gtk.Box()
+    row.add_css_class("dlg-bar")
+    t = label(title, "dlg-title")
+    t.set_hexpand(True)
+    row.append(t)
+    for glyph, cls, act in (("\ueaba", "dlg-min", win.minimize),
+                            ("\ueab8", "dlg-close", win.close)):
+        b = Gtk.Button(label=glyph)
+        b.add_css_class("dlg-btn")
+        b.add_css_class(cls)
+        b.set_focusable(False)
+        b.connect("clicked", lambda *_, f=act: f())
+        row.append(b)
+    handle = Gtk.WindowHandle()             # drag it to move the window
+    handle.set_child(row)
+    win.set_titlebar(handle)
+
+
+# Our own icons for some apps – the same in the start menu as on the taskbar
+APP_ICONS = {"kitty.desktop": "win11-terminal", "org.kde.dolphin.desktop": "win11-explorer"}
+
+
+def app_gicon(app):
+    own = APP_ICONS.get(app.get_id() or "")
+    if own:
+        return Gio.ThemedIcon.new(own)
+    return app.get_icon() or Gio.ThemedIcon.new("application-x-executable")
+
+
 class SlideBox(Gtk.Widget):
     """A row (or a grid with `columns`) of icons that glide to their new
     place whenever the order changes – like the Windows 11 taskbar, where the
@@ -497,7 +532,8 @@ class AppIcons:
             if wm:
                 self.map[wm.lower()] = gicon
 
-    OVERRIDE = {"kitty": "win11-terminal", "io.github.noe1.winshell": "win11-settings-app"}
+    OVERRIDE = {"kitty": "win11-terminal", "io.github.noe1.winshell": "win11-settings-app",
+                "org.kde.dolphin": "win11-explorer"}
 
     def get(self, cls):
         c = (cls or "").lower()
@@ -2258,6 +2294,12 @@ class CalendarFlyout:
                     empty = not info.get("count")
                     if empty != self.nc_empty:
                         # nothing to show: smaller panel; something arrived: full size
+                        if empty and self.nc_empty is not None:
+                            # "Clear all" / the last one closed: let swaync's
+                            # slide-out play first – reloading its config
+                            # rebuilds the panel and cut the animation off
+                            # (a new one meanwhile: the next line sets it back)
+                            time.sleep(0.45)
                         self.nc_empty = empty
                         ncplace.save(empty=empty)
                         ncplace.sync()
@@ -2551,7 +2593,7 @@ class StartMenu:
     def result_row(self, app, name, best):
         box = Gtk.Box(spacing=12)
         box.add_css_class("result")
-        img = Gtk.Image.new_from_gicon(app.get_icon() or Gio.ThemedIcon.new("application-x-executable"))
+        img = Gtk.Image.new_from_gicon(app_gicon(app))
         img.set_pixel_size(32 if best else 20)
         box.append(img)
         text = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, valign=Gtk.Align.CENTER)
@@ -2593,7 +2635,7 @@ class StartMenu:
         app = row.app
         top = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6, halign=Gtk.Align.CENTER)
         top.add_css_class("details-top")
-        img = Gtk.Image.new_from_gicon(app.get_icon() or Gio.ThemedIcon.new("application-x-executable"))
+        img = Gtk.Image.new_from_gicon(app_gicon(app))
         img.set_pixel_size(64)
         top.append(img)
         top.append(label(row.name, "details-name", xalign=0.5))
@@ -2715,7 +2757,7 @@ class StartMenu:
         for a in apps:
             tile = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
             tile.add_css_class("app")
-            img = Gtk.Image.new_from_gicon(a.get_icon() or Gio.ThemedIcon.new("application-x-executable"))
+            img = Gtk.Image.new_from_gicon(app_gicon(a))
             img.set_pixel_size(32)
             tile.append(img)
             name = label(name_of(a), "app-name", xalign=0.5)
@@ -4570,6 +4612,7 @@ class DisplaySettings:
             return
         self.load()
         win = Gtk.Window(application=self.app, title="Display settings")
+        dialog_titlebar(win, "Settings")
         win.set_default_size(620, 640)
         win.set_resizable(False)            # a dialog: no maximize / full screen (see hyprland.lua)
         win.add_css_class("display-settings")
@@ -4895,7 +4938,7 @@ class DisplaySettings:
         self.confirming = {"old": {n: self.before[n] for n in todo if n in self.before},
                            "old_primary": self.before_primary, "new": new,
                            "left": self.CONFIRM, "snap": snap, "timer": 0}
-        cycled = any(self.set_screen(n, new[n], self.before.get(n)) for n in todo)
+        cycled = self.set_screens({n: new[n] for n in todo}, self.before)
         if self.primary != self.before_primary:
             displays.save(primary=self.primary)
         self.settle(snap, 1900 if cycled else 700)
@@ -4917,19 +4960,38 @@ class DisplaySettings:
             return True
         self.confirming["timer"] = GLib.timeout_add(1000, tick)
 
-    @staticmethod
-    def set_screen(name, spec, old):
+    def set_screens(self, specs, old):
+        """Apply several screens – in an order in which they never lie on
+        top of each other (displays.safe_order). True if one was cycled."""
+        cycled = False
+        for sp in displays.safe_order(list(specs.values())):
+            name = re.search(r'output = "([^"]+)"', sp).group(1)
+            cycled = self.set_screen(name, sp, old.get(name)) or cycled
+        return cycled
+
+    cycling = {}                        # screen -> the settings it gets when it's back on
+
+    @classmethod
+    def set_screen(cls, name, spec, old):
         """Apply a screen's settings. When its mode (refresh rate) changes it
         is switched off and on again around it: changed on the fly, the
         screen froze (a still picture) until it was switched off and on.
         Returns True when it was cycled (takes a moment longer)."""
+        if name in cls.cycling:             # off for a moment: it comes back with this
+            cls.cycling[name] = spec
+            return True
         mode = re.search(r'mode = "([^"]*)"', spec)
         old_mode = re.search(r'mode = "([^"]*)"', old or "")
         if old_mode and mode and mode.group(1) != old_mode.group(1):
             if SHELL:
                 SHELL.drop_bar(name)        # before the screen goes: no stray taskbar
             hypr_eval(f'hl.monitor({{ output = "{name}", disabled = true }})')
-            GLib.timeout_add(700, lambda: hypr_eval(f"hl.monitor({spec})") and False)
+            cls.cycling[name] = spec
+
+            def back():
+                hypr_eval(f"hl.monitor({cls.cycling.pop(name, spec)})")
+                return False
+            GLib.timeout_add(700, back)
             return True
         hypr_eval(f"hl.monitor({spec})")
         return False
@@ -4986,10 +5048,163 @@ class DisplaySettings:
         c = self.end_confirm()
         if not c:
             return
-        cycled = any(self.set_screen(n, spec, c["new"].get(n)) for n, spec in c["old"].items())
+        cycled = self.set_screens(c["old"], c["new"])
         if self.primary != c["old_primary"]:
             displays.save(primary=c["old_primary"])
         self.settle(c["snap"], 1900 if cycled else 700)
+
+
+# ── Mouse settings ──────────────────────────────────────────────────────────
+MOUSE_LUA = os.path.expanduser("~/.config/hypr/mouse.lua")
+MOUSE_JSON = os.path.join(os.environ.get("XDG_CONFIG_HOME", os.path.expanduser("~/.config")),
+                          "winshell", "mouse.json")
+
+
+class MouseSettings:
+    """Like Windows' Settings → Bluetooth & devices → Mouse / Touchpad:
+    primary button, pointer speed (1–20, Windows' 10 is the default), lines
+    to scroll at a time (3 by default) and the touchpad's cursor and scroll
+    speed. Changes apply right away and are kept in ~/.config/hypr/mouse.lua
+    (hyprland.lua loads it; per machine, not in the repo)."""
+    DEFAULTS = {"right": False, "speed": 10, "lines": 3, "tp_speed": 5, "tp_scroll": 5}
+
+    def __init__(self, app, shell):
+        self.app, self.shell = app, shell
+        self.win = None
+        self.timer = 0
+        self.cfg = dict(self.DEFAULTS)
+        try:
+            with open(MOUSE_JSON) as f:
+                self.cfg.update({k: v for k, v in json.load(f).items() if k in self.DEFAULTS})
+        except (OSError, ValueError, AttributeError):
+            pass
+
+    # Windows' scales → Hyprland's numbers (10 / 3 / 5 / 5 = how it was set up)
+    @staticmethod
+    def sensitivity(v):             # pointer speed 1..20 → libinput -1..1 (10 → -0.3)
+        return round(-0.3 - (10 - v) * 0.7 / 9 if v <= 10 else -0.3 + (v - 10) * 0.1, 3)
+
+    @staticmethod
+    def tp_sensitivity(v):          # touchpad cursor speed 1..10 → -0.6..0.75 (5 → 0)
+        return round((v - 5) * 0.15, 3)
+
+    @staticmethod
+    def touchpads():
+        mice = (hypr_json("devices") or {}).get("mice", [])
+        return [m["name"] for m in mice if "touchpad" in m.get("name", "").lower()]
+
+    def lua(self):
+        c = self.cfg
+        out = [f'hl.config({{ input = {{ left_handed = {"true" if c["right"] else "false"}, '
+               f'sensitivity = {self.sensitivity(c["speed"])}, '
+               f'scroll_factor = {round(c["lines"] / 3, 3)}, '
+               f'touchpad = {{ scroll_factor = {round(c["tp_scroll"] * 0.14, 3)} }} }} }})']
+        for name in self.touchpads():
+            out.append(f'hl.device({{ name = "{name}", sensitivity = {self.tp_sensitivity(c["tp_speed"])} }})')
+        return out
+
+    def apply(self):
+        self.timer = 0
+        lines = self.lua()
+        for ln in lines:
+            hypr_eval(ln)
+        try:
+            os.makedirs(os.path.dirname(MOUSE_JSON), exist_ok=True)
+            with open(MOUSE_JSON, "w") as f:
+                json.dump(self.cfg, f, indent=2)
+            with open(MOUSE_LUA + ".tmp", "w") as f:
+                f.write("-- written by winshell's Mouse settings (Win + I → Mouse)\n"
+                        "-- delete this file to go back to the defaults\n" + "\n".join(lines) + "\n")
+            os.replace(MOUSE_LUA + ".tmp", MOUSE_LUA)
+        except OSError as e:
+            print("winshell: mouse settings:", e, file=sys.stderr, flush=True)
+        return False
+
+    def changed(self, key, value):
+        if self.cfg.get(key) == value:
+            return
+        self.cfg[key] = value
+        if self.timer:
+            GLib.source_remove(self.timer)
+        self.timer = GLib.timeout_add(150, self.apply)     # while dragging: not on every step
+
+    # ── window ──
+    def slider(self, box, title, key, lo, hi, note=None):
+        box.append(label(title, "ds-info"))
+        row = Gtk.Box(spacing=12)
+        sc = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, lo, hi, 1)
+        sc.set_hexpand(True)
+        sc.set_draw_value(False)
+        sc.set_round_digits(0)
+        sc.set_value(self.cfg[key])
+        sc.add_css_class("ms-scale")
+        val = label(str(self.cfg[key]), "ds-info")
+        val.set_width_chars(3)
+
+        def moved(s):
+            v = int(round(s.get_value()))
+            val.set_text(str(v))
+            self.changed(key, v)
+        sc.connect("value-changed", moved)
+        row.append(sc)
+        row.append(val)
+        box.append(row)
+        if note:
+            box.append(label(note, "ds-hint"))
+
+    def show(self):
+        if self.win:
+            self.win.present()
+            return
+        win = Gtk.Window(application=self.app, title="Mouse settings")
+        dialog_titlebar(win, "Settings")
+        win.set_default_size(520, 470)
+        win.set_resizable(False)            # a dialog: no maximize / full screen (see hyprland.lua)
+        win.add_css_class("display-settings")
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        box.add_css_class("ds-body")
+        box.append(label("Mouse", "ds-title"))
+        row = Gtk.Box(spacing=12)
+        row.append(label("Primary mouse button", "ds-info"))
+        dd = Gtk.DropDown.new_from_strings(["Left", "Right"])
+        dd.add_css_class("ds-drop")
+        dd.set_halign(Gtk.Align.END)
+        dd.set_hexpand(True)
+        dd.set_selected(1 if self.cfg["right"] else 0)
+        dd.connect("notify::selected", lambda d, _p: self.changed("right", d.get_selected() == 1))
+        row.append(dd)
+        box.append(row)
+        self.slider(box, "Mouse pointer speed", "speed", 1, 20)
+        self.slider(box, "Lines to scroll at a time", "lines", 1, 15)
+        if self.touchpads():
+            t = label("Touchpad", "ds-title")
+            t.set_margin_top(12)
+            box.append(t)
+            self.slider(box, "Cursor speed", "tp_speed", 1, 10)
+            self.slider(box, "Scroll speed", "tp_scroll", 1, 10)
+        actions = Gtk.Box(halign=Gtk.Align.END, spacing=8, vexpand=True, valign=Gtk.Align.END)
+        reset = Gtk.Button(label="Reset to defaults")
+        reset.add_css_class("ds-button")
+
+        def do_reset(*_):
+            self.cfg = dict(self.DEFAULTS)
+            self.apply()
+            win.close()
+            GLib.timeout_add(50, lambda: self.show() and False)
+        reset.connect("clicked", do_reset)
+        actions.append(reset)
+        box.append(actions)
+        win.set_child(box)
+        win.connect("close-request", self.closed)
+        self.win = win
+        win.present()
+
+    def closed(self, *_):
+        if self.timer:
+            GLib.source_remove(self.timer)
+            self.apply()
+        self.win = None
+        return False
 
 
 # ── Win + P: project ────────────────────────────────────────────────────────
@@ -5109,7 +5324,7 @@ class ProjectMenu:
         snap = self.shell.screens_snapshot()
         mirrored = {m["name"] for m in displays.all_monitors()
                     if (m.get("mirrorOf") or "none") != "none"}
-        for sp in specs:
+        for sp in displays.safe_order(specs):     # never two screens on top of each other
             name = re.match(r'\{ output = "([^"]+)"', sp).group(1)
             if re.match(r'\{ output = "[^"]+", disabled = true', sp):
                 self.shell.drop_bar(name)
@@ -5201,6 +5416,7 @@ class Taskbar:
     # own icons: the terminal like Windows Terminal, winshell's own windows
     # (Display settings) with Windows' settings gear
     ICON_OVERRIDE = {"kitty.desktop": "win11-terminal",
+                     "org.kde.dolphin.desktop": "win11-explorer",
                      "class:io.github.noe1.winshell": "win11-settings-app"}
     DEFAULT_PINNED = ["brave-browser.desktop", "kitty.desktop"]
 
@@ -5563,8 +5779,11 @@ class Taskbar:
         battery changes) and show the matching icon."""
         while True:
             try:
+                # a process group of its own, ended with winshell: status.sh
+                # then ends everything it started (no monitors left behind)
                 proc = subprocess.Popen([STATUS, what], stdout=subprocess.PIPE, text=True,
-                                        stderr=subprocess.DEVNULL, env=child_env())
+                                        stderr=subprocess.DEVNULL, env=child_env(),
+                                        start_new_session=True, preexec_fn=die_with_parent)
                 for line in proc.stdout:
                     try:
                         data = json.loads(line)
@@ -5995,6 +6214,7 @@ class WinShell(Gtk.Application):
         import thispc                       # "This PC" for Dolphin: drive tiles with free space
         self.thispc = thispc.ThisPC()
         self.display_settings = DisplaySettings(self, self)
+        self.mouse_settings = MouseSettings(self, self)
         self.project = ProjectMenu(self, self)
 
         if os.path.exists(FIFO) and not os.path.isfile(FIFO):
@@ -6195,6 +6415,8 @@ class WinShell(Gtk.Application):
                 self.desk.stop()
         elif what == "taskview":                # Win + Tab
             self.taskview.hide() if arg == "hide" else self.taskview.toggle()
+        elif what == "mouse":                   # Win + I → Mouse
+            self.mouse_settings.show()
         elif what == "displays":                # Win + I → Displays
             ds = self.display_settings
             ds.show()
