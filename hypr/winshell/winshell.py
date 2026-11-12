@@ -805,6 +805,14 @@ class Switcher:
             t.set_max_width_chars(1)
             head.set_size_request(self.W, -1)
             head.append(t)
+            # × top right (on hover and on the selected card): close that window
+            # right here, while Alt is still held – the switcher stays open
+            x = Gtk.Button(child=icon("win11-close", 12), valign=Gtk.Align.CENTER)
+            x.add_css_class("card-close")
+            x.set_focusable(False)
+            x.set_tooltip_text("Close window")
+            x.connect("clicked", lambda *_a, addr=c["address"]: self.close_item(addr))
+            head.append(x)
             card.append(head)
 
             stack = Gtk.Stack()
@@ -866,8 +874,28 @@ class Switcher:
         return False
 
     def pick(self, i):
+        if getattr(self, "closing_item", False):
+            self.closing_item = False           # that click was the ×
+            return
         self.sel = i
         self.commit()
+
+    def close_item(self, addr):
+        """The × on a card: the window closes, its card goes, the rest stay."""
+        self.closing_item = True
+        GLib.timeout_add(150, lambda: setattr(self, "closing_item", False) or False)
+        dispatch(f'hl.dsp.window.close({{ window = "address:{addr}" }})')
+        i = next((k for k, c in enumerate(self.items) if c["address"] == addr), None)
+        if i is None:
+            return
+        self.items.pop(i)
+        if not self.items:
+            self.hide()
+            return
+        if i < self.sel or self.sel >= len(self.items):
+            self.sel = max(0, self.sel - 1)
+        self.build()
+        self.update_selection()
 
     def commit(self):
         if not self.visible:
@@ -5255,6 +5283,13 @@ class MouseSettings:
         sc.set_round_digits(0)
         sc.set_value(self.cfg[key])
         sc.add_css_class("ms-scale")
+        # the mouse wheel / touchpad doesn't move it: scrolling over the window
+        # changed the speeds while you scrolled (the scroll speed itself too)
+        # and it jumped around; drag or click it instead
+        no_wheel = Gtk.EventControllerScroll(flags=Gtk.EventControllerScrollFlags.BOTH_AXES,
+                                             propagation_phase=Gtk.PropagationPhase.CAPTURE)
+        no_wheel.connect("scroll", lambda *_: True)
+        sc.add_controller(no_wheel)
         val = label(str(self.cfg[key]), "ds-info")
         val.set_width_chars(3)
 
