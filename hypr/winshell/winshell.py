@@ -332,6 +332,20 @@ def dialog_titlebar(win, title):
     win.set_titlebar(handle)
 
 
+def clock_with_dnd(bar):
+    """The taskbar clock, and right of it a "Zzz" while do not disturb is on (part of the clock button: a click opens
+    the calendar and the notifications). Sets bar.dnd_img."""
+    box = Gtk.Box(spacing=10)
+    box.append(bar.clock_lbl)
+    bar.dnd_img = icon("win11-dnd", 16)
+    bar.dnd_img.add_css_class("tb-dnd")
+    bar.dnd_img.set_valign(Gtk.Align.CENTER)
+    bar.dnd_img.set_visible(bool(SHELL and getattr(SHELL, "dnd_on", False)))
+    bar.dnd_img.set_tooltip_text("Do not disturb is on")
+    box.append(bar.dnd_img)
+    return box
+
+
 # Our own icons for some apps – the same in the start menu as on the taskbar
 APP_ICONS = {"kitty.desktop": "win11-terminal", "org.kde.dolphin.desktop": "win11-explorer"}
 
@@ -1174,7 +1188,7 @@ class QuickSettings:
             ("wifi", "win11-wifi-4", "Wi-Fi", self.toggle_wifi, lambda: self.open_page("wifi")),
             ("bt", "win11-bluetooth", "Bluetooth", self.toggle_bt, lambda: self.open_page("bluetooth")),
             ("airplane", "win11-airplane", "Airplane mode", self.toggle_airplane, None),
-            ("dnd", "win11-moon", "Do not disturb", self.toggle_dnd, None),
+            ("dnd", "win11-dnd", "Do not disturb", self.toggle_dnd, None),
             ("snip", "win11-snip", "Snipping Tool", self.snip, None),
             ("lock", "win11-lock", "Lock", self.lock, None),
         ]
@@ -2297,6 +2311,9 @@ class CalendarFlyout:
                     except ValueError:
                         continue
                     visible = bool(info.get("visible"))
+                    dnd = bool(info.get("dnd"))
+                    if dnd != getattr(self.shell, "dnd_on", None):
+                        GLib.idle_add(self.shell.show_dnd, dnd)
                     empty = not info.get("count")
                     if empty != self.nc_empty:
                         # nothing to show: smaller panel; something arrived: full size
@@ -4096,8 +4113,11 @@ class DesktopAnim:
 
     def bounce(self, classes, kind, delay):
         """The taskbar icons of these apps dip ("dip": a window lands in
-        them) or hop ("hop": a window comes out) – CSS animation, style.css."""
-        buttons = {b for b in (self.button(c, con) for con, c in classes) if b}
+        them) or hop ("hop": a window comes out) – CSS animation, style.css.
+        On every screen's taskbar, not only the one where the window is."""
+        screens = [getattr(self.shell, "primary", None)] + list(getattr(self.shell, "secondaries", {}))
+        buttons = {b for _con, c in classes for scr in screens
+                   for b in [self.button(c, scr)] if b}
 
         def start():
             for b in buttons:
@@ -4105,7 +4125,7 @@ class DesktopAnim:
                 b.remove_css_class("tb-hop")
             # a frame later, so the same animation can start again
             GLib.timeout_add(20, lambda: [b.add_css_class("tb-" + kind) for b in buttons] and False)
-            GLib.timeout_add(540, lambda: [b.remove_css_class("tb-" + kind) for b in buttons] and False)
+            GLib.timeout_add(400, lambda: [b.remove_css_class("tb-" + kind) for b in buttons] and False)
             return False
         GLib.timeout_add(max(1, int(delay * 1000)), start)
 
@@ -4188,8 +4208,8 @@ class DesktopAnim:
             # the pictures cover the windows now: hide the real ones
             GLib.timeout_add(34, lambda: (hypr_eval(f"{callback}({gen})"), False)[1])
             # together with the windows, like Windows: the icon is lowest
-            # (40 % into its 460 ms) right when they land (OUT = 240 ms)
-            self.bounce(classes, "dip", 0.05)
+            # (40 % into its 320 ms) right when they land (OUT = 240 ms)
+            self.bounce(classes, "dip", 0.11)
         else:
             self.done = lambda: hypr_eval(f"{callback}({gen})")
             self.bounce(classes, "hop", 0)                  # as they take off
@@ -4669,7 +4689,9 @@ class DisplaySettings:
         self.main_chk.connect("toggled", self.on_main)
         box.append(self.main_chk)
         # bottom: "Apply" – or, after applying, Windows' question with a countdown
-        self.bottom = Gtk.Stack(vexpand=True, valign=Gtk.Align.END)
+        self.bottom = Gtk.Stack(vexpand=True, valign=Gtk.Align.END,
+                                transition_type=Gtk.StackTransitionType.SLIDE_UP_DOWN,
+                                transition_duration=220)       # the question slides in
         actions = Gtk.Box(halign=Gtk.Align.END, spacing=8)
         self.apply_btn = Gtk.Button(label="Apply")
         self.apply_btn.add_css_class("ds-button")
@@ -4688,6 +4710,8 @@ class DisplaySettings:
         keep = Gtk.Button(label="Keep changes", valign=Gtk.Align.CENTER)
         keep.add_css_class("ds-button")
         keep.add_css_class("ds-accent")
+        keep.add_css_class("ds-keep")       # the countdown runs down inside it (style.css)
+        self.keep_btn = keep
         keep.connect("clicked", lambda *_: self.keep())
         conf.append(keep)
         rev = Gtk.Button(label="Revert", valign=Gtk.Align.CENTER)
@@ -4949,6 +4973,7 @@ class DisplaySettings:
             displays.save(primary=self.primary)
         self.settle(snap, 1900 if cycled else 700)
         self.bottom.set_visible_child_name("confirm")
+        self.start_countdown()
         self.apply_btn.set_sensitive(False)
         self.update_info()
         self.count_lbl.set_text(f"Reverting in {self.CONFIRM} seconds")
@@ -5013,6 +5038,22 @@ class DisplaySettings:
                 self.win.present()
             return False
         GLib.timeout_add(delay, after)
+
+    def start_countdown(self):
+        """The fill in "Keep changes" empties over the 10 s (CSS animation,
+        restarted a frame later so it runs from the start every time)."""
+        b = self.keep_btn
+        b.remove_css_class("counting")
+        GLib.timeout_add(30, lambda: b.add_css_class("counting") and False)
+
+    def preview_confirm(self):
+        """Only the question with its countdown, nothing applied (to look at it)."""
+        self.show()
+        self.bottom.set_visible_child_name("confirm")
+        self.count_lbl.set_text(f"Reverting in {self.CONFIRM} seconds")
+        self.start_countdown()
+        GLib.timeout_add(self.CONFIRM * 1000, lambda: self.win and not self.confirming
+                         and self.bottom.set_visible_child_name("apply") and False)
 
     def end_confirm(self):
         c, self.confirming = self.confirming, None
@@ -5384,7 +5425,7 @@ class SecondaryTaskbar:
         self.clock_lbl = Gtk.Label(justify=Gtk.Justification.RIGHT, xalign=1.0)
         self.clock_lbl.add_css_class("tb-clock-text")
         self.clock_lbl.set_text(self.shell.taskbar.clock_lbl.get_text())
-        right.append(button(self.clock_lbl, "tb-clock",
+        right.append(button(clock_with_dnd(self), "tb-clock",
                             on_click=lambda: (self.shell.flyouts_on(self.connector),
                                               self.shell.calendar.toggle())))
         right.append(button(Gtk.Box(), "tb-peek", on_click=lambda: spawn(f"{SCRIPTS}/wallpaper.sh next")))
@@ -5405,13 +5446,213 @@ class SecondaryTaskbar:
             self.keys = keys
         for k, b in self.buttons.items():
             main = tb.buttons.get(k)
-            for c in ("running", "active"):
+            for c in ("running", "active", "multi"):
                 (b.add_css_class if main is not None and main.has_css_class(c) else b.remove_css_class)(c)
             if main is not None:
                 b.set_tooltip_text(main.get_tooltip_text())
 
     def destroy(self):
         self.win.destroy()
+
+
+class TaskPreview:
+    """Like Windows 11: rest the pointer on a taskbar app that has windows
+    open and its windows show as pictures side by side above the button –
+    with several terminals open, pick the one you want instead of clicking
+    the button again and again. A click brings that window up, the X (on
+    hover) closes it. The pictures are the Alt+Tab ones (Switcher.capture),
+    renewed while the preview is open."""
+    W, H = 200, 120
+    SHOW_MS, HIDE_MS = 350, 300
+
+    def __init__(self, app, shell):
+        self.shell = shell
+        # right above the taskbar (its exclusive zone already keeps it clear)
+        self.win = layer_window(app, "winshell-preview", LS.Layer.OVERLAY,
+                                anchors=(LS.Edge.BOTTOM, LS.Edge.LEFT), margins={LS.Edge.BOTTOM: 8})
+        self.box = Gtk.Box(spacing=6)
+        self.box.add_css_class("tb-preview")
+        self.win.set_child(self.box)
+        m = Gtk.EventControllerMotion()
+        m.connect("enter", lambda *_: self.cancel_hide())
+        m.connect("leave", lambda *_: self.hide_soon())
+        self.win.add_controller(m)
+        self.key = None
+        self.show_id = self.hide_id = self.live_id = self.watch_id = 0
+        self.mon = None
+        self.cards = {}             # address -> card
+
+    # ── the pointer on the taskbar ──
+    def hover(self, key, button, bar):
+        self.cancel_hide()
+        if self.show_id:
+            GLib.source_remove(self.show_id)
+            self.show_id = 0
+        if self.win.get_visible():
+            if key != self.key:     # moving along the taskbar: the next one right away
+                self.open(key, button, bar)
+            return
+        self.show_id = GLib.timeout_add(self.SHOW_MS, lambda: self.open(key, button, bar) and False)
+
+    def unhover(self):
+        if self.show_id:
+            GLib.source_remove(self.show_id)
+            self.show_id = 0
+        self.hide_soon()
+
+    def hide_soon(self):
+        if not self.hide_id and self.win.get_visible():
+            self.hide_id = GLib.timeout_add(self.HIDE_MS, self.hide)
+
+    def cancel_hide(self):
+        if self.hide_id:
+            GLib.source_remove(self.hide_id)
+            self.hide_id = 0
+
+    def hide(self):
+        self.hide_id = 0
+        if self.show_id:
+            GLib.source_remove(self.show_id)
+            self.show_id = 0
+        if self.live_id:
+            GLib.source_remove(self.live_id)
+            self.live_id = 0
+        if self.watch_id:
+            GLib.source_remove(self.watch_id)
+            self.watch_id = 0
+        self.box.remove_css_class("shown")
+        self.win.set_visible(False)
+        self.key = None
+        return False
+
+    # ── the preview ──
+    def open(self, key, button, bar):
+        self.show_id = 0
+        tb = self.shell.taskbar
+        wins = tb.groups.get(key, []) if tb else []
+        if not wins or not button.get_mapped():
+            self.hide()
+            return False
+        self.key = key
+        sw = self.shell.switcher
+        active = (hypr_json("activewindow") or {}).get("address")
+        clear(self.box)
+        self.cards = {}
+        for c in wins:
+            self.box.append(self.card(c, sw, c["address"] == active))
+        # above the button, on that taskbar's screen
+        mon = getattr(bar, "monitor", None) or gdk_monitor(getattr(self.shell, "primary", "") or "")
+        if mon:
+            LS.set_monitor(self.win, mon)
+        self.mon = mon
+        mon_w = mon.get_geometry().width if mon else 1920
+        width = self.box.measure(Gtk.Orientation.HORIZONTAL, -1)[1]
+        ok_, r = button.compute_bounds(bar.win)
+        cx = (r.get_x() + r.get_width() / 2) if ok_ else mon_w / 2
+        LS.set_margin(self.win, LS.Edge.LEFT, int(max(8, min(mon_w - width - 8, cx - width / 2))))
+        self.win.set_default_size(1, 1)
+        self.win.present()
+        GLib.timeout_add(16, lambda: self.box.add_css_class("shown") and False)
+        if not self.live_id:
+            self.refresh()
+            self.live_id = GLib.timeout_add(1200, self.refresh)
+        if not self.watch_id:
+            self.watch_id = GLib.timeout_add(250, self.pointer_gone)
+        return False
+
+    def pointer_gone(self):
+        """The pointer can leave without GTK hearing of it (it jumped – to the
+        other screen, a window opened under it): while the preview is open,
+        check that it's still over the taskbar or the preview."""
+        if not self.win.get_visible() or not self.mon:
+            self.watch_id = 0
+            return False
+        try:
+            x, y = (float(v) for v in hypr("cursorpos").split(","))
+        except (OSError, ValueError):
+            return True
+        g = self.mon.get_geometry()
+        top = g.y + g.height - 48 - 8 - self.win.get_height() - 4
+        if not (g.x <= x < g.x + g.width and top <= y < g.y + g.height):
+            self.hide_soon()
+        return True
+
+    def card(self, c, sw, is_active):
+        addr = c["address"]
+        card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        card.add_css_class("tbp-card")
+        if is_active:
+            card.add_css_class("active")
+        head = Gtk.Box(spacing=8)
+        img = Gtk.Image.new_from_gicon(sw.icons.get(c["class"]))
+        img.set_pixel_size(16)
+        head.append(img)
+        t = label(c.get("title") or c["class"], "tbp-title")
+        t.set_hexpand(True)
+        t.set_width_chars(1)
+        t.set_max_width_chars(1)
+        head.append(t)
+        x = Gtk.Button(child=icon("win11-close", 12))
+        x.add_css_class("tbp-close")
+        x.set_tooltip_text("Close window")
+        x.connect("clicked", lambda *_: self.close_window(addr))
+        head.append(x)
+        head.set_size_request(self.W, -1)
+        card.append(head)
+        stack = Gtk.Stack()
+        stack.add_css_class("thumb")
+        big = Gtk.Image.new_from_gicon(sw.icons.get(c["class"]))
+        big.set_pixel_size(40)
+        stack.add_named(big, "icon")
+        pic = FixedPicture(self.W, self.H, content_fit=Gtk.ContentFit.CONTAIN, can_shrink=True)
+        stack.add_named(pic, "pic")
+        card.append(stack)
+        card.client, card.pic, card.stack, card.tex = c, pic, stack, None
+        self.set_pic(card, sw.thumbs.get(addr))
+        g = Gtk.GestureClick()
+        g.connect("released", lambda *_: self.pick(addr))
+        card.add_controller(g)
+        self.cards[addr] = card
+        return card
+
+    @staticmethod
+    def set_pic(card, tex):
+        if tex is not None and tex is not card.tex:
+            card.tex = tex
+            card.pic.set_paintable(tex)
+            card.stack.set_visible_child_name("pic")
+
+    def refresh(self):
+        """New pictures of the windows that are on screen (minimized ones
+        keep their last picture), and show the ones that came in."""
+        if not self.win.get_visible():
+            self.live_id = 0
+            return False
+        sw = self.shell.switcher
+        for addr, card in self.cards.items():
+            self.set_pic(card, sw.thumbs.get(addr))
+            if not (card.client.get("workspace") or {}).get("name", "").startswith("special:"):
+                sw.capture(card.client, update=False)
+        GLib.timeout_add(450, self.update_pics)
+        return True
+
+    def update_pics(self):
+        sw = self.shell.switcher
+        for addr, card in self.cards.items():
+            self.set_pic(card, sw.thumbs.get(addr))
+        return False
+
+    def pick(self, addr):
+        self.hide()
+        hypr_eval(f'ShowWindow("{addr}")')
+
+    def close_window(self, addr):
+        dispatch(f'hl.dsp.window.close({{ window = "address:{addr}" }})')
+        card = self.cards.pop(addr, None)
+        if card:
+            self.box.remove(card)
+        if not self.cards:
+            self.hide()
 
 
 class Taskbar:
@@ -5529,10 +5770,14 @@ class Taskbar:
         for k in keys:
             b, wins = self.buttons[k], groups.get(k, [])
             (b.add_css_class if wins else b.remove_css_class)("running")
+            # several windows of the app: the button looks stacked, like Windows
+            (b.add_css_class if len(wins) > 1 else b.remove_css_class)("multi")
             (b.add_css_class if k == self.active_key else b.remove_css_class)("active")
             app = self.app_of(k)
-            b.set_tooltip_text((wins[0].get("title") if wins else None)
-                               or (app.get_display_name() if app else k.split(":", 1)[-1]))
+            # an app with windows shows its preview instead (TaskPreview) –
+            # a tooltip on top of it covered the pictures
+            b.set_tooltip_text(None if wins else
+                               (app.get_display_name() if app else k.split(":", 1)[-1]))
         for other in getattr(self.shell, "secondaries", {}).values():
             other.refresh()
 
@@ -5555,6 +5800,11 @@ class Taskbar:
         b.add_css_class("tb-app")
         b.key = key
         b.connect("clicked", lambda *_: self.on_app_click(key))
+        # resting on it: its windows as pictures above it (TaskPreview)
+        motion = Gtk.EventControllerMotion()
+        motion.connect("enter", lambda *_: self.preview_hover(key, b))
+        motion.connect("leave", lambda *_: SHELL and SHELL.preview.unhover())
+        b.add_controller(motion)
         for num, fn in ((Gdk.BUTTON_MIDDLE, lambda: self.launch(key)),
                         (Gdk.BUTTON_SECONDARY, lambda: self.app_menu(key, b))):
             g = Gtk.GestureClick(button=num)
@@ -5633,19 +5883,30 @@ class Taskbar:
         else:
             self.tray_drag_end(st, ok_)
 
+    def preview_hover(self, key, b):
+        if not SHELL or getattr(self, "idrag", None):
+            return
+        root = b.get_root()
+        bar = next((x for x in [self] + list(SHELL.secondaries.values()) if x.win is root), self)
+        if self.groups.get(key):
+            SHELL.preview.hover(key, b, bar)
+        else:
+            SHELL.preview.unhover()             # a pinned app that isn't running
+
     def on_app_click(self, key):
+        if SHELL:
+            SHELL.preview.hide()                # like Windows: the preview goes on a click
         wins = self.groups.get(key, [])
         if not wins:
             self.launch(key)
             return
         if key == self.active_key:
-            if len(wins) == 1:          # the app in front: minimize it, like Windows
-                hypr_eval(f'MinimizeWindow("{wins[0]["address"]}")')
-                return
-            target = wins[1]            # several windows: go to the next one
-        else:
-            target = wins[0]
-        hypr_eval(f'ShowWindow("{target["address"]}")')
+            # the app in front: minimize the window in front – also with
+            # several windows (it went to the next one before; picking one
+            # is what the preview on hover is for)
+            hypr_eval(f'MinimizeWindow("{wins[0]["address"]}")')
+            return
+        hypr_eval(f'ShowWindow("{wins[0]["address"]}")')
 
     def launch(self, key):
         app = self.app_of(key)
@@ -5758,8 +6019,8 @@ class Taskbar:
 
         self.clock_lbl = Gtk.Label(justify=Gtk.Justification.RIGHT, xalign=1.0)
         self.clock_lbl.add_css_class("tb-clock-text")
-        right.append(button(self.clock_lbl, "tb-clock", on_click=lambda: (self.shell.flyouts_on(None),
-                                                                           self.shell.calendar.toggle())))
+        right.append(button(clock_with_dnd(self), "tb-clock", on_click=lambda: (self.shell.flyouts_on(None),
+                                                                                 self.shell.calendar.toggle())))
         self.tick()
 
         right.append(button(Gtk.Box(), "tb-peek", on_click=lambda: spawn(f"{SCRIPTS}/wallpaper.sh next")))
@@ -6208,6 +6469,7 @@ class WinShell(Gtk.Application):
         self.shutdown = ShutdownDialog(self, self)
         self.start = StartMenu(self, self)
         self.calendar = CalendarFlyout(self, self)
+        self.preview = TaskPreview(self, self)  # hover over a taskbar app: its windows
         self.taskbar = Taskbar(self, self)
         self.secondaries = {}               # connector -> SecondaryTaskbar
         self.primary = ""
@@ -6291,6 +6553,15 @@ class WinShell(Gtk.Application):
         if self.arrange_id:
             GLib.source_remove(self.arrange_id)
         self.arrange_id = GLib.timeout_add(800, self.arrange_bars)
+
+    def show_dnd(self, on):
+        """Do not disturb on / off: the bell next to the clock on every taskbar."""
+        self.dnd_on = on
+        for bar in [getattr(self, "taskbar", None)] + list(getattr(self, "secondaries", {}).values()):
+            img = getattr(bar, "dnd_img", None) if bar else None
+            if img:
+                img.set_visible(on)
+        return False
 
     def drop_bar(self, connector):
         """Close a screen's (slim) taskbar now; arrange_bars() makes a new
@@ -6426,6 +6697,8 @@ class WinShell(Gtk.Application):
         elif what == "displays":                # Win + I → Displays
             ds = self.display_settings
             ds.show()
+            if arg == "preview-confirm":            # displays preview-confirm: only the question
+                ds.preview_confirm()
             if arg == "test" and len(args) > 3:     # displays test <screen> <scale> [Hz]: set + Apply
                 for i, m in enumerate(ds.items):
                     if m["name"] == args[2]:

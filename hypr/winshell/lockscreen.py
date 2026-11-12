@@ -646,6 +646,7 @@ class App(Gtk.Application):
         if not PREVIEW:
             open(ACTIVE, "w").close()
             OWN_ACTIVE[0] = True
+            locked_hint(True)
         self.screen = LockScreen(self, start_signin=PREVIEW and "signin" in sys.argv)
         display = Gdk.Display.get_default()
         monitors = [display.get_monitors().get_item(i) for i in range(display.get_monitors().get_n_items())]
@@ -710,6 +711,7 @@ class App(Gtk.Application):
             except OSError:
                 pass
             OWN_ACTIVE[0] = False
+            locked_hint(False)
         self.unlocked = True
         if STANDBY:
             with open(RESULT, "w") as f:        # lock.sh can't see a standby's exit code
@@ -736,6 +738,20 @@ def main():
 
 
 OWN_ACTIVE = [False]                    # this process made ACTIVE (it locked)
+
+
+def locked_hint(on):
+    """Tell logind the session is locked / unlocked, like GNOME and KDE do –
+    programs that ask the system whether the screen is locked (e.g. a password
+    manager set to lock "on system lock") see it. hypridle reports it as well
+    (org.freedesktop.ScreenSaver, from Hyprland's lock notification)."""
+    try:
+        bus = Gio.bus_get_sync(Gio.BusType.SYSTEM, None)
+        bus.call_sync("org.freedesktop.login1", "/org/freedesktop/login1/session/auto",
+                      "org.freedesktop.login1.Session", "SetLockedHint",
+                      GLib.Variant("(b)", (bool(on),)), None, Gio.DBusCallFlags.NONE, 2000, None)
+    except GLib.Error as e:
+        print("lockscreen: LockedHint:", e.message, file=sys.stderr, flush=True)
 
 
 def run():

@@ -109,7 +109,7 @@
     border: none;
     box-shadow: none;
     background-color: transparent;
-    background-image: -gtk-icontheme("win11-bell-snooze");
+    background-image: -gtk-icontheme("win11-dnd");
     background-size: 16px 16px;
     background-repeat: no-repeat;
     background-position: center;
@@ -118,7 +118,7 @@
 .control-center .widget-buttons-grid flowboxchild > button.toggle:checked,
 .control-center .widget-buttons-grid flowboxchild > button.active {
     background-color: @accent;
-    background-image: -gtk-icontheme("win11-bell-snooze-dark");
+    background-image: -gtk-icontheme("win11-dnd-dark");
 }
 
 /* no big gear when it's empty, just the text in the middle */
@@ -203,16 +203,18 @@
    swaync scales pictures sent as raw pixels (Discord avatars, "image-data")
    to the image's size *including* its margin, without keeping the aspect
    ratio – a gap only on the right squashed them flat. So the margin adds as
-   much height as width (10 px each way): the area stays square. */
+   much height as width (10 px each way): the area stays square. The height
+   is split above and below (5 + 5) – all of it below put the picture 5 px
+   above the middle of the text next to it. */
 .notification-row .notification-background .notification .notification-default-action .notification-content .image {
-    margin: 0 10px 10px 0;
+    margin: 5px 10px 5px 0;
     -gtk-icon-size: 48px;
 }
 /* the small app badge on the avatar's corner (the same margin as the
    picture, or it sits in the gap next to it and runs into the text) */
 .notification-row .notification-background .notification .notification-default-action .notification-content .app-icon {
     -gtk-icon-shadow: none;
-    margin: 0 10px 10px 0;
+    margin: 5px 10px 5px 0;
 }
 
 /* close (X) on a notification: a bigger target that's easy to hit */

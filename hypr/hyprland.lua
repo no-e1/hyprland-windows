@@ -263,7 +263,7 @@ hl.layer_rule({ name = "blur-startmenu", match = { namespace = "^rofi$" },      
 hl.layer_rule({ name = "blur-swaync",    match = { namespace = "^swaync-.*$" },                 blur = true, ignore_alpha = 0.2 })
 -- the notification center animates itself, in step with the calendar below
 hl.layer_rule({ name = "no-anim-swaync-cc", match = { namespace = "^swaync-control-center$" }, no_anim = true })
-hl.layer_rule({ name = "blur-winshell",  match = { namespace = "^winshell-(qs|switcher|start|calendar|clipboard|taskview|project)$" }, blur = true, ignore_alpha = 0.2 })
+hl.layer_rule({ name = "blur-winshell",  match = { namespace = "^winshell-(qs|switcher|start|calendar|clipboard|taskview|project|preview)$" }, blur = true, ignore_alpha = 0.2 })
 hl.layer_rule({ name = "blur-osd",        match = { namespace = "^winshell-(osd|fingerprint)$" }, blur = true, ignore_alpha = 0.2 })
 -- winshell animates its flyouts itself (they glide out of the taskbar)
 hl.layer_rule({ name = "no-anim-winshell", match = { namespace = "^winshell-.*$" }, no_anim = true })
@@ -394,6 +394,7 @@ function RestoreWindow(w, ws_id, pos)
         fs_hook_paused[a] = true
         client_maximized(a, true, true)
         later(300, function() fs_hook_paused[a] = nil end)
+        later(400, function() KeepMaximized(a) end)     -- exactly its screen again
     else
         local sx, sy = w.size.x, w.size.y
         hl.dispatch(hl.dsp.window.resize({ x = sx + 1, y = sy, window = sel }))
@@ -402,6 +403,7 @@ function RestoreWindow(w, ws_id, pos)
             -- shrinking back moves the window 1 px to the right: put it back
             hl.dispatch(hl.dsp.window.move({ x = x, y = y, window = sel }))
         end)
+        later(400, function() KeepMaximized(a) end)     -- a maximized one: exactly its screen
     end
 end
 
@@ -552,10 +554,18 @@ local function set_geometry(addr, x, y, w, h)
     hl.dispatch(hl.dsp.window.move({ x = x, y = y, window = sel }))
 end
 
--- winshell's own dialogs (Display settings): a fixed size, like a Windows
--- dialog – no maximize, no snapping, no full screen
+-- Windows with a fixed size, like a Windows dialog – no maximize, no
+-- snapping (also not by dragging to an edge), no full screen: winshell's own
+-- dialogs (Display / Mouse settings) and apps that only come in one size.
+-- (Hyprland doesn't tell whether an app can be resized, so they're listed.)
+-- Window classes, lower case.
+FIXED_SIZE = {
+    ["io.github.noe1.winshell"] = true,
+    ["mullvad vpn"] = true,
+    ["mullvad-vpn"] = true,           -- Mullvad VPN (on Wayland)
+}
 local function fixed_size(w)
-    return w and w.class == "io.github.noe1.winshell"
+    return w and FIXED_SIZE[(w.class or ""):lower()] or false
 end
 hl.window_rule({ name = "winshell-dialogs", match = { class = "^io\\.github\\.noe1\\.winshell$" },
                  float = true, center = true })
@@ -588,6 +598,9 @@ function WinMax(action, w)
         end
         client_maximized(a, true)
         set_geometry(a, x, y + bar, ww, hh - bar)
+        -- the app may answer with its own size a moment later: check again
+        later(250, function() KeepMaximized(a) end)
+        later(800, function() KeepMaximized(a) end)
     elseif action == "restore" and (saved_geometry[a] or w.fullscreen_client == 1) then
         -- no normal size known: a centered window, like Windows
         local g = saved_geometry[a] or { x + math.floor(ww * 0.15), y + math.floor(hh * 0.12),
@@ -596,6 +609,21 @@ function WinMax(action, w)
         client_maximized(a, false)
         set_geometry(a, g[1], g[2], g[3], g[4])
         if EnsureOnScreenSoon then EnsureOnScreenSoon(a, g) end
+    end
+end
+
+-- A maximized window fills exactly its screen's free area – not a pixel
+-- more: one pixel too wide or shifted showed as a thin strip of it on the
+-- screen next to it (Brave: its one-pixel resize nudge, or resizing it back
+-- moving it a pixel to the right).
+function KeepMaximized(a)
+    local w = hl.get_window("address:" .. a)
+    if not w or not w.mapped or not w.workspace or w.workspace.name:sub(1, 8) == "special:" then return end
+    if not (saved_geometry[a] or w.fullscreen_client == 1) or w.fullscreen ~= 0 then return end
+    local x, y, ww, hh = work_area(w.monitor or hl.get_active_monitor())
+    local bar = has_bar(w) and BAR_HEIGHT or 0
+    if w.at.x ~= x or w.at.y ~= y + bar or w.size.x ~= ww or w.size.y ~= hh - bar then
+        set_geometry(a, x, y + bar, ww, hh - bar)
     end
 end
 
@@ -725,6 +753,43 @@ if f then
             match = { class = "^(" .. table.concat(alts, "|") .. ")$" },
             ["hyprbars:no_bar"] = true,
         })
+
+        -- fixed-size apps (FIXED_SIZE, e.g. Mullvad): no maximize button –
+        -- they can't be maximized. Needs the patched plugin (tools/build-hyprbars.sh),
+        -- which Hyprland only loads at login: while an older build is still
+        -- loaded (the file is newer than this Hyprland), the rule isn't known
+        -- and would show as a config error – then it waits for the next login.
+        local fixed = {}
+        for c in pairs(FIXED_SIZE) do table.insert(fixed, re(c)) end
+        local function mtime(path)
+            local h = io.popen("stat -c %Y '" .. path .. "' 2>/dev/null")
+            local t = h and tonumber(h:read("a"))
+            if h then h:close() end
+            return t
+        end
+        -- when this Hyprland started: its start (in 1/100 s since boot,
+        -- field 22 of /proc/self/stat) plus the boot time from /proc/stat
+        local function started_at()
+            local f = io.open("/proc/self/stat", "r")
+            local st = f and f:read("a")
+            if f then f:close() end
+            local rest = st and st:match("%) (.*)$")       -- after "(Hyprland)"
+            if not rest then return nil end
+            local fields = {}
+            for x in rest:gmatch("%S+") do fields[#fields + 1] = x end
+            local ticks = tonumber(fields[20])                -- field 22 overall
+            f = io.open("/proc/stat", "r")
+            local btime = f and tonumber(f:read("a"):match("\nbtime (%d+)"))
+            if f then f:close() end
+            return ticks and btime and btime + ticks / 100
+        end
+        local started, built = started_at(), mtime(hyprbars)
+        local plugin_current = not (started and built and built > started)
+        if plugin_current then pcall(hl.window_rule, {
+            name  = "fixed-size-no-maximize",
+            match = { class = "(?i)^(" .. table.concat(fixed, "|") .. ")$" },
+            ["hyprbars:no_maximize"] = true,
+        }) end
     elseif not ok then
         hl.notification.create({ text = "hyprbars: " .. tostring(err), timeout = 8000, icon = "error" })
     end
@@ -828,11 +893,11 @@ local function zone_rect(zone, mon)
     return r[zone]
 end
 
-function WinSnap(zone, w)
+function WinSnap(zone, w, on_mon)
     w = w or hl.get_active_window()
     if not w or not w.mapped or fixed_size(w) then return end
     local a = w.address
-    local mon = w.monitor or hl.get_active_monitor()
+    local mon = on_mon or w.monitor or hl.get_active_monitor()
     if zone == "max" then
         if snap_saved[a] and not saved_geometry[a] then
             saved_geometry[a] = snap_saved[a]          -- un-maximize: the size before snapping
@@ -853,6 +918,21 @@ function WinSnap(zone, w)
     local bar = has_bar(w) and BAR_HEIGHT or 0
     set_geometry(a, r[1], r[2] + bar, r[3], r[4] - bar)
     snapped_to[a] = zone
+    -- an app that can't get that small (Discord has a minimum width) stays
+    -- bigger: then it's pushed back inside its half's screen edge, like
+    -- Windows – it stuck out onto the screen next to it
+    later(200, function()
+        local cur = hl.get_window("address:" .. a)
+        if not cur or snapped_to[a] ~= zone then return end
+        local mx, my, mw, mh = work_area(mon)
+        local nx, ny = cur.at.x, cur.at.y
+        if nx + cur.size.x > mx + mw then nx = mx + mw - cur.size.x end
+        if nx < mx then nx = mx end
+        if ny + cur.size.y > my + mh then ny = math.max(my + bar, my + mh - cur.size.y) end
+        if nx ~= cur.at.x or ny ~= cur.at.y then
+            hl.dispatch(hl.dsp.window.move({ x = nx, y = ny, window = "address:" .. a }))
+        end
+    end)
 end
 
 -- An app's own maximize / restore button (Brave's □; via the hyprbars
@@ -891,6 +971,23 @@ end
 
 -- Win + Left/Right like Windows: towards the other side a snapped window
 -- first comes loose, otherwise it snaps to that half
+-- the screen right next to mon on that side (sharing an edge), if any
+local function neighbour_screen(mon, side)
+    if not mon then return nil end
+    local mx, my, mw, mh = mon_box(mon)
+    for _, m in ipairs(hl.get_monitors() or {}) do
+        if m.name ~= mon.name and m.enabled ~= false and not m.is_mirror then
+            local x, y, w2, h2 = mon_box(m)
+            local beside = (side == "right" and math.abs(x - (mx + mw)) <= 2)
+                        or (side == "left" and math.abs((x + w2) - mx) <= 2)
+            if beside and y < my + mh and my < y + h2 then return m end
+        end
+    end
+end
+
+-- Win + Left / Right like Windows: snap to that half; snapped to the other
+-- half: back to its normal size; already snapped to that side and another
+-- screen there: over to it, snapped to its near half (same desktop)
 function WinSnapKey(side)
     local w = hl.get_active_window()
     if not w then return end
@@ -898,10 +995,66 @@ function WinSnapKey(side)
     local other = side == "left" and "right" or "left"
     if z and z:find(other) then
         WinUnsnap(w)
+    elseif z and z:find(side) then
+        local n = neighbour_screen(w.monitor, side)
+        if not n or fixed_size(w) then return end
+        local a, sel = w.address, "address:" .. w.address
+        local ws = n.active_workspace and n.active_workspace.id
+        if ws then         -- the other screen's workspace of this desktop
+            hl.dispatch(hl.dsp.window.move({ workspace = tostring(ws), follow = false, window = sel }))
+        end
+        WinSnap(other, hl.get_window(sel), n)
+        hl.dispatch(hl.dsp.focus({ window = sel }))
     else
         WinSnap(side, w)
     end
 end
+
+-- Screens of different sizes: the mouse always gets over to the other one.
+-- Where a screen's edge has no screen next to it (the bigger one sticks out
+-- past the smaller one), the pointer used to stop at the edge; pushed there,
+-- it now jumps to the neighbouring screen at the nearest height. Checked
+-- every 25 ms – only the pointer position, the real work happens only at an
+-- edge; and only when it just got there (not while it rests on the edge).
+local EDGE_POLL_MS = 25
+local edge_last = nil
+local function edge_cross()
+    local c = hl.get_cursor_pos()
+    if not c then return end
+    local last = edge_last
+    edge_last = { x = c.x, y = c.y }
+    if not last then return end
+    local mon = hl.get_monitor_at_cursor()
+    if not mon then return end
+    local mx, my, mw, mh = mon_box(mon)
+    local side
+    if c.x <= mx + 0.5 and last.x > c.x + 0.25 then side = "left"
+    elseif c.x >= mx + mw - 1.5 and last.x < c.x - 0.25 then side = "right"
+    elseif c.y <= my + 0.5 and last.y > c.y + 0.25 then side = "top"
+    elseif c.y >= my + mh - 1.5 and last.y < c.y - 0.25 then side = "bottom"
+    else return end
+    for _, m in ipairs(hl.get_monitors() or {}) do
+        if m.name ~= mon.name and m.enabled ~= false and not m.is_mirror then
+            local x, y, w, h = mon_box(m)
+            local nx, ny
+            if side == "left" and math.abs((x + w) - mx) <= 2 and (c.y < y or c.y >= y + h) then
+                nx, ny = x + w - 2, math.max(y, math.min(c.y, y + h - 2))
+            elseif side == "right" and math.abs(x - (mx + mw)) <= 2 and (c.y < y or c.y >= y + h) then
+                nx, ny = x + 1, math.max(y, math.min(c.y, y + h - 2))
+            elseif side == "top" and math.abs((y + h) - my) <= 2 and (c.x < x or c.x >= x + w) then
+                nx, ny = math.max(x, math.min(c.x, x + w - 2)), y + h - 2
+            elseif side == "bottom" and math.abs(y - (my + mh)) <= 2 and (c.x < x or c.x >= x + w) then
+                nx, ny = math.max(x, math.min(c.x, x + w - 2)), y + 1
+            end
+            if nx then
+                hl.dispatch(hl.dsp.cursor.move({ x = nx, y = ny }))
+                edge_last = { x = nx, y = ny }
+                return
+            end
+        end
+    end
+end
+hl.timer(edge_cross, { timeout = EDGE_POLL_MS, type = "repeat" })
 
 local function snap_preview(zone, mon, c)
     if not zone then

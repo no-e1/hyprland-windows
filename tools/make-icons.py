@@ -174,6 +174,14 @@ FP = ("M5.2 6.6A8.5 8.5 0 0 1 18.8 6.6M3.6 11a8.5 8.5 0 0 1 .5-2.3M20.4 11.5c0 1
 save("fingerprint", f'<path d="{FP}" {st}/>')
 save("fingerprint-fail", f'<path d="{FP}" stroke="#ff6b6b" stroke-width="{SW}"/>')
 save("fingerprint-ok", f'<path d="{FP}" stroke="#6ccb5f" stroke-width="{SW}"/>')     # recognized: the print turns green
+# do not disturb next to the taskbar clock: three Zs, a big one, a middle
+# one to the right, a small one above
+save("dnd", f'<path d="M3.6 12.2h7.4L3.6 20.799999999999997h7.4" stroke="{W}" stroke-width="2.1" stroke-linejoin="miter"/><path d="M14.6 9.6h5.8L14.6 15.8h5.8" stroke="{W}" stroke-width="1.9" stroke-linejoin="miter"/><path d="M6.6 2.0h3.9L6.6 5.9h3.9" stroke="{W}" stroke-width="1.6" stroke-linejoin="miter"/>')
+# … and in black, for the blue "on" button in the notification center
+save("dnd-dark", f'<path d="M3.6 12.2h7.4L3.6 20.8h7.4" stroke="{W}" stroke-width="2.1" stroke-linejoin="miter"/>'
+                 f'<path d="M14.6 9.6h5.8L14.6 15.8h5.8" stroke="{W}" stroke-width="1.9" stroke-linejoin="miter"/>'
+                 f'<path d="M6.6 2.0h3.9L6.6 5.9h3.9" stroke="{W}" stroke-width="1.6" stroke-linejoin="miter"/>'
+     .replace("#ffffff", "#000000"))
 # desktops: two screens, one behind the other (the "Desktop 2" pill)
 save("desktops", f'<rect x="3" y="7" width="14" height="10" rx="1.5" {st}/>'
                  f'<path d="M7 4.5h12.5A1.5 1.5 0 0 1 21 6v8.5" {st}/><path d="M8 20h4" {st}/>')         # "New desktop" in the task view

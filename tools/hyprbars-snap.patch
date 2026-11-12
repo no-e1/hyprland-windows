@@ -1,5 +1,5 @@
 diff --git a/hyprbars/barDeco.cpp b/hyprbars/barDeco.cpp
-index e57f77b..a4c5acd 100644
+index e57f77b..7f41a17 100644
 --- a/hyprbars/barDeco.cpp
 +++ b/hyprbars/barDeco.cpp
 @@ -29,6 +29,20 @@
@@ -77,7 +77,7 @@ index e57f77b..a4c5acd 100644
          LOG(Log::DEBUG, "[hyprbars] Dragging ended on {:x}", (uintptr_t)m_pWindow.lock().get());
      }
  
-@@ -284,27 +309,38 @@ void CHyprBar::handleUpEvent(Event::SCallbackInfo& info) {
+@@ -284,27 +309,40 @@ void CHyprBar::handleUpEvent(Event::SCallbackInfo& info) {
  }
  
  void CHyprBar::handleMovement() {
@@ -91,10 +91,6 @@ index e57f77b..a4c5acd 100644
 -bool CHyprBar::doButtonPress(Config::INTEGER barPadding, Config::INTEGER barButtonPadding, Config::INTEGER barHeight, Vector2D COORDS, const bool BUTTONSRIGHT) {
 -    //check if on a button
 -    float offset = barPadding;
--
--    for (auto& b : g_pGlobalState->buttons) {
--        const auto BARBUF     = Vector2D{assignedBoxGlobal().w, sc<double>(barHeight)};
--        Vector2D   currentPos = Vector2D{(BUTTONSRIGHT ? BARBUF.x - barButtonPadding - b.size - offset : offset), (BARBUF.y - b.size) / 2.0}.floor();
 +// The command strings stored with the buttons get corrupted at runtime (their
 +// memory is freed while the buttons are still in use; short strings like the
 +// icons survive because they live inside the object). So the command is
@@ -104,18 +100,23 @@ index e57f77b..a4c5acd 100644
 +    Config::Supplementary::executor()->spawn("$HOME/.config/hypr/scripts/winctl.sh button " + std::to_string(i));
 +}
  
--        if (VECINRECT(COORDS, currentPos.x, currentPos.y, currentPos.x + b.size + barButtonPadding, currentPos.y + b.size)) {
--            // hit on close
--            Config::Supplementary::executor()->spawn(b.cmd);
+-    for (auto& b : g_pGlobalState->buttons) {
+-        const auto BARBUF     = Vector2D{assignedBoxGlobal().w, sc<double>(barHeight)};
+-        Vector2D   currentPos = Vector2D{(BUTTONSRIGHT ? BARBUF.x - barButtonPadding - b.size - offset : offset), (BARBUF.y - b.size) / 2.0}.floor();
 +bool CHyprBar::doButtonPress(Config::INTEGER barPadding, Config::INTEGER barButtonPadding, Config::INTEGER barHeight, Vector2D COORDS, const bool BUTTONSRIGHT) {
 +    // Windows 11 caption buttons: full-height rectangles, flush with the edge.
 +    // Decided by where the cursor is (same geometry as the highlight).
 +    float offset = 0;
 +    for (size_t i = 0; i < g_pGlobalState->buttons.size(); ++i) {
++        if (skipButton(i))
++            continue;
 +        const auto& b          = g_pGlobalState->buttons[i];
 +        const auto  BARBUF     = Vector2D{assignedBoxGlobal().w, sc<double>(barHeight)};
 +        Vector2D    currentPos = Vector2D{(BUTTONSRIGHT ? BARBUF.x - b.size - offset : offset), 0.0}.floor();
-+
+ 
+-        if (VECINRECT(COORDS, currentPos.x, currentPos.y, currentPos.x + b.size + barButtonPadding, currentPos.y + b.size)) {
+-            // hit on close
+-            Config::Supplementary::executor()->spawn(b.cmd);
 +        if (VECINRECT(COORDS, currentPos.x, currentPos.y, currentPos.x + b.size, BARBUF.y)) {
 +            debugLog(std::format("button {} (geometry)", i));
 +            spawnButton(i);
@@ -127,13 +128,15 @@ index e57f77b..a4c5acd 100644
      }
      return false;
  }
-@@ -367,30 +403,48 @@ void CHyprBar::renderBarButtons(Render::CRenderContext& ctx, CBox* barBox, const
+@@ -367,30 +405,50 @@ void CHyprBar::renderBarButtons(Render::CRenderContext& ctx, CBox* barBox, const
      const auto visibleCount    = getVisibleButtonCount(BARBUTTONPADDING, BARPADDING, Vector2D{barBox->w, barBox->h}, scale);
      const bool INVALIDATEICONS = m_bButtonsDirty || m_bWindowSizeChanged;
  
 -    int        offset = BARPADDING * scale;
 +    int        offset = 0;
      for (size_t i = 0; i < visibleCount; ++i) {
++        if (skipButton(i))
++            continue;
          auto&      button           = g_pGlobalState->buttons[i];
          const auto scaledButtonSize = button.size * scale;
 -        const auto scaledButtonsPad = BARBUTTONPADDING * scale;
@@ -193,7 +196,7 @@ index e57f77b..a4c5acd 100644
  }
  
  void CHyprBar::renderBarButtonsText(Render::CRenderContext& ctx, CBox* barBox, const float scale, const float a) {
-@@ -407,19 +461,19 @@ void CHyprBar::renderBarButtonsText(Render::CRenderContext& ctx, CBox* barBox, c
+@@ -407,19 +465,21 @@ void CHyprBar::renderBarButtonsText(Render::CRenderContext& ctx, CBox* barBox, c
      const auto visibleCount = getVisibleButtonCount(BARBUTTONPADDING, BARPADDING, Vector2D{barBox->w, barBox->h}, scale);
      const auto COORDS       = cursorRelativeToBar();
  
@@ -203,6 +206,8 @@ index e57f77b..a4c5acd 100644
 +    float      noScaleOffset = 0;
  
      for (size_t i = 0; i < visibleCount; ++i) {
++        if (skipButton(i))
++            continue;
          auto&      button           = g_pGlobalState->buttons[i];
          const auto scaledButtonSize = button.size * scale;
 -        const auto scaledButtonsPad = BARBUTTONPADDING * scale;
@@ -220,7 +225,7 @@ index e57f77b..a4c5acd 100644
  
          const bool NEEDICON = !button.icon.empty() &&
              (!button.iconTex || button.iconTex->m_texID == 0 || !button.m_fIconScale.has_value() || std::abs(button.m_fIconScale.value_or(0.F) - scale) > 1e-6);
-@@ -428,7 +482,7 @@ void CHyprBar::renderBarButtonsText(Render::CRenderContext& ctx, CBox* barBox, c
+@@ -428,7 +488,7 @@ void CHyprBar::renderBarButtonsText(Render::CRenderContext& ctx, CBox* barBox, c
              auto fgcol = button.userfg ? button.fgcol : (button.bgcol.r + button.bgcol.g + button.bgcol.b < 1) ? CHyprColor(0xFFFFFFFF) : CHyprColor(0xFF000000);
  
              button.iconTex =
@@ -229,7 +234,24 @@ index e57f77b..a4c5acd 100644
              button.m_fIconScale = scale;
          }
  
-@@ -703,27 +757,25 @@ void CHyprBar::updateRules() {
+@@ -688,7 +748,11 @@ void CHyprBar::updateRules() {
+     m_bForcedBarColor   = std::nullopt;
+     m_bForcedTitleColor = std::nullopt;
+     m_hidden            = false;
++    const bool prevNoMaximize = m_noMaximize;
++    m_noMaximize              = false;
+ 
++    if (PWINDOW->m_ruleApplicator->m_otherProps.props.contains(g_pGlobalState->nomaxRuleIdx))
++        m_noMaximize = truthy(PWINDOW->m_ruleApplicator->m_otherProps.props.at(g_pGlobalState->nomaxRuleIdx)->effect);
+     if (PWINDOW->m_ruleApplicator->m_otherProps.props.contains(g_pGlobalState->nobarRuleIdx))
+         m_hidden = truthy(PWINDOW->m_ruleApplicator->m_otherProps.props.at(g_pGlobalState->nobarRuleIdx)->effect);
+     if (PWINDOW->m_ruleApplicator->m_otherProps.props.contains(g_pGlobalState->barColorRuleIdx))
+@@ -700,30 +764,32 @@ void CHyprBar::updateRules() {
+         g_pDecorationPositioner->repositionDeco(this);
+     if (prevForcedTitleColor != m_bForcedTitleColor)
+         m_bTitleColorChanged = true;
++    if (prevNoMaximize != m_noMaximize)
++        damageEntire();
  }
  
  void CHyprBar::damageOnButtonHover() {
@@ -248,20 +270,21 @@ index e57f77b..a4c5acd 100644
 -        Vector2D   currentPos = Vector2D{(BUTTONSRIGHT ? BARBUF.x - BARBUTTONPADDING - b.size - offset : offset), (BARBUF.y - b.size) / 2.0}.floor();
 -
 -        bool       hover = VECINRECT(COORDS, currentPos.x, currentPos.y, currentPos.x + b.size + BARBUTTONPADDING, currentPos.y + b.size);
--
--        if (hover != m_bButtonHovered) {
--            m_bButtonHovered = hover;
--            damageEntire();
--        }
 +    const auto HEIGHT       = g_pGlobalState->config.barHeight->value();
 +    const auto ALIGNBUTTONS = g_pGlobalState->config.barButtonsAlignment->value();
 +    const bool BUTTONSRIGHT = ALIGNBUTTONS != "left";
 +    const auto COORDS       = cursorRelativeToBar();
 +    const auto BARBUF       = Vector2D{assignedBoxGlobal().w, sc<double>(HEIGHT)};
-+
+ 
+-        if (hover != m_bButtonHovered) {
+-            m_bButtonHovered = hover;
+-            damageEntire();
+-        }
 +    unsigned int mask   = 0;
 +    float        offset = 0;
 +    for (size_t i = 0; i < g_pGlobalState->buttons.size() && i < 32; ++i) {
++        if (skipButton(i))
++            continue;
 +        const auto& b = g_pGlobalState->buttons[i];
 +        const float x = BUTTONSRIGHT ? BARBUF.x - b.size - offset : offset;
 +        if (VECINRECT(COORDS, std::floor(x), 0, std::floor(x) + b.size, BARBUF.y))
@@ -276,8 +299,43 @@ index e57f77b..a4c5acd 100644
 +        damageEntire();
      }
  }
+diff --git a/hyprbars/barDeco.hpp b/hyprbars/barDeco.hpp
+index d0d54d5..672d432 100644
+--- a/hyprbars/barDeco.hpp
++++ b/hyprbars/barDeco.hpp
+@@ -65,6 +65,7 @@ class CHyprBar : public IHyprWindowDecoration {
+ 
+     bool                       m_bWindowSizeChanged = false;
+     bool                       m_hidden             = false;
++    bool                       m_noMaximize         = false;   // hyprbars:no_maximize
+     bool                       m_bTitleColorChanged = false;
+     bool                       m_bButtonHovered     = false;
+     bool                       m_bBarHovered        = false;
+@@ -85,6 +86,10 @@ class CHyprBar : public IHyprWindowDecoration {
+     void renderBarButtons(Render::CRenderContext& ctx, CBox* barBox, const float scale, const float a);
+     void renderBarButtonsText(Render::CRenderContext& ctx, CBox* barBox, const float scale, const float a);
+     void damageOnButtonHover();
++    // button 1 (maximize) is left out for fixed-size windows; the others close up
++    bool skipButton(size_t i) const {
++        return m_noMaximize && i == 1;
++    }
+ 
+     bool inputIsValid();
+     void onMouseButton(Event::SCallbackInfo& info, IPointer::SButtonEvent e);
+diff --git a/hyprbars/globals.hpp b/hyprbars/globals.hpp
+index 2911644..8f22dbd 100644
+--- a/hyprbars/globals.hpp
++++ b/hyprbars/globals.hpp
+@@ -29,6 +29,7 @@ struct SGlobalState {
+     std::vector<SHyprButton>  buttons;
+     std::vector<WP<CHyprBar>> bars;
+     uint32_t                  nobarRuleIdx      = 0;
++    uint32_t                  nomaxRuleIdx      = 0;   // hyprbars:no_maximize – a fixed-size window: no maximize button
+     uint32_t                  barColorRuleIdx   = 0;
+     uint32_t                  titleColorRuleIdx = 0;
+ 
 diff --git a/hyprbars/main.cpp b/hyprbars/main.cpp
-index 3d88b57..52a60d5 100644
+index 3d88b57..4369122 100644
 --- a/hyprbars/main.cpp
 +++ b/hyprbars/main.cpp
 @@ -14,6 +14,15 @@
@@ -404,7 +462,11 @@ index 3d88b57..52a60d5 100644
  APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
      PHANDLE = handle;
  
-@@ -170,7 +280,11 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
+@@ -167,10 +277,15 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
+ 
+     g_pGlobalState                    = makeUnique<SGlobalState>();
+     g_pGlobalState->nobarRuleIdx      = Desktop::Rule::windowEffects()->registerEffect("hyprbars:no_bar");
++    g_pGlobalState->nomaxRuleIdx      = Desktop::Rule::windowEffects()->registerEffect("hyprbars:no_maximize");
      g_pGlobalState->barColorRuleIdx   = Desktop::Rule::windowEffects()->registerEffect("hyprbars:bar_color");
      g_pGlobalState->titleColorRuleIdx = Desktop::Rule::windowEffects()->registerEffect("hyprbars:title_color");
  
@@ -417,7 +479,7 @@ index 3d88b57..52a60d5 100644
      static auto P3 = Event::bus()->m_events.window.updateRules.listen([&](PHLWINDOW w) { onUpdateWindowRules(w); });
  
      g_pGlobalState->config.barColor            = makeShared<Config::Values::CColorValue>("plugin:hyprbars:bar_color", "Change the bar color", 0x88333333);
-@@ -218,13 +332,19 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
+@@ -218,13 +333,19 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
      HyprlandAPI::addConfigValueV2(PHANDLE, g_pGlobalState->config.onDoubleClick);
  
      HyprlandAPI::addLuaFunction(PHANDLE, "hyprbars", "add_button", ::newLuaButton);
@@ -437,3 +499,9 @@ index 3d88b57..52a60d5 100644
          if (w->isHidden() || !validMapped(w))
              continue;
  
+@@ -245,4 +366,5 @@ APICALL EXPORT void PLUGIN_EXIT() {
+     Desktop::Rule::windowEffects()->unregisterEffect(g_pGlobalState->barColorRuleIdx);
+     Desktop::Rule::windowEffects()->unregisterEffect(g_pGlobalState->titleColorRuleIdx);
+     Desktop::Rule::windowEffects()->unregisterEffect(g_pGlobalState->nobarRuleIdx);
++    Desktop::Rule::windowEffects()->unregisterEffect(g_pGlobalState->nomaxRuleIdx);
+ }
