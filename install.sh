@@ -15,6 +15,12 @@ for d in hypr waybar rofi swaync kitty; do
     ln -s "$REPO/$d" "$target"
 done
 
+# winterm, the terminal like Windows Terminal (needs vte291-gtk4): the
+# "winterm" command and its menu entry
+mkdir -p "$HOME/.local/bin" "$HOME/.local/share/applications"
+ln -sf "$REPO/hypr/winshell/winterm.py" "$HOME/.local/bin/winterm"
+ln -sf "$REPO/applications/winterm.desktop" "$HOME/.local/share/applications/winterm.desktop"
+
 icons="$HOME/.local/share/icons/hicolor/scalable/status"
 mkdir -p "$icons"
 for f in "$REPO"/icons/win11-*.svg; do

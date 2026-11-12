@@ -273,8 +273,29 @@ def button(child, *classes, on_click=None, tooltip=None):
 
 def slide_in(widget):
     """Windows 11 flyout entrance: glide up out of the taskbar and fade in."""
+    leave = getattr(widget, "_leave_id", 0)
+    if leave:                           # it was just going away: comes back instead
+        GLib.source_remove(leave)
+        widget._leave_id = 0
+    widget.remove_css_class("leaving")
     widget.remove_css_class("shown")
     GLib.timeout_add(16, lambda: widget.add_css_class("shown") and False)
+
+
+def slide_out(widget, win, ms=150):
+    """…and the way out: glide back down a little while fading (style.css
+    .flyout.leaving), then the window goes – not gone from one frame to the next."""
+    if getattr(widget, "_leave_id", 0):
+        return
+    widget.add_css_class("leaving")
+    widget.remove_css_class("shown")
+
+    def gone():
+        widget._leave_id = 0
+        widget.remove_css_class("leaving")
+        win.set_visible(False)
+        return False
+    widget._leave_id = GLib.timeout_add(ms, gone)
 
 
 def clear(box):
@@ -347,7 +368,8 @@ def clock_with_dnd(bar):
 
 
 # Our own icons for some apps – the same in the start menu as on the taskbar
-APP_ICONS = {"kitty.desktop": "win11-terminal", "org.kde.dolphin.desktop": "win11-explorer"}
+APP_ICONS = {"winterm.desktop": "win11-terminal",
+             "org.kde.dolphin.desktop": "win11-explorer"}
 
 
 def app_gicon(app):
@@ -546,7 +568,8 @@ class AppIcons:
             if wm:
                 self.map[wm.lower()] = gicon
 
-    OVERRIDE = {"kitty": "win11-terminal", "io.github.noe1.winshell": "win11-settings-app",
+    OVERRIDE = {"io.github.noe1.winterm": "win11-terminal",
+                "io.github.noe1.winshell": "win11-settings-app",
                 "org.kde.dolphin": "win11-explorer"}
 
     def get(self, cls):
@@ -2425,8 +2448,8 @@ class CalendarFlyout:
         if not self.visible:
             return
         self.visible = False
-        self.win.set_visible(False)
         LS.set_keyboard_mode(self.win, LS.KeyboardMode.NONE)
+        slide_out(self.panel, self.win)         # glides away (and the notifications fade out with it)
         self.shell.qs.catcher_for(None)
         self.notification_center(False)
 
@@ -2765,7 +2788,7 @@ class StartMenu:
     # apps -----------------------------------------------------------------
     # kitty is the terminal of this setup: it shows up as "Terminal", and the
     # other terminal apps that came with the system stay out of the menu
-    RENAME = {"kitty.desktop": "Terminal"}
+    RENAME = {"winterm.desktop": "Terminal"}
     HIDDEN = {"org.kde.konsole.desktop", "xterm.desktop", "uxterm.desktop",
               "org.gnome.Terminal.desktop", "org.gnome.Ptyxis.desktop", "foot.desktop",
               "footclient.desktop", "foot-server.desktop"}
@@ -4205,8 +4228,13 @@ class DesktopAnim:
         self.dur = self.IN if rising else self.OUT
         self.done = None
         if not rising:
-            # the pictures cover the windows now: hide the real ones
-            GLib.timeout_add(34, lambda: (hypr_eval(f"{callback}({gen})"), False)[1])
+            # the pictures cover the windows now: hide the real ones – after
+            # a fresh, sharp picture of each was taken (the Alt+Tab preview
+            # can be seconds old and is small: coming back out, the window
+            # showed old, blurry content for a moment). Never longer than
+            # FRESH_WAIT; the old picture covers the window meanwhile.
+            self.fresh_pictures([it for _ly, items in layers.values() for it in items],
+                                lambda: hypr_eval(f"{callback}({gen})"))
             # together with the windows, like Windows: the icon is lowest
             # (40 % into its 320 ms) right when they land (OUT = 240 ms)
             self.bounce(classes, "dip", 0.11)
@@ -4216,6 +4244,48 @@ class DesktopAnim:
         self.t0 = 0
         self.tick_canvas = self.active[0].canvas      # one clock drives all screens
         self.tick = self.tick_canvas.add_tick_callback(self.on_tick)
+
+    FRESH_SCALE = 1.5           # sharp on a 2x screen, without a huge picture in memory
+    FRESH_WAIT = 0.22           # s at most before the windows are hidden anyway
+
+    def fresh_pictures(self, items, hide):
+        clients = {c["address"]: c for c in hypr_json("clients") or []}
+        sw = self.shell.switcher
+        state = {"left": 0, "hidden": False}
+
+        def hide_once():
+            if not state["hidden"]:
+                state["hidden"] = True
+                hide()
+            return False
+
+        def grab(sid):
+            try:
+                out = subprocess.run(["grim", "-T", sid, "-s", str(self.FRESH_SCALE), "-t", "jpeg",
+                                      "-q", "92", "-"], capture_output=True, timeout=1).stdout
+                return Gdk.Texture.new_from_bytes(GLib.Bytes.new(out)) if out else None
+            except Exception:
+                return None
+
+        for it in items:
+            c = clients.get(it["addr"])
+            sid = c and c.get("stableId")
+            if not sid or (c.get("workspace") or {}).get("name", "").startswith("special:"):
+                continue
+            state["left"] += 1
+
+            def done(tex, it=it):
+                state["left"] -= 1
+                if tex:
+                    it["tex"] = tex                     # the flying picture too
+                    sw.thumbs[it["addr"]] = tex         # … and the one it comes back out with
+                    sw.thumb_time[it["addr"]] = time.monotonic()
+                if state["left"] <= 0:
+                    GLib.timeout_add(10, hide_once)
+            bg(lambda sid=sid: grab(sid), done)
+        if not state["left"]:
+            GLib.timeout_add(34, hide_once)
+        GLib.timeout_add(int(self.FRESH_WAIT * 1000), hide_once)
 
     def stop_ticks(self):
         if self.tick and self.tick_canvas:
@@ -4294,7 +4364,7 @@ class DesktopAnim:
 
 # ── Clipboard history (Win + V) ─────────────────────────────────────────────
 CLIP_DIR = os.path.join(os.environ.get("XDG_CACHE_HOME", os.path.expanduser("~/.cache")), "winshell", "clipboard")
-TERMINALS = {"kitty", "foot", "alacritty", "org.wezfurlong.wezterm", "com.mitchellh.ghostty",
+TERMINALS = {"kitty", "io.github.noe1.winterm", "foot", "alacritty", "org.wezfurlong.wezterm", "com.mitchellh.ghostty",
              "org.gnome.Console", "org.gnome.Ptyxis", "konsole"}
 
 
@@ -5662,10 +5732,10 @@ class Taskbar:
 
     # own icons: the terminal like Windows Terminal, winshell's own windows
     # (Display settings) with Windows' settings gear
-    ICON_OVERRIDE = {"kitty.desktop": "win11-terminal",
+    ICON_OVERRIDE = {"winterm.desktop": "win11-terminal",
                      "org.kde.dolphin.desktop": "win11-explorer",
                      "class:io.github.noe1.winshell": "win11-settings-app"}
-    DEFAULT_PINNED = ["brave-browser.desktop", "kitty.desktop"]
+    DEFAULT_PINNED = ["brave-browser.desktop", "winterm.desktop"]
 
     def __init__(self, app, shell):
         self.shell = shell

@@ -10,7 +10,7 @@ local home     = os.getenv("HOME")
 local scripts  = home .. "/.config/hypr/scripts"
 local winshell = home .. "/.config/hypr/winshell/winshell-ctl"
 
-local terminal    = "kitty"
+local terminal    = "winterm"          -- like Windows Terminal (hypr/winshell/winterm.py); kitty stays installed
 local fileManager = "dolphin"
 local browser     = "brave-browser"
 
@@ -234,7 +234,7 @@ hl.window_rule({
 
 hl.window_rule({
     name  = "terminal-size",
-    match = { class = "^(kitty)$" },
+    match = { class = "^(kitty|io\\.github\\.noe1\\.winterm)$" },
     size  = "1000 640",
 })
 
@@ -262,7 +262,10 @@ hl.window_rule({
 hl.layer_rule({ name = "blur-startmenu", match = { namespace = "^rofi$" },                      blur = true, ignore_alpha = 0.2 })
 hl.layer_rule({ name = "blur-swaync",    match = { namespace = "^swaync-.*$" },                 blur = true, ignore_alpha = 0.2 })
 -- the notification center animates itself, in step with the calendar below
-hl.layer_rule({ name = "no-anim-swaync-cc", match = { namespace = "^swaync-control-center$" }, no_anim = true })
+-- the notification center: no sliding layer animation (it slid the whole way
+-- up from the screen edge – it glides in by itself, swaync/style.css), but it
+-- fades out when it closes (Escape, together with the calendar below it)
+hl.layer_rule({ name = "fade-swaync-cc", match = { namespace = "^swaync-control-center$" }, animation = "fade" })
 hl.layer_rule({ name = "blur-winshell",  match = { namespace = "^winshell-(qs|switcher|start|calendar|clipboard|taskview|project|preview)$" }, blur = true, ignore_alpha = 0.2 })
 hl.layer_rule({ name = "blur-osd",        match = { namespace = "^winshell-(osd|fingerprint)$" }, blur = true, ignore_alpha = 0.2 })
 -- winshell animates its flyouts itself (they glide out of the taskbar)
@@ -505,7 +508,9 @@ OWN_TITLEBAR = { "brave-browser", "discord", "vesktop", "webcord", "steam",
                  "com.visualstudio.CodeOSS",    -- VSCodium on Wayland
                  -- winshell's settings dialogs: their own bar with – and X
                  -- only (fixed size, no maximize, no snapping)
-                 "io.github.noe1.winshell" }
+                 "io.github.noe1.winshell",
+                 -- winterm: its tabs are in its own title bar (like Windows Terminal)
+                 "io.github.noe1.winterm" }
 OWN_TITLEBAR_PREFIX = { "org.gnome." }
 
 local function has_bar(w)
@@ -1584,7 +1589,7 @@ end)
 -- Win + 1/2/3: open or switch to the pinned taskbar apps
 hl.bind(win .. " + 1", hl.dsp.exec_cmd(scripts .. "/pinned.sh open '^org.kde.dolphin$' dolphin"))
 hl.bind(win .. " + 2", hl.dsp.exec_cmd(scripts .. "/pinned.sh open '^(brave-browser)$' brave-browser"))
-hl.bind(win .. " + 3", hl.dsp.exec_cmd(scripts .. "/pinned.sh open '^kitty$' kitty"))
+hl.bind(win .. " + 3", hl.dsp.exec_cmd(scripts .. "/pinned.sh open '^io\\.github\\.noe1\\.winterm$' winterm"))
 
 -- Win + Tab: task view like Windows – the windows of this desktop and all
 -- desktops at the bottom (winshell's TaskView); Win + Tab again closes it

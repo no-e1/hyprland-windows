@@ -520,6 +520,12 @@ button.menu-item:hover { background: rgba(255, 255, 255, 0.06); }
     transform: none;
     transition: transform 160ms cubic-bezier(0.1, 0.9, 0.2, 1), opacity 80ms ease-out;
 }
+/* closing (Escape, a click outside): a short glide down while it fades */
+.flyout.leaving {
+    opacity: 0;
+    transform: translateY(24px);
+    transition: transform 150ms cubic-bezier(0.4, 0, 1, 1), opacity 130ms ease-in;
+}
 
 /* ── Calendar flyout ─────────────────────────────────────────────── */
 .cal {

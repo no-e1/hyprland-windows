@@ -1,0 +1,16 @@
+[Desktop Entry]
+Type=Application
+Name=Terminal
+GenericName=Terminal
+Comment=Command line, with tabs – like Windows Terminal
+Exec=winterm
+Icon=win11-terminal
+Terminal=false
+Categories=System;TerminalEmulator;
+StartupWMClass=io.github.noe1.winterm
+StartupNotify=true
+Actions=new-window;
+
+[Desktop Action new-window]
+Name=New Window
+Exec=winterm
