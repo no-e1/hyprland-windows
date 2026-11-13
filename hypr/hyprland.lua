@@ -831,7 +831,7 @@ hl.bind(win .. " + E", hl.dsp.exec_cmd(fileManager))                         -- 
 hl.bind(win .. " + R", hl.dsp.exec_cmd(scripts .. "/run.sh"))                -- Run
 hl.bind(win .. " + I", hl.dsp.exec_cmd(scripts .. "/settings.sh"))           -- Settings
 hl.bind(win .. " + A", hl.dsp.exec_cmd(winshell .. " qs"))                   -- quick settings
-hl.bind(win .. " + N", hl.dsp.exec_cmd("swaync-client -t -sw"))              -- notifications
+hl.bind(win .. " + N", hl.dsp.exec_cmd(winshell .. " calendar"))   -- notifications + calendar, like Windows
 hl.bind(win .. " + X", hl.dsp.exec_cmd(scripts .. "/powermenu.sh --menu"))   -- power menu
 hl.bind(win .. " + L", hl.dsp.exec_cmd(scripts .. "/lock.sh"))               -- lock (Windows-style)
 hl.bind(win .. " + V", hl.dsp.exec_cmd(winshell .. " clipboard"))           -- clipboard history (like Windows 11)
