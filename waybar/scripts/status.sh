@@ -15,6 +15,9 @@ net() {
     inet=$(nmcli -t networking connectivity 2>/dev/null)
     if [ "$eth" -gt 0 ]; then
         json ethernet "Ethernet\\nInternet access"
+    elif [ -e "${XDG_RUNTIME_DIR:-/tmp}/winshell-airplane.json" ] && [ -z "$wifi" ]; then
+        # airplane mode (switched on in quick settings): the plane, like Windows
+        json airplane "Airplane mode"
     elif [ -n "$wifi" ]; then
         sig=$(cut -d: -f2 <<<"$wifi"); ssid=$(cut -d: -f3- <<<"$wifi" | sed 's/\\:/:/g; s/"/\\"/g')
         if [ "$inet" = full ] || [ "$inet" = unknown ] || [ -z "$inet" ]; then

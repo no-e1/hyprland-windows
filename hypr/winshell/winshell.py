@@ -1668,8 +1668,17 @@ class QuickSettings:
         con = [l.split(" ", 2)[2] for l in sh(["bluetoothctl", "devices", "Connected"], timeout=3).splitlines()
                if l.startswith("Device ") and l.count(" ") >= 2]
         st["bt_dev"] = con[0] if st["bt"] and con else ""
-        rf = sh("rfkill -n -o SOFT")
-        st["airplane"] = bool(rf.split()) and all(x == "blocked" for x in rf.split())
+        # airplane mode is on only when it was switched on (its file says
+        # which radios to bring back) – Wi-Fi and Bluetooth both off is not
+        # airplane mode. And never with Wi-Fi on: Wi-Fi switched on (here or
+        # anywhere else) ends it.
+        st["airplane"] = os.path.exists(AIRPLANE)
+        if st["airplane"] and st["wifi"]:
+            st["airplane"] = False
+            try:
+                os.unlink(AIRPLANE)
+            except OSError:
+                pass
         st["dnd"] = sh("swaync-client -D").strip() == "true"
         m = sh("brightnessctl -m").split(",")
         st["bright"] = int(m[3].rstrip("%")) if len(m) > 3 else None
@@ -1768,6 +1777,14 @@ class QuickSettings:
 
     def set_wifi(self, on):
         self.want("wifi", on, 8)
+        cmd = f"nmcli radio wifi {'on' if on else 'off'}"
+        if on and os.path.exists(AIRPLANE):     # Wi-Fi on ends airplane mode
+            try:
+                os.unlink(AIRPLANE)
+            except OSError:
+                pass
+            self.want("airplane", False)
+            cmd = "rfkill unblock wlan; " + cmd
         self.sync_switch(self.wifi_switch, on)
         self.wifi_gen = getattr(self, "wifi_gen", 0) + 1     # a running scan's result is stale now
         gen = self.wifi_gen
@@ -1789,7 +1806,8 @@ class QuickSettings:
                     self.later(lambda: gen == self.wifi_gen and self.load_wifi(True), 1500)
                 else:
                     self.load_wifi()
-        bg(lambda: ok(f"nmcli radio wifi {'on' if on else 'off'}"), after)
+            self.shell.command(["status-refresh"])     # the taskbar icon (airplane / Wi-Fi)
+        bg(lambda: ok(cmd), after)
 
     def toggle_bt(self):
         self.set_bt(not self.state.get("bt"))
@@ -1863,7 +1881,8 @@ class QuickSettings:
                     json.dump(before, f)
             except OSError:
                 pass
-            bg(lambda: ok("rfkill block all"), lambda _r: self.later(self.refresh))
+            bg(lambda: ok("rfkill block all"),
+               lambda _r: (self.later(self.refresh), self.shell.command(["status-refresh"])))
             return
         try:
             with open(AIRPLANE) as f:
@@ -1872,6 +1891,10 @@ class QuickSettings:
             before = {"wifi": True, "bt": False}
         self.want("wifi", before.get("wifi", True))
         self.want("bt", before.get("bt", False))
+        try:                                # gone first: the taskbar shows Wi-Fi again, not the plane
+            os.unlink(AIRPLANE)
+        except OSError:
+            pass
 
         def run():
             ok("rfkill unblock all")
@@ -1883,11 +1906,7 @@ class QuickSettings:
                     if "Powered: yes" in sh(["bluetoothctl", "show"], timeout=3):
                         ok(["bluetoothctl", "power", "off"], timeout=5)
                     time.sleep(0.25)
-            try:
-                os.unlink(AIRPLANE)
-            except OSError:
-                pass
-        bg(run, lambda _r: self.refresh())
+        bg(run, lambda _r: (self.refresh(), self.shell.command(["status-refresh"])))
 
     def toggle_dnd(self):
         on = not self.state.get("dnd")
@@ -7068,7 +7087,7 @@ class Taskbar:
         spawn(f"wpctl set-volume -l 1 @DEFAULT_AUDIO_SINK@ {step}")
         return True
 
-    STATUS_ICON = {"ethernet": "win11-ethernet", "wifi-off": "win11-wifi-off", "mute": "win11-volume-mute",
+    STATUS_ICON = {"airplane": "win11-airplane", "ethernet": "win11-ethernet", "wifi-off": "win11-wifi-off", "mute": "win11-volume-mute",
                    "wifi-noinet": "win11-wifi-noinet", "no-internet": "win11-no-internet"}
 
     def watch_status(self, what):
