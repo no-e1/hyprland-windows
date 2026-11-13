@@ -99,8 +99,9 @@ hl.config({
         },
 
         blur = {
-            -- off: the panels are plain, solid gray (style.css) – nothing shows through
-            enabled  = false,
+            -- only for the task view (Win + Tab, layer rule below): the panels
+            -- are plain, solid gray (style.css), windows get none (window rule)
+            enabled  = true,
             size     = 12,
             passes   = 3,
             noise    = 0.02,
@@ -266,14 +267,15 @@ hl.window_rule({
     no_focus = true,
 })
 
--- Mica/Acrylic blur for taskbar, start menu, flyouts and Alt+Tab
-hl.layer_rule({ name = "blur-startmenu", match = { namespace = "^rofi$" },                      blur = true, ignore_alpha = 0.2 })
-hl.layer_rule({ name = "blur-swaync",    match = { namespace = "^swaync-.*$" },                 blur = true, ignore_alpha = 0.2 })
+-- Blur only in the task view (Win + Tab), behind its window cards: the
+-- dimmed screen around them stays sharp (it is less than 80 % opaque, see
+-- winshell's style.css). Everything else is solid (no blur rules), and
+-- windows get no blur at all.
+hl.window_rule({ name = "no-blur-windows", match = { class = ".*" }, no_blur = true })
+hl.layer_rule({ name = "blur-taskview", match = { namespace = "^winshell-taskview$" }, blur = true, ignore_alpha = 0.8 })
 -- the notification center slides in from the right screen edge and back out,
 -- like Windows 11 – in step with winshell's calendar below it (same rule)
 hl.layer_rule({ name = "slide-swaync-cc", match = { namespace = "^swaync-control-center$" }, animation = "slide right" })
-hl.layer_rule({ name = "blur-winshell",  match = { namespace = "^winshell-(qs|switcher|start|calendar|clipboard|taskview|project|preview)$" }, blur = true, ignore_alpha = 0.2 })
-hl.layer_rule({ name = "blur-osd",        match = { namespace = "^winshell-(osd|fingerprint)$" }, blur = true, ignore_alpha = 0.2 })
 -- winshell animates its flyouts itself (they glide out of the taskbar)
 hl.layer_rule({ name = "no-anim-winshell", match = { namespace = "^winshell-.*$" }, no_anim = true })
 -- …except the task view (Win + Tab): it fades in and out as a whole, like

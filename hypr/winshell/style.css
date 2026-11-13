@@ -68,8 +68,11 @@ button.tbp-close {
 button.tbp-close:hover { background: #c42b1c; }
 
 /* ── Task view (Win + Tab) ───────────────────────────────────────── */
-/* the whole screen, dimmed and blurred (Hyprland blurs winshell-taskview) */
-.taskview { background: rgba(20, 20, 24, 0.62); }
+/* the whole screen only dimmed (not blurred), the window cards blurred:
+   Hyprland blurs winshell-taskview only where it is more than 80 % opaque
+   (ignore_alpha 0.8, hyprland.lua) – the dimmed screen is 70 %, a card on
+   it about 86 % */
+.taskview { background: rgba(20, 20, 24, 0.70); }
 .tv-empty { color: rgba(255, 255, 255, 0.75); font-size: 15px; }
 .taskview flowboxchild { padding: 0; background: transparent; }
 .tv-card {

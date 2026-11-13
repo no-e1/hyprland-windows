@@ -1919,23 +1919,11 @@ class QuickSettings:
             lst.append(row)
 
     def live_speed(self, lbl, base):
-        """The network speed next to "Connected", once a second while the
-        Wi-Fi page shows that row (same measuring as the taskbar tooltip)."""
-        last = [None]
-
-        def sample():
-            if not self.visible or not lbl.get_root() or not lbl.get_mapped() and last[0]:
-                return False                    # page closed or list rebuilt
-            now = (time.monotonic(), *Taskbar.net_bytes())
-            if last[0]:
-                dt = max(0.1, now[0] - last[0][0])
-                down = Taskbar.rate((now[1] - last[0][1]) / dt)
-                up = Taskbar.rate((now[2] - last[0][2]) / dt)
-                lbl.set_text(f"{base} · ↓ {down}  ↑ {up}")
-            last[0] = now
-            return True
-        sample()
-        GLib.timeout_add(1000, sample)
+        """The link speed next to "Connected" (same as the taskbar tooltip)."""
+        def done(speed):
+            if speed and lbl.get_root():
+                lbl.set_text(f"{base} · {speed}")
+        bg(Taskbar.link_speed, done)
 
     def wifi_row(self, n):
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
@@ -1950,7 +1938,7 @@ class QuickSettings:
         st_lbl = label(status, "net-status")
         txt.append(st_lbl)
         if n["active"]:
-            self.live_speed(st_lbl, status)     # "Connected · ↓ 1.2 MB/s  ↑ 40 KB/s"
+            self.live_speed(st_lbl, status)     # "Connected, secured · 866 Mbit/s"
         txt.set_hexpand(True)
         top.append(txt)
         box.append(top)
@@ -6959,13 +6947,12 @@ class Taskbar:
         lines = [self.status.get("net"), self.net_speed, self.status.get("vol"), self.status.get("bat")]
         self.quick_btn.set_tooltip_text("\n".join(t for t in lines if t))
 
-    # network speed in the tooltip: measured only while the pointer is on
-    # the Wi-Fi / volume / battery button (once a second)
+    # the link speed in the tooltip ("Link speed: 866 Mbit/s", "1 Gbit/s"):
+    # looked up while the pointer is on the Wi-Fi / volume / battery button
     def speed_start(self, *_):
         if not self.speed_timer:
-            self.speed_last = None
             self.speed_sample()
-            self.speed_timer = GLib.timeout_add(1000, self.speed_sample)
+            self.speed_timer = GLib.timeout_add(3000, self.speed_sample)
 
     def speed_stop(self, *_):
         if self.speed_timer:
@@ -6973,38 +6960,48 @@ class Taskbar:
             self.speed_timer = 0
 
     @staticmethod
-    def net_bytes():
-        """Received / sent bytes of the real network adapters (Wi-Fi,
-        Ethernet – not the VPN tunnel, its traffic goes through them anyway)."""
-        rx = tx = 0
-        for dev in os.listdir("/sys/class/net"):
-            if not os.path.exists(f"/sys/class/net/{dev}/device"):
+    def fmt_link(mbit):
+        if mbit >= 1000:
+            g = mbit / 1000
+            return f"{g:.0f} Gbit/s" if abs(g - round(g)) < 0.05 else f"{g:.1f} Gbit/s"
+        return f"{mbit:.0f} Mbit/s"
+
+    @classmethod
+    def link_speed(cls):
+        """How fast the connection to the network is ("Link speed" in
+        Windows): Ethernet as negotiated (100 Mbit/s, 1 Gbit/s), Wi-Fi the
+        rate the adapter sends at right now. None when not connected.
+        Ethernet wins when both are up."""
+        wifi = None
+        for dev in sorted(os.listdir("/sys/class/net")):
+            base = f"/sys/class/net/{dev}"
+            if not os.path.exists(f"{base}/device"):
+                continue                        # lo, VPN tunnels
+            try:
+                if open(f"{base}/operstate").read().strip() != "up":
+                    continue
+            except OSError:
+                continue
+            if os.path.isdir(f"{base}/wireless"):
+                wifi = dev
                 continue
             try:
-                with open(f"/sys/class/net/{dev}/statistics/rx_bytes") as f:
-                    rx += int(f.read())
-                with open(f"/sys/class/net/{dev}/statistics/tx_bytes") as f:
-                    tx += int(f.read())
+                mbit = int(open(f"{base}/speed").read())
             except (OSError, ValueError):
-                pass
-        return rx, tx
-
-    @staticmethod
-    def rate(n):
-        for unit, size in (("MB/s", 1e6), ("KB/s", 1e3)):
-            if n >= size:
-                v = n / size
-                return f"{v:.1f} {unit}" if v < 100 else f"{v:.0f} {unit}"
-        return f"{n:.0f} B/s"
+                mbit = -1
+            if mbit > 0:
+                return cls.fmt_link(mbit)
+        if wifi:
+            m = re.search(r"tx bitrate:\s*([\d.]+)\s*MBit/s", sh(["iw", "dev", wifi, "link"], timeout=2))
+            if m:
+                return cls.fmt_link(float(m.group(1)))
+        return None
 
     def speed_sample(self):
-        now = (time.monotonic(), *self.net_bytes())
-        if self.speed_last:
-            dt = max(0.1, now[0] - self.speed_last[0])
-            down, up = (now[1] - self.speed_last[1]) / dt, (now[2] - self.speed_last[2]) / dt
-            self.net_speed = f"↓ {self.rate(down)}   ↑ {self.rate(up)}"
+        def done(speed):
+            self.net_speed = f"Link speed: {speed}" if speed else ""
             self.update_quick_tooltip()
-        self.speed_last = now
+        bg(self.link_speed, done)
         return True
 
     # ── tray ──
