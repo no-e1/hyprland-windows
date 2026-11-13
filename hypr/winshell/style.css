@@ -147,7 +147,7 @@ button.tbp-close:hover { background: #c42b1c; }
 }
 .qs-tiles { padding: 22px 22px 6px 22px; }
 .qs-sliders {
-    padding: 14px 16px 14px 18px;
+    padding: 14px 8px 14px 10px;
     border-top: 1px solid rgba(255, 255, 255, 0.08);
 }
 .qs-page { padding: 14px 14px 10px 14px; }
@@ -193,13 +193,56 @@ button.tbp-close:hover { background: #c42b1c; }
 .tile-label { font-size: 12px; min-height: 32px; }   /* room for two lines */
 
 .slider-row image { min-width: 22px; }
-.slider-row button.slider-more { padding: 6px 4px 6px 6px; }
+.slider-row button.slider-more { padding: 6px 2px 6px 4px; }
 scale { padding: 8px 0; }
 scale trough {
     min-height: 4px;
     border-radius: 2px;
     background: rgba(255, 255, 255, 0.54);
     border: none;
+}
+/* quick settings: brightness / volume measured from Windows 11's (at 1.5x):
+   a 4 px bar and a small knob – 10 px blue in a dark ring – that grows
+   under the pointer and shrinks while held. The knob's box always stays
+   24 px (a big area to hover), only the drawn dot changes: its size
+   changing used to make the whole bar thicker for a moment on a click
+   (the bar is as high as the knob's box minus its margins). */
+.qs-sliders scale trough, .qs-sliders scale highlight { min-height: 4px; }
+.qs-sliders scale slider {
+    min-width: 24px;
+    min-height: 24px;
+    margin: -10px;
+    border: none;
+    box-shadow: none;
+    background: radial-gradient(circle closest-side, #4cc2ff 4.6px, #454545 5.2px, #454545 8px,
+                                rgba(0, 0, 0, 0.35) 8.4px, rgba(0, 0, 0, 0.35) 9px, transparent 9.4px);
+}
+/* the box keeps its size in every state: the general "scale slider:hover"
+   (14 px) made it shrink under the pointer, the pointer was outside, it grew
+   again – it flipped big/small many times a second at its edge */
+.qs-sliders scale slider:hover, .qs-sliders scale slider:active {
+    min-width: 24px;
+    min-height: 24px;
+    margin: -10px;
+    border: none;
+}
+.qs-sliders scale slider:hover {                    /* under the pointer: bigger */
+    background: radial-gradient(circle closest-side, #4cc2ff 6.6px, #454545 7.2px, #454545 9.6px,
+                                rgba(0, 0, 0, 0.35) 10px, rgba(0, 0, 0, 0.35) 10.6px, transparent 11px);
+}
+.qs-sliders scale slider:active {                   /* held: smaller */
+    background: radial-gradient(circle closest-side, #4cc2ff 3.6px, #454545 4.2px, #454545 7.6px,
+                                rgba(0, 0, 0, 0.35) 8px, rgba(0, 0, 0, 0.35) 8.6px, transparent 9px);
+}
+/* the value above the knob while it is dragged */
+popover.slider-tip > contents {
+    padding: 4px 9px;
+    background: rgb(43, 43, 43);
+    border: 1px solid rgba(255, 255, 255, 0.10);
+    border-radius: 5px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+    color: #ffffff;
+    font-size: 12px;
 }
 scale highlight {
     background: #4cc2ff;
@@ -630,23 +673,20 @@ popover.tray-menu label, popover.tray-overflow label { text-shadow: none; }
 .taskbar button:hover { background: rgba(255, 255, 255, 0.08); }
 
 /* start button: grey while the start menu is open. Clicked, the logo is
-   pressed in and dips back out; opened with the Windows key its squares
-   flicker instead (winshell.py StartLogo / set_start_open) */
+   pressed in just like an app icon (no extra dip when the menu opens);
+   opened with the Windows key its squares flicker instead (winshell.py
+   StartLogo / set_start_open) */
 button.tb-start { min-width: 40px; }
 button.tb-start.open { background: rgba(255, 255, 255, 0.08); }
-button.tb-start.open.clicked .start-logo { animation: start-dip 260ms ease-out; }
-button.tb-start:active .start-logo { transform: scale(0.82); }
-@keyframes start-dip {
-    0%   { transform: scale(1); }
-    35%  { transform: scale(0.78); }
-    100% { transform: scale(1); }
-}
+button.tb-start:active .start-logo,
+button.tb-start.pressing .start-logo { transform: scale(0.88); }
 
 /* app buttons with the "running" dash; the active app gets a wide blue one */
 button.tb-app { min-width: 24px; padding: 0 8px; }   /* min-width excludes padding: 40 px in all */
 button.tb-app.active { background: rgba(255, 255, 255, 0.06); }
 button.tb-app.active:hover { background: rgba(255, 255, 255, 0.10); }
-button.tb-app:active image { transform: scale(0.88); }
+button.tb-app:active image,
+button.tb-app.pressing image { transform: scale(0.88); }   /* .pressing: clicked through a flyout's catcher */
 /* several windows of the app: when the button is lit (in front, hovered) a
    second card peeks out behind it on the right, like Windows 11's stacked
    look (without the button's own background it looked like a loose line) */
@@ -696,30 +736,32 @@ button.tb-peek {
 .tray-flyout flowboxchild { padding: 0; }
 /* like Windows 11: an app's icon dips when its window is minimized into it
    and hops when the window comes back out (DesktopAnim.bounce) */
-/* one calm move down (or up), a moment's pause there, and back, no bounce – Windows 11 is subtle
-   here. GTK has no per-step easing, so the curve is spelled out in steps */
+/* one calm move down (or up), a pause there, and back, no bounce – Windows 11 is subtle
+   here. GTK has no per-step easing, so the curve is spelled out in steps.
+   tb-dip: goes down together with the window flying into it – same 240 ms,
+   same curve (DeskCanvas) – and right back up once it has landed */
 @keyframes tb-dip {
     0.0% { transform: translateY(0.00px); }
-    4.2% { transform: translateY(1.32px); }
-    8.4% { transform: translateY(2.31px); }
-    12.6% { transform: translateY(3.02px); }
-    16.8% { transform: translateY(3.50px); }
-    21.1% { transform: translateY(3.79px); }
-    25.3% { transform: translateY(3.94px); }
-    29.5% { transform: translateY(3.99px); }
-    33.7% { transform: translateY(4.00px); }
-    49.5% { transform: translateY(4.00px); }
+    4.9% { transform: translateY(0.08px); }
+    9.8% { transform: translateY(0.30px); }
+    14.6% { transform: translateY(0.62px); }
+    19.5% { transform: translateY(1.04px); }
+    24.4% { transform: translateY(1.50px); }
+    29.3% { transform: translateY(2.00px); }
+    34.1% { transform: translateY(2.50px); }
+    39.0% { transform: translateY(2.96px); }
+    43.9% { transform: translateY(3.38px); }
+    48.8% { transform: translateY(3.70px); }
     53.7% { transform: translateY(3.92px); }
-    57.9% { transform: translateY(3.70px); }
-    62.1% { transform: translateY(3.38px); }
-    66.3% { transform: translateY(2.96px); }
-    70.5% { transform: translateY(2.50px); }
-    74.7% { transform: translateY(2.00px); }
-    78.9% { transform: translateY(1.50px); }
-    83.2% { transform: translateY(1.04px); }
-    87.4% { transform: translateY(0.62px); }
-    91.6% { transform: translateY(0.30px); }
-    95.8% { transform: translateY(0.08px); }
+    58.5% { transform: translateY(4.00px); }
+    63.4% { transform: translateY(4.00px); }
+    68.0% { transform: translateY(3.83px); }
+    72.6% { transform: translateY(3.38px); }
+    77.1% { transform: translateY(2.73px); }
+    81.7% { transform: translateY(2.00px); }
+    86.3% { transform: translateY(1.27px); }
+    90.9% { transform: translateY(0.62px); }
+    95.4% { transform: translateY(0.17px); }
     100.0% { transform: translateY(0.00px); }
 }
 @keyframes tb-hop {
@@ -746,7 +788,7 @@ button.tb-peek {
     95.8% { transform: translateY(-0.08px); }
     100.0% { transform: translateY(-0.00px); }
 }
-button.tb-app.tb-dip image { animation: tb-dip 380ms linear; }
+button.tb-app.tb-dip image { animation: tb-dip 410ms linear; }
 button.tb-app.tb-hop image { animation: tb-hop 380ms linear; }
 button.tb-tray-arrow.open { background: rgba(255, 255, 255, 0.08); }
 /* like Windows 11: "^" turns into "v" while the flyout is open */

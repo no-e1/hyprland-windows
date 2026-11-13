@@ -1231,7 +1231,7 @@ class QuickSettings:
         self.backdrop.set_child(Gtk.Box(hexpand=True, vexpand=True))
         self.backdrop_for = None          # "qs" or "rofi"
         click = Gtk.GestureClick()
-        click.connect("pressed", lambda *_: self.outside_click())
+        click.connect("pressed", lambda _g, _n, x, y: (self.press_through(x, y), self.outside_click()))
         self.backdrop.add_controller(click)
 
         self.win = layer_window(app, "winshell-qs", LS.Layer.OVERLAY,
@@ -1304,7 +1304,7 @@ class QuickSettings:
                                              on_icon=self.toggle_mute,
                                              on_more=lambda: self.open_page("sound"),
                                              more_icon="win11-sound-output")
-        sliders = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        sliders = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=15)   # as far apart as Windows'
         sliders.add_css_class("qs-sliders")
         sliders.append(self.bright_row)
         sliders.append(self.vol_row)
@@ -1334,8 +1334,47 @@ class QuickSettings:
         outer.append(lbl)
         return outer, row, lbl, img
 
+    @staticmethod
+    def value_tip(scale):
+        """Like Windows 11: while the knob is held and dragged, a small grey
+        bubble above it shows the value (e.g. 74) and moves along with it."""
+        tip = Gtk.Popover(has_arrow=False, autohide=False, position=Gtk.PositionType.TOP)
+        tip.add_css_class("slider-tip")
+        tip.set_can_target(False)
+        lbl = Gtk.Label()
+        tip.set_child(lbl)
+        tip.set_parent(scale)
+        tip.set_offset(0, -6)
+        held = [False]
+
+        def place():
+            lbl.set_text(str(int(round(scale.get_value()))))
+            start, end = scale.get_slider_range()
+            r = Gdk.Rectangle()
+            r.x, r.y, r.width, r.height = (start + end) // 2, scale.get_height() // 2 - 7, 1, 1
+            tip.set_pointing_to(r)
+
+        def on_event(c, *_a):
+            ev = c.get_current_event()      # (the signal's own argument comes as None)
+            if ev is None:
+                return False
+            t = ev.get_event_type()
+            if t in (Gdk.EventType.BUTTON_PRESS, Gdk.EventType.TOUCH_BEGIN):
+                held[0] = True
+                # a frame later: the knob has jumped to the pointer by then
+                GLib.idle_add(lambda: held[0] and (place(), tip.popup()) and False)
+            elif t in (Gdk.EventType.BUTTON_RELEASE, Gdk.EventType.TOUCH_END, Gdk.EventType.TOUCH_CANCEL):
+                held[0] = False
+                tip.popdown()
+            return False
+        legacy = Gtk.EventControllerLegacy()
+        legacy.connect("event", on_event)
+        scale.add_controller(legacy)
+        scale.connect("value-changed", lambda _s: held[0] and place())
+        scale.connect("unmap", lambda _s: (held.__setitem__(0, False), tip.popdown()))
+
     def slider(self, ic, on_change, on_icon=None, on_more=None, more_icon=None):
-        row = Gtk.Box(spacing=10)
+        row = Gtk.Box(spacing=6)
         row.add_css_class("slider-row")
         img = icon(ic, 22)
         lead = button(img, "flat-btn", on_click=on_icon)    # same size in both rows
@@ -1348,10 +1387,11 @@ class QuickSettings:
         scale.set_draw_value(False)
         scale.connect("value-changed", lambda s: None if self.updating else on_change(int(s.get_value())))
         row.append(scale)
+        self.value_tip(scale)
         # Like Windows, both sliders are equally long: the brightness row gets
         # an invisible stand-in for the volume row's ">" (output devices)
         # "select a sound output": output icon + ">", one button like Windows
-        more_box = Gtk.Box(spacing=4)
+        more_box = Gtk.Box(spacing=2)
         more_box.append(icon(more_icon or "win11-sound-output", 22))
         more_box.append(icon("win11-chevron-right", 16))
         more = button(more_box, "flat-btn", "slider-more", on_click=on_more,
@@ -1517,6 +1557,25 @@ class QuickSettings:
         elif self.backdrop_for not in (None, "qs"):
             self.backdrop_for = None
             self.backdrop.set_visible(False)
+
+    def press_through(self, x, y):
+        """A click on the taskbar while a flyout is open lands on this
+        catcher, not on the button below: let that button look pressed
+        anyway (the start logo / an app icon dips like on a normal click)."""
+        sh = self.shell
+        con = getattr(sh, "flyout_screen", None) or getattr(sh, "primary", None)
+        bar = sh.desk.bar_of(con) if getattr(sh, "desk", None) else getattr(sh, "taskbar", None)
+        if not bar or not bar.win.get_mapped():
+            return
+        top = self.backdrop.get_height() - bar.win.get_height()
+        if y < top:
+            return
+        w = bar.win.pick(x, y - top, Gtk.PickFlags.DEFAULT)
+        while w and not isinstance(w, Gtk.Button):
+            w = w.get_parent()
+        if w:
+            w.add_css_class("pressing")
+            GLib.timeout_add(120, lambda: w.remove_css_class("pressing") and False)
 
     def outside_click(self):
         if self.backdrop_for == "rofi":
@@ -2397,6 +2456,7 @@ class WeekScroller(Gtk.Widget):
     GAP = 2                     # px between rows / columns
     EPOCH = datetime.date(2001, 1, 1)       # a Monday: rows count from its week
     WHEEL_ROWS = 1              # one wheel notch
+    WHEEL_GLIDE = 0.34          # s: the numbers glide over slowly, no jump
     FRICTION = 5.0              # momentum: 1/s (higher stops sooner)
 
     def __init__(self, on_month):
@@ -2540,9 +2600,19 @@ class WeekScroller(Gtk.Widget):
             self.queue_draw()
             if not self.touching:                       # no begin/end (some devices)
                 self.settle_id = GLib.timeout_add(120, self.settle)
-        else:                                           # wheel: glides a few rows
-            target = (self.anim[1] if self.anim else round(self.top)) + dy * self.WHEEL_ROWS
-            self.glide_to(round(target), 0.2)
+        else:                                           # wheel: glides one row per notch
+            # (Hyprland's scroll factor makes a notch 1.67: that was 2 rows
+            # at once; fine-grained wheels send parts of a notch – summed up)
+            if abs(dy) >= 0.5:
+                steps = 1 if dy > 0 else -1
+                self.wheel_acc = 0.0
+            else:
+                self.wheel_acc = getattr(self, "wheel_acc", 0.0) + dy
+                steps = int(self.wheel_acc)
+                self.wheel_acc -= steps
+            if steps:
+                target = (self.anim[1] if self.anim else round(self.top)) + steps * self.WHEEL_ROWS
+                self.glide_to(round(target), self.WHEEL_GLIDE)
         return True
 
     def on_scroll_end(self, _c):
@@ -2762,7 +2832,7 @@ class CalendarFlyout:
                         self.nc_empty = empty
                         ncplace.save(empty=empty)
                         ncplace.sync()
-                    if self.nc_open and not visible:
+                    if self.nc_open and not visible and not getattr(self, "nc_moving", False):
                         GLib.idle_add(lambda: self.hide() and False)
                     self.nc_open = visible
             except OSError:
@@ -2800,7 +2870,41 @@ class CalendarFlyout:
             return
         self.placed_for = height
         ncplace.save(height=height)
+        if not self.visible:
+            bg(ncplace.sync)
+            return
+        # swaync takes a new place only with a reload and only once it is
+        # opened again; it can't move while open. So while the calendar
+        # folds (200 ms) it fades out where it was and fades back in at its
+        # new place once the calendar has arrived – no jump, no hanging in
+        # the air. (The reload sometimes closes it by itself: expected, the
+        # calendar stays open.)
+        self.nc_moving = True
+        self.nc_anim("fade")
+        self.notification_center(False)
         bg(ncplace.sync)
+        GLib.timeout_add(self.body.get_transition_duration() + 20, self.nc_reopen)
+
+    @staticmethod
+    def nc_anim(style):
+        """Hyprland's animation of the notification center (hyprland.lua
+        rule "slide-swaync-cc"): "slide right" normally, "fade" while it moves."""
+        hypr_eval('hl.layer_rule({ name = "slide-swaync-cc", match = { namespace = '
+                  f'"^swaync-control-center$" }}, animation = "{style}" }})')
+
+    def nc_reopen(self):
+        if self.visible:
+            self.notification_center(True)
+            # the keyboard back to the calendar (Escape closes both)
+            GLib.timeout_add(40, lambda: self.visible and LS.set_keyboard_mode(
+                self.win, LS.KeyboardMode.EXCLUSIVE) and False)
+
+        def done():
+            self.nc_moving = False
+            self.nc_anim("slide right")
+            return False
+        GLib.timeout_add(450, done)
+        return False
 
     def shift(self, months):
         """The arrows: the previous / next month glides into view."""
@@ -2827,7 +2931,11 @@ class CalendarFlyout:
         self.waiting_nc = True
         GLib.timeout_add(self.NC_DELAY, self.nc_opened)
 
-    NC_DELAY = 18               # ms: swaync's control center maps ~20 ms after the D-Bus call
+    # ms: swaync's control center maps ~20 ms after the D-Bus call, but its
+    # contents show up on screen only ~65 ms after the calendar's (measured
+    # frame by frame) – the notifications slid in behind the calendar. The
+    # calendar waits that long, so both slide in as one.
+    NC_DELAY = 80
 
     def nc_opened(self):
         """swaync's control center is (about to be) on screen: now the
@@ -4628,6 +4736,7 @@ class DeskCanvas(Gtk.Widget):
         self.t = 0.0
         self.rising = False
         self.fade = 1.0         # whole drawing (fades out once the windows are back)
+        self.bar_h = 0          # the taskbar's height: the pictures never cover it
 
     def rect_of(self, it):
         """Where that picture is right now (x, y, w, h)."""
@@ -4652,6 +4761,9 @@ class DeskCanvas(Gtk.Widget):
         # surface: fading each one by itself let the pictures of the windows
         # behind shine through the front one (Discord through Brave)
         snap.push_opacity(self.fade)
+        # the taskbar stays on top: the windows slip under it into their
+        # icon (and come out from under it), they never cover it
+        snap.push_clip(Graphene.Rect().init(0, 0, self.get_width(), max(0, self.get_height() - self.bar_h)))
         for it in self.items:
             x, y, w, h = self.rect_of(it)
             full_w = max(it["a"][2], it["b"][2], 1.0)
@@ -4669,6 +4781,7 @@ class DeskCanvas(Gtk.Widget):
                 snap.append_color(c, Graphene.Rect().init(x, y, w, h))
             snap.pop()
             snap.pop()
+        snap.pop()
         snap.pop()
 
 
@@ -4779,7 +4892,7 @@ class DesktopAnim:
                 b.remove_css_class("tb-hop")
             # a frame later, so the same animation can start again
             GLib.timeout_add(20, lambda: [b.add_css_class("tb-" + kind) for b in buttons] and False)
-            GLib.timeout_add(460, lambda: [b.remove_css_class("tb-" + kind) for b in buttons] and False)
+            GLib.timeout_add(480, lambda: [b.remove_css_class("tb-" + kind) for b in buttons] and False)
             return False
         GLib.timeout_add(max(1, int(delay * 1000)), start)
 
@@ -4853,6 +4966,8 @@ class DesktopAnim:
                 classes.add((con, it["cls"]))
             c = ly.canvas
             c.items, c.rising, c.t, c.fade = items, rising, 0.0, 1.0
+            bar = self.bar_of(con)
+            c.bar_h = bar.win.get_height() if bar and bar.win.get_mapped() else 0
             if not ly.win.get_visible():
                 fresh = True
             ly.win.present()
@@ -4871,9 +4986,11 @@ class DesktopAnim:
             # picture (small and big at the same time). No fresh screenshots
             # first – they made it feel slow; the Alt+Tab previews do.
             self.hide_now = lambda: hypr_eval(f"{callback}({gen})")
-            # together with the windows, like Windows: the icon is lowest
-            # (40 % into its 320 ms) right when they land (OUT = 240 ms)
-            self.bounce(classes, "dip", 0.11 + self.wait / 60)
+            # together with the windows: the icon goes down as they fly
+            # into it, in step, and back up once they have landed (tb-dip)
+            # (40 ms early: the class goes on a frame later and GTK starts
+            # the animation with the next frame – it lagged behind a little)
+            self.bounce(classes, "dip", max(0.001, self.wait / 60 - 0.04))
         else:
             self.hide_now = None
             self.done = lambda: hypr_eval(f"{callback}({gen})")
@@ -7126,6 +7243,17 @@ class Taskbar:
             # grow again under the pointer (flicker)
             where = "ov"
             lx = ly = 10 ** 6 if d["index"] >= 10 ** 6 else None
+        # Holding still near the "^" or the flyout: a new place can move the
+        # icons so that the pointer is over the old place again – it went
+        # back and forth between flyout and taskbar many times a second.
+        # Changing places needs the pointer to have moved since the last
+        # change (a few px); until then the icon stays where it is.
+        if where != d["target"]:
+            sx, sy = d.get("switched_at", (None, None))
+            if sx is not None and abs(tx - sx) + abs(ty - sy) < 8:
+                where, lx = d["target"], None
+            else:
+                d["switched_at"] = (tx, ty)
         d["moved_at"] = time.monotonic()
         if where and lx is not None:
             box = self.tray_box_of(where)
@@ -7627,6 +7755,9 @@ class WinShell(Gtk.Application):
         elif what == "calendar":
             if arg == "hide":
                 self.calendar.hide()
+            elif arg == "fold":                 # the arrow: fold the month away / back
+                if self.calendar.visible:
+                    self.calendar.toggle_fold()
             else:
                 self.flyouts_on(None)
                 self.calendar.toggle()
