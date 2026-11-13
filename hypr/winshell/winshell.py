@@ -9,6 +9,7 @@ Runs as a background daemon. Control it with winshell-ctl:
   winshell-ctl switch next|prev|commit|cancel
   winshell-ctl qs [toggle|wifi|bluetooth|hide]
 """
+import datetime
 import fcntl
 import json
 import types
@@ -2292,13 +2293,358 @@ class QuickSettings:
 
 
 # ── Calendar flyout (click on the clock, like Windows 11) ──────────────────
+def rgba(r, g, b, a):
+    c = Gdk.RGBA()
+    c.red, c.green, c.blue, c.alpha = r, g, b, a
+    return c
+
+
+class StartLogo(Gtk.Widget):
+    """The start button's logo (icons/win11-start.svg, drawn here): four
+    rounded squares with a light-to-deep blue gradient. Opened with the
+    Windows key it flickers like Windows 11 – a flash of light runs across
+    the squares from top left to bottom right, each lights up and goes back."""
+    LIGHT = (0x6c / 255, 0xcf / 255, 1.0)       # gradient top left
+    DEEP = (0x1f / 255, 0x8f / 255, 0xe0 / 255)  # … bottom right
+    FLASH = (0.86, 0.96, 1.0)                    # the squares light up to this
+    SQUARES = ((2, 2, 0), (12.4, 2, 1), (2, 12.4, 1), (12.4, 12.4, 2))   # x, y, diagonal
+    DELAY = 0.07                # s between the diagonals
+    UP, DOWN = 0.06, 0.22       # s: lighting up, going back
+
+    def __init__(self, size=26):
+        super().__init__()
+        self.size = size
+        self.set_size_request(size, size)
+        self.set_halign(Gtk.Align.CENTER)
+        self.set_valign(Gtk.Align.CENTER)
+        self.add_css_class("start-logo")
+        self.t0 = None
+        self.t = 0.0
+        self.tick = 0
+
+    def flicker(self):
+        self.t0 = None
+        if not self.tick:
+            self.tick = self.add_tick_callback(self.on_tick)
+
+    def on_tick(self, _w, clock):
+        now = clock.get_frame_time() / 1e6
+        if self.t0 is None:
+            self.t0 = now
+        self.t = now - self.t0
+        self.queue_draw()
+        if self.t >= 2 * self.DELAY + self.UP + self.DOWN:
+            self.t0, self.t, self.tick = None, 0.0, 0
+            return False
+        return True
+
+    def glow(self, diag):
+        """0..1: how far that square is lit up right now."""
+        if not self.tick:
+            return 0.0
+        t = self.t - diag * self.DELAY
+        if t <= 0:
+            return 0.0
+        if t < self.UP:
+            return t / self.UP
+        t -= self.UP
+        return max(0.0, 1 - t / self.DOWN) ** 2
+
+    def mix(self, c, k):
+        f = self.FLASH
+        return rgba(c[0] + (f[0] - c[0]) * k, c[1] + (f[1] - c[1]) * k, c[2] + (f[2] - c[2]) * k, 1)
+
+    def do_snapshot(self, snap):
+        k = self.size / 24
+        ox = (self.get_width() - self.size) / 2
+        oy = (self.get_height() - self.size) / 2
+        side = 9.6 * k
+        for x, y, diag in self.SQUARES:
+            g = self.glow(diag)
+            rect = Graphene.Rect().init(ox + x * k, oy + y * k, side, side)
+            clip = Gsk.RoundedRect()
+            clip.init_from_rect(rect, 1 * k)
+            snap.push_rounded_clip(clip)
+            stops = [Gsk.ColorStop(), Gsk.ColorStop()]
+            stops[0].offset, stops[0].color = 0.0, self.mix(self.LIGHT, g)
+            stops[1].offset, stops[1].color = 1.0, self.mix(self.DEEP, g * 0.85)
+            snap.append_linear_gradient(rect, Graphene.Point().init(ox + x * k, oy + y * k),
+                                        Graphene.Point().init(ox + x * k + side, oy + y * k + side), stops)
+            snap.pop()
+
+
+class WeekScroller(Gtk.Widget):
+    """The calendar's days as one endless sheet of weeks (like Windows 11):
+    it scrolls smoothly – a touchpad moves it with the fingers (and on with
+    momentum), the wheel and the arrows glide – and settles on a whole row.
+    The month in the middle of the view is the bright one, its name is in
+    the header; the days of the months around it are dimmed."""
+    ROWS = 6
+    CELL = 40                   # px: the round day cell
+    GAP = 2                     # px between rows / columns
+    EPOCH = datetime.date(2001, 1, 1)       # a Monday: rows count from its week
+    WHEEL_ROWS = 1              # one wheel notch
+    FRICTION = 5.0              # momentum: 1/s (higher stops sooner)
+
+    def __init__(self, on_month):
+        super().__init__()
+        self.on_month = on_month            # (year, month): the month in view changed
+        self.row_h = self.CELL + self.GAP
+        self.set_size_request(-1, self.ROWS * self.CELL + (self.ROWS - 1) * self.GAP)
+        self.set_overflow(Gtk.Overflow.HIDDEN)
+        self.top = 0.0                      # rows from EPOCH's week at the top edge
+        self.focus = None                   # (year, month) shown bright
+        self.prev_focus = None              # … fading out
+        self.focus_t0 = 0.0
+        self.hover = None                   # (x, y) of the pointer
+        self.anim = None                    # glide: (from, to, t0, duration)
+        self.velocity = 0.0                 # momentum: rows per second
+        self.tick = 0
+        self.last_frame = 0.0
+        self.touching = False
+        self.settle_id = 0
+        self._layouts = {}                  # (text, size, weight) -> Pango.Layout
+
+        sc = Gtk.EventControllerScroll(flags=Gtk.EventControllerScrollFlags.VERTICAL
+                                       | Gtk.EventControllerScrollFlags.KINETIC)
+        sc.connect("scroll-begin", self.on_scroll_begin)
+        sc.connect("scroll", self.on_scroll)
+        sc.connect("scroll-end", self.on_scroll_end)
+        sc.connect("decelerate", self.on_decelerate)
+        self.add_controller(sc)
+        mo = Gtk.EventControllerMotion()
+        mo.connect("motion", lambda _c, x, y: self.set_hover((x, y)))
+        mo.connect("leave", lambda _c: self.set_hover(None))
+        self.add_controller(mo)
+
+    # ── positions ──
+    @classmethod
+    def row_of(cls, date):
+        return (date - cls.EPOCH).days // 7
+
+    @staticmethod
+    def first_row_month(row):
+        """The (year, month) of the Thursday of that row (ISO: the week's month)."""
+        d = WeekScroller.EPOCH + datetime.timedelta(days=7 * row + 3)
+        return d.year, d.month
+
+    def middle_month(self):
+        return self.first_row_month(math.floor(self.top + self.ROWS / 2))
+
+    def show_month(self, year, month, animate=False):
+        """That month's first week at the top."""
+        row = self.row_of(datetime.date(year, month, 1))
+        if animate:
+            self.glide_to(row, 0.26)
+        else:
+            self.stop()
+            self.top = float(row)
+            self.update_focus(fade=False)
+            self.queue_draw()
+
+    def step_month(self, delta):
+        base = self.anim[1] if self.anim else self.top       # arrows pressed quickly: from where it is heading
+        y, m = self.first_row_month(math.floor(base + self.ROWS / 2))
+        m += delta
+        y, m = y + (m - 1) // 12, (m - 1) % 12 + 1
+        self.show_month(y, m, animate=True)
+
+    # ── motion ──
+    def ensure_tick(self):
+        if not self.tick:
+            self.last_frame = 0.0
+            self.tick = self.add_tick_callback(self.on_tick)
+
+    def stop(self):
+        self.anim = None
+        self.velocity = 0.0
+        if self.settle_id:
+            GLib.source_remove(self.settle_id)
+            self.settle_id = 0
+
+    def glide_to(self, row, duration=0.2):
+        start = self.top
+        self.stop()
+        if abs(row - start) < 1e-3:
+            self.top = float(row)
+            self.queue_draw()
+            return
+        self.anim = (start, float(row), None, duration)
+        self.ensure_tick()
+
+    def settle(self):
+        """Come to rest on a whole row."""
+        self.settle_id = 0
+        if not self.touching and self.anim is None and not self.velocity:
+            self.glide_to(round(self.top), 0.18)
+        return False
+
+    def on_tick(self, _w, clock):
+        now = clock.get_frame_time() / 1e6
+        dt = min(0.05, now - self.last_frame) if self.last_frame else 1 / 60
+        self.last_frame = now
+        busy = False
+        if self.anim:
+            a, b, t0, dur = self.anim
+            if t0 is None:
+                t0 = now
+                self.anim = (a, b, t0, dur)
+            t = min(1.0, (now - t0) / dur)
+            e = 1 - (1 - t) ** 3                    # ease out
+            self.top = a + (b - a) * e
+            if t >= 1.0:
+                self.anim = None
+            else:
+                busy = True
+        elif self.velocity:
+            self.top += self.velocity * dt
+            self.velocity *= math.exp(-self.FRICTION * dt)
+            if abs(self.velocity) < 1.5:            # rows/s: slow enough – settle
+                self.velocity = 0.0
+                self.settle()
+            busy = True
+        if self.focus_t0:                           # months still crossfading
+            busy = True
+        self.update_focus()
+        self.queue_draw()
+        if not busy and self.anim is None:
+            self.tick = 0
+            return False
+        return True
+
+    # ── input ──
+    def on_scroll_begin(self, _c):
+        self.touching = True
+        self.stop()
+
+    def on_scroll(self, c, _dx, dy):
+        if not dy:
+            return True
+        if c.get_unit() == Gdk.ScrollUnit.SURFACE:      # touchpad: follows the fingers
+            self.stop()
+            self.top += dy / self.row_h
+            self.update_focus()
+            self.queue_draw()
+            if not self.touching:                       # no begin/end (some devices)
+                self.settle_id = GLib.timeout_add(120, self.settle)
+        else:                                           # wheel: glides a few rows
+            target = (self.anim[1] if self.anim else round(self.top)) + dy * self.WHEEL_ROWS
+            self.glide_to(round(target), 0.2)
+        return True
+
+    def on_scroll_end(self, _c):
+        self.touching = False
+        # momentum (decelerate) follows right away if the fingers were moving
+        self.settle_id = GLib.timeout_add(40, self.settle)
+
+    def on_decelerate(self, _c, _vx, vy):
+        if self.settle_id:
+            GLib.source_remove(self.settle_id)
+            self.settle_id = 0
+        self.velocity = vy / self.row_h
+        if abs(self.velocity) < 1.5:
+            self.velocity = 0.0
+            self.settle()
+            return
+        self.ensure_tick()
+
+    def set_hover(self, pos):
+        self.hover = pos
+        self.queue_draw()
+
+    # ── drawing ──
+    def update_focus(self, fade=True):
+        f = self.middle_month()
+        if f != self.focus:
+            self.prev_focus = self.focus if fade else None
+            self.focus = f
+            self.focus_t0 = time.monotonic() if fade and self.prev_focus else 0.0
+            if fade and self.prev_focus:
+                self.ensure_tick()
+            self.on_month(*f)
+
+    def brightness(self, ym):
+        """1 for the month in view, dim for the others – crossfading."""
+        k = 1.0
+        if self.focus_t0:
+            k = min(1.0, (time.monotonic() - self.focus_t0) / 0.18)
+            if k >= 1.0:
+                self.focus_t0 = 0.0
+        if ym == self.focus:
+            return 0.38 + 0.62 * k
+        if ym == self.prev_focus and k < 1.0:
+            return 1.0 - 0.62 * k
+        return 0.38
+
+    def layout(self, text, size, weight=Pango.Weight.NORMAL):
+        key = (text, size, weight)
+        lay = self._layouts.get(key)
+        if lay:
+            return lay
+        lay = self.create_pango_layout(text)
+        desc = lay.get_context().get_font_description().copy()
+        desc.set_absolute_size(size * Pango.SCALE)
+        desc.set_weight(weight)
+        lay.set_font_description(desc)
+        self._layouts[key] = lay
+        return lay
+
+    def text(self, snap, lay, cx, cy, rgba):
+        _ink, logical = lay.get_pixel_extents()
+        snap.save()
+        snap.translate(Graphene.Point().init(cx - logical.width / 2, cy - logical.height / 2))
+        snap.append_layout(lay, rgba)
+        snap.restore()
+
+    def circle(self, snap, cx, cy, rgba):
+        r = self.CELL / 2
+        rect = Graphene.Rect().init(cx - r, cy - r, self.CELL, self.CELL)
+        clip = Gsk.RoundedRect()
+        clip.init_from_rect(rect, r)
+        snap.push_rounded_clip(clip)
+        snap.append_color(rgba, rect)
+        snap.pop()
+
+    def do_snapshot(self, snap):
+        w = self.get_width()
+        col_w = (w - 7 * self.GAP) / 8
+        today = datetime.date.today()
+        first = math.floor(self.top)
+        hover_cell = None
+        if self.hover:
+            hx, hy = self.hover
+            hcol = int(hx // (col_w + self.GAP))
+            hrow = math.floor(self.top + hy / self.row_h)
+            if 1 <= hcol <= 7:
+                hover_cell = (hrow, hcol)
+        white = lambda a: rgba(1, 1, 1, a)
+        for row in range(first, first + self.ROWS + 1):
+            y = (row - self.top) * self.row_h
+            cy = y + self.CELL / 2
+            monday = self.EPOCH + datetime.timedelta(days=7 * row)
+            # calendar week (ISO 8601, as used in Switzerland/Germany)
+            self.text(snap, self.layout(str(monday.isocalendar()[1]), 11),
+                      col_w / 2, cy, white(0.45))
+            for c in range(7):
+                day = monday + datetime.timedelta(days=c)
+                cx = (c + 1) * (col_w + self.GAP) + col_w / 2
+                if day == today:
+                    self.circle(snap, cx, cy, rgba(0x4c / 255, 0xc2 / 255, 1, 1))
+                    self.text(snap, self.layout(str(day.day), 13, Pango.Weight.SEMIBOLD),
+                              cx, cy, rgba(0, 0, 0, 1))
+                    continue
+                if hover_cell == (row, c + 1):
+                    self.circle(snap, cx, cy, white(0.06))
+                self.text(snap, self.layout(str(day.day), 13), cx, cy,
+                          white(self.brightness((day.year, day.month))))
+
+
 class CalendarFlyout:
     """Own month grid (GTK's calendar scrolls on the mouse wheel and redraws badly)."""
 
     def __init__(self, app, shell):
         self.shell = shell
         self.visible = False
-        self.year = self.month = 0
         self.win = layer_window(app, "winshell-calendar", LS.Layer.OVERLAY,
                                 anchors=(LS.Edge.BOTTOM, LS.Edge.RIGHT),
                                 margins={LS.Edge.BOTTOM: 12, LS.Edge.RIGHT: 12},
@@ -2341,29 +2687,25 @@ class CalendarFlyout:
         nav.append(button(icon("win11-chevron-up", 12), "flat-btn", on_click=lambda: self.shift(-1)))
         nav.append(button(icon("win11-chevron-down", 12), "flat-btn", on_click=lambda: self.shift(1)))
 
-        self.grid = Gtk.Grid(column_homogeneous=True, row_homogeneous=True, column_spacing=2, row_spacing=2)
-        self.grid.add_css_class("cal-grid")
-        # column 0: calendar week (ISO 8601, as used in Switzerland/Germany)
-        self.grid.attach(label("KW", "cal-weekname", xalign=0.5, ellipsize=False), 0, 0, 1, 1)
+        # day names (column 0: calendar week, as used in Switzerland/Germany);
+        # the days below are one endless sheet of weeks that scrolls smoothly
+        grid = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=WeekScroller.GAP)
+        grid.add_css_class("cal-grid")
+        names = Gtk.Grid(column_homogeneous=True, column_spacing=WeekScroller.GAP)
+        names.set_size_request(-1, WeekScroller.CELL)
+        names.attach(label("KW", "cal-weekname", xalign=0.5, ellipsize=False), 0, 0, 1, 1)
         for i, d in enumerate(("Mo", "Tu", "We", "Th", "Fr", "Sa", "Su")):
-            self.grid.attach(label(d, "cal-dayname", xalign=0.5, ellipsize=False), i + 1, 0, 1, 1)
-        self.cells, self.weeks = [], []
-        for r in range(6):
-            wk = label("", "cal-week", xalign=0.5, ellipsize=False)
-            wk.set_valign(Gtk.Align.CENTER)
-            self.grid.attach(wk, 0, r + 1, 1, 1)
-            self.weeks.append(wk)
-            for c in range(7):
-                cell = label("", "cal-day", xalign=0.5, ellipsize=False)
-                cell.set_size_request(40, 40)
-                cell.set_valign(Gtk.Align.CENTER)
-                cell.set_halign(Gtk.Align.CENTER)
-                self.grid.attach(cell, c + 1, r + 1, 1, 1)
-                self.cells.append(cell)
+            names.attach(label(d, "cal-dayname", xalign=0.5, ellipsize=False), i + 1, 0, 1, 1)
+        for ch in (names.get_child_at(i, 0) for i in range(8)):
+            ch.set_valign(Gtk.Align.CENTER)
+        grid.append(names)
+        self.days = WeekScroller(lambda y, m: self.month_lbl.set_text(
+            GLib.DateTime.new_local(y, m, 1, 0, 0, 0).format("%B %Y")))
+        grid.append(self.days)
         month = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         month.add_css_class("cal-body")
         month.append(nav)
-        month.append(self.grid)
+        month.append(grid)
         self.month_box = month
         self.body = Gtk.Revealer(transition_type=Gtk.RevealerTransitionType.SLIDE_UP,
                                  transition_duration=200, reveal_child=not self.folded)
@@ -2372,11 +2714,6 @@ class CalendarFlyout:
         panel.append(self.body)
         self.win.set_child(panel)
 
-        # mouse wheel / touchpad: one notch = one month
-        scroll = Gtk.EventControllerScroll(
-            flags=Gtk.EventControllerScrollFlags.VERTICAL | Gtk.EventControllerScrollFlags.DISCRETE)
-        scroll.connect("scroll", self.on_scroll)
-        panel.add_controller(scroll)
 
         # The notification center above the calendar can have the keyboard
         # (it opens a moment later); when it closes – Escape, a click
@@ -2452,33 +2789,9 @@ class CalendarFlyout:
         ncplace.save(height=height)
         bg(ncplace.sync)
 
-    def on_scroll(self, _c, _dx, dy):
-        if dy:
-            self.shift(1 if dy > 0 else -1)
-        return True
-
     def shift(self, months):
-        m = self.month - 1 + months
-        self.year, self.month = self.year + m // 12, m % 12 + 1
-        self.render()
-
-    def render(self):
-        today = GLib.DateTime.new_now_local()
-        first = GLib.DateTime.new_local(self.year, self.month, 1, 0, 0, 0)
-        self.month_lbl.set_text(first.format("%B %Y"))
-        start = first.add_days(-(first.get_day_of_week() - 1))     # back to Monday
-        for r, wk in enumerate(self.weeks):
-            wk.set_text(str(start.add_days(7 * r).get_week_of_year()))
-        for i, cell in enumerate(self.cells):
-            day = start.add_days(i)
-            cell.set_text(str(day.get_day_of_month()))
-            for cls in ("other", "today"):
-                cell.remove_css_class(cls)
-            if day.get_month() != self.month:
-                cell.add_css_class("other")
-            if (day.get_year(), day.get_month(), day.get_day_of_month()) == \
-                    (today.get_year(), today.get_month(), today.get_day_of_month()):
-                cell.add_css_class("today")
+        """The arrows: the previous / next month glides into view."""
+        self.days.step_month(months)
 
     def toggle(self):
         self.hide() if self.visible else self.show()
@@ -2489,8 +2802,7 @@ class CalendarFlyout:
                 other.hide()
         now = GLib.DateTime.new_now_local()
         self.head.set_text(now.format("%A, %B %-d"))
-        self.year, self.month = now.get_year(), now.get_month()
-        self.render()
+        self.days.show_month(now.get_year(), now.get_month())
         self.visible = True
         self.shell.qs.catcher_for("calendar")
         # the notification center sits right above: opened over D-Bus (not
@@ -5593,8 +5905,9 @@ class SecondaryTaskbar:
         bar = Gtk.CenterBox()
         bar.add_css_class("taskbar")
         center = Gtk.Box()
-        center.append(button(icon("win11-start", 26), "tb-start", tooltip="Start",
+        center.append(button(StartLogo(26), "tb-start", tooltip="Start",
                              on_click=lambda: (self.shell.flyouts_on(self.connector),
+                                               setattr(self.shell, "start_click_at", time.monotonic()),
                                                self.shell.start.toggle())))
         self.app_box = Gtk.Box()
         center.append(self.app_box)
@@ -5874,8 +6187,11 @@ class Taskbar:
         bar.add_css_class("taskbar")
 
         center = Gtk.Box()
-        self.start_btn = button(icon("win11-start", 26), "tb-start", tooltip="Start",
-                                on_click=lambda: (self.shell.flyouts_on(None), self.shell.start.toggle()))
+        self.start_logo = StartLogo(26)
+        self.start_btn = button(self.start_logo, "tb-start", tooltip="Start",
+                                on_click=lambda: (self.shell.flyouts_on(None),
+                                                  setattr(self.shell, "start_click_at", time.monotonic()),
+                                                  self.shell.start.toggle()))
         center.append(self.start_btn)
         self.app_box = SlideBox()
         center.append(self.app_box)
@@ -6149,7 +6465,19 @@ class Taskbar:
         self.refresh()
 
     def set_start_open(self, on):
-        (self.start_btn.add_css_class if on else self.start_btn.remove_css_class)("open")
+        """Grey while the menu is open. Opened by a click the logo dips (it
+        was pressed in), by the Windows key its squares flicker (StartLogo) – like Windows 11."""
+        b = self.start_btn
+        for cls in ("clicked", "kbd"):
+            b.remove_css_class(cls)
+        if on:
+            clicked = time.monotonic() - getattr(self.shell, "start_click_at", 0) < 0.4
+            b.add_css_class("clicked" if clicked else "kbd")
+            b.add_css_class("open")
+            if not clicked:
+                self.start_logo.flicker()
+        else:
+            b.remove_css_class("open")
 
     # ── right side: tray, status icons, clock, show-desktop sliver ──
     def build_right(self):

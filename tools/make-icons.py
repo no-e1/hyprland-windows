@@ -193,6 +193,10 @@ NUB = (f'<path d="M{BX + BW + 0.6:.2f} 10.4h.55a.75.75 0 0 1 .75.75v1.7a.75.75 0
        f'fill="{{c}}"/>')
 FX, FY, FW, FH = BX + 2.0, BY + 2.0, BW - 4.0, BH - 4.0   # the fill, well inside
 BOLT = "M12.2 3.1L7.8 11.2h3.1l-1.3 5.6 5-8.6h-3.15L13.2 3.1z"     # in the middle of the body
+# … a bit smaller, from the middle of the body: it stood taller than Windows'
+BOLT_SCALE = 0.85
+BOLT_DY = -0.8            # … and a little up: it sits on the top edge, like Windows'
+BOLT_T = f'transform="translate(11.5 {12 + BOLT_DY}) scale({BOLT_SCALE}) translate(-11.5 -12)"'
 PLUG_PRONGS = "M9.9 5.0V7.7M12.2 5.0V7.7"
 PLUG_HEAD = "M8.35 7.7h5.4v2.2a2.7 2.7 0 0 1-5.4 0z"
 PLUG_CORD = "M11.05 12.6v5.6"              # just below the battery, like Windows'
@@ -206,8 +210,9 @@ def battery(pct, kind):
     shape = BODY.format(c=W) + NUB.format(c=W) + fill
     if kind in ("-charging", "-plugged"):
         if kind == "-charging":
-            cut = f'<path d="{BOLT}" fill="black" stroke="black" stroke-width="2.2" stroke-linejoin="round"/>'
-            glyph = f'<path d="{BOLT}" fill="{W}"/>'
+            cut = (f'<path d="{BOLT}" {BOLT_T} fill="black" stroke="black" '
+                   f'stroke-width="{2.2 / BOLT_SCALE:.2f}" stroke-linejoin="round"/>')      # same gap
+            glyph = f'<path d="{BOLT}" {BOLT_T} fill="{W}"/>'
         else:
             # slim like Windows': short prongs close together, a smaller
             # head, and a clear gap around it all

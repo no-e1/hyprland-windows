@@ -614,11 +614,13 @@ popover.tray-menu label, popover.tray-overflow label { text-shadow: none; }
 }
 .taskbar button:hover { background: rgba(255, 255, 255, 0.08); }
 
-/* start button: grey while the start menu is open, logo dips when it opens */
+/* start button: grey while the start menu is open. Clicked, the logo is
+   pressed in and dips back out; opened with the Windows key its squares
+   flicker instead (winshell.py StartLogo / set_start_open) */
 button.tb-start { min-width: 40px; }
 button.tb-start.open { background: rgba(255, 255, 255, 0.08); }
-button.tb-start.open image { animation: start-dip 260ms ease-out; }
-button.tb-start:active image { transform: scale(0.82); }
+button.tb-start.open.clicked .start-logo { animation: start-dip 260ms ease-out; }
+button.tb-start:active .start-logo { transform: scale(0.82); }
 @keyframes start-dip {
     0%   { transform: scale(1); }
     35%  { transform: scale(0.78); }
