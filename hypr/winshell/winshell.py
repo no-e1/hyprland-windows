@@ -2891,6 +2891,10 @@ class StartMenu:
             b.connect("clicked", lambda _b, a=action, p=pop: (p.popdown(), self.power(a)))
             box.append(b)
         pop.set_child(box)
+        # fade in while the entries glide up (style.css popover.start-menu),
+        # not there from one frame to the next; reset on close for next time
+        pop.connect("map", lambda p: slide_in(p))
+        pop.connect("unmap", lambda p: p.remove_css_class("shown"))
         return pop
 
     def power(self, action):
@@ -4200,6 +4204,8 @@ class DesktopAnim:
         self.done = None
         self.gen = 0
         self.serial = 0             # counts runs: late timers of an old run do nothing
+        self.wait = 0               # frames until a just-shown layer is on screen
+        self.hide_now = None        # "out": hides the real windows once the pictures cover them
 
     @property
     def win(self):
@@ -4337,6 +4343,7 @@ class DesktopAnim:
                 ly.win.set_visible(False)
         self.active = []
         classes = set()
+        fresh = False               # a layer just shown: on screen only a few frames later
         for con, (ly, items) in layers.items():
             for it in items:
                 it["a"], it["b"] = (it["icon"], it["win"]) if rising else (it["win"], it["icon"])
@@ -4346,71 +4353,34 @@ class DesktopAnim:
                 classes.add((con, it["cls"]))
             c = ly.canvas
             c.items, c.rising, c.t, c.fade = items, rising, 0.0, 1.0
+            if not ly.win.get_visible():
+                fresh = True
             ly.win.present()
             self.passthrough(ly)
             c.queue_draw()
             self.active.append(ly)
         self.dur = self.IN if rising else self.OUT
         self.done = None
+        # the clock starts once a freshly shown layer is really on screen
+        # (see slide_in) – else the first part of the flight was skipped
+        self.wait = SLIDE_WAIT if fresh else 0
         if not rising:
-            # the pictures cover the windows now: hide the real ones – after
-            # a fresh, sharp picture of each was taken (the Alt+Tab preview
-            # can be seconds old and is small: coming back out, the window
-            # showed old, blurry content for a moment). Never longer than
-            # FRESH_WAIT; the old picture covers the window meanwhile.
-            self.fresh_pictures([it for _ly, items in layers.values() for it in items],
-                                lambda: hypr_eval(f"{callback}({gen})"))
+            # the real windows are hidden in the frame the pictures cover
+            # them (then the pictures fly): earlier, the desktop flashed
+            # through; later, the big window stood behind the shrinking
+            # picture (small and big at the same time). No fresh screenshots
+            # first – they made it feel slow; the Alt+Tab previews do.
+            self.hide_now = lambda: hypr_eval(f"{callback}({gen})")
             # together with the windows, like Windows: the icon is lowest
             # (40 % into its 320 ms) right when they land (OUT = 240 ms)
-            self.bounce(classes, "dip", 0.11)
+            self.bounce(classes, "dip", 0.11 + self.wait / 60)
         else:
+            self.hide_now = None
             self.done = lambda: hypr_eval(f"{callback}({gen})")
-            self.bounce(classes, "hop", 0)                  # as they take off
+            self.bounce(classes, "hop", self.wait / 60)     # as they take off
         self.t0 = 0
         self.tick_canvas = self.active[0].canvas      # one clock drives all screens
         self.tick = self.tick_canvas.add_tick_callback(self.on_tick)
-
-    FRESH_SCALE = 1.5           # sharp on a 2x screen, without a huge picture in memory
-    FRESH_WAIT = 0.22           # s at most before the windows are hidden anyway
-
-    def fresh_pictures(self, items, hide):
-        clients = {c["address"]: c for c in hypr_json("clients") or []}
-        sw = self.shell.switcher
-        state = {"left": 0, "hidden": False}
-
-        def hide_once():
-            if not state["hidden"]:
-                state["hidden"] = True
-                hide()
-            return False
-
-        def grab(sid):
-            try:
-                out = subprocess.run(["grim", "-T", sid, "-s", str(self.FRESH_SCALE), "-t", "jpeg",
-                                      "-q", "92", "-"], capture_output=True, timeout=1).stdout
-                return Gdk.Texture.new_from_bytes(GLib.Bytes.new(out)) if out else None
-            except Exception:
-                return None
-
-        for it in items:
-            c = clients.get(it["addr"])
-            sid = c and c.get("stableId")
-            if not sid or (c.get("workspace") or {}).get("name", "").startswith("special:"):
-                continue
-            state["left"] += 1
-
-            def done(tex, it=it):
-                state["left"] -= 1
-                if tex:
-                    it["tex"] = tex                     # the flying picture too
-                    sw.thumbs[it["addr"]] = tex         # … and the one it comes back out with
-                    sw.thumb_time[it["addr"]] = time.monotonic()
-                if state["left"] <= 0:
-                    GLib.timeout_add(10, hide_once)
-            bg(lambda sid=sid: grab(sid), done)
-        if not state["left"]:
-            GLib.timeout_add(34, hide_once)
-        GLib.timeout_add(int(self.FRESH_WAIT * 1000), hide_once)
 
     def stop_ticks(self):
         if self.tick and self.tick_canvas:
@@ -4421,6 +4391,12 @@ class DesktopAnim:
 
     def on_tick(self, _w, clock):
         now = clock.get_frame_time() / 1e6
+        if self.wait > 0:
+            self.wait -= 1
+            return True
+        if self.hide_now:               # pictures on screen: the windows go (see run)
+            hide, self.hide_now = self.hide_now, None
+            hide()
         if not self.t0:
             self.t0 = now
         t = min(1.0, (now - self.t0) / self.dur)
@@ -4480,6 +4456,7 @@ class DesktopAnim:
 
     def stop(self):
         self.done = None
+        self.hide_now = None
         self.serial += 1
         if self.tick and self.tick_canvas:
             self.tick_canvas.remove_tick_callback(self.tick)

@@ -1,7 +1,7 @@
 /* Notification center, Windows 11 style (dark, Mica) */
 
 @define-color accent #4cc2ff;
-@define-color panel rgba(36, 36, 36, 0.94);
+@define-color panel rgb(36, 36, 36);
 @define-color card rgba(255, 255, 255, 0.05);
 @define-color card-hover rgba(255, 255, 255, 0.08);
 @define-color border rgba(255, 255, 255, 0.08);
@@ -141,7 +141,7 @@
    14 px title and text, buttons in a row below */
 .notification,
 .notification-background .notification {
-    background: rgba(44, 44, 44, 0.92);
+    background: rgb(44, 44, 44);
     border: 1px solid rgba(255, 255, 255, 0.09);
     border-radius: 8px;
     margin: 6px 0;

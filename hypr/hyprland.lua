@@ -99,7 +99,8 @@ hl.config({
         },
 
         blur = {
-            enabled  = true,
+            -- off: the panels are plain, solid gray (style.css) – nothing shows through
+            enabled  = false,
             size     = 12,
             passes   = 3,
             noise    = 0.02,
@@ -139,6 +140,13 @@ hl.curve("winIn",   { type = "bezier", points = { {0.4, 0},    {1, 0.6}  } })
 hl.curve("smooth",  { type = "bezier", points = { {0.25, 1},   {0.5, 1}  } })
 hl.curve("linear",  { type = "bezier", points = { {0, 0},      {1, 1}    } })
 hl.curve("soft",    { type = "spring", mass = 1, stiffness = 260, damping = 26 })
+-- panels sliding in (calendar + notification center): decelerates too, but
+-- gently – with winOut they covered 45 % of the way in the first frame and
+-- 68 % in the second (a jump of ~180 px, it looked like a stutter)
+hl.curve("panelIn", { type = "bezier", points = { {0.2, 0.7},  {0.2, 1}  } })
+-- … and out: speeds up, but moves from the first frame (winIn barely moved
+-- for the first ~70 ms – closing felt sluggish)
+hl.curve("panelOut", { type = "bezier", points = { {0.4, 0.1}, {0.7, 0.6} } })
 
 hl.animation({ leaf = "global",        enabled = true, speed = 8,   bezier = "smooth" })
 hl.animation({ leaf = "windows",       enabled = true, speed = 4,   spring = "soft" })
@@ -153,8 +161,8 @@ hl.animation({ leaf = "fade",          enabled = true, speed = 3,   bezier = "sm
 -- animates pictures of the windows instead
 hl.animation({ leaf = "fadeSwitch",    enabled = false })
 -- start menu and quick settings slide in from the bottom
-hl.animation({ leaf = "layersIn",      enabled = true, speed = 3,   bezier = "winOut", style = "slide bottom" })
-hl.animation({ leaf = "layersOut",     enabled = true, speed = 1.8, bezier = "winIn",  style = "slide bottom" })
+hl.animation({ leaf = "layersIn",      enabled = true, speed = 3.5, bezier = "panelIn", style = "slide bottom" })
+hl.animation({ leaf = "layersOut",     enabled = true, speed = 1.5, bezier = "panelOut", style = "slide bottom" })
 hl.animation({ leaf = "fadeLayersIn",  enabled = true, speed = 2.5, bezier = "smooth" })
 hl.animation({ leaf = "fadeLayersOut", enabled = true, speed = 1.8, bezier = "linear" })
 -- virtual desktops slide sideways like on Windows
