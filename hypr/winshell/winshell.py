@@ -10,6 +10,7 @@ Runs as a background daemon. Control it with winshell-ctl:
   winshell-ctl qs [toggle|wifi|bluetooth|hide]
 """
 import datetime
+from shutil import which as shutil_which
 import fcntl
 import json
 import types
@@ -200,6 +201,22 @@ def icon(name, size=16):
     img = Gtk.Image.new_from_icon_name(name)
     img.set_pixel_size(size)
     return img
+
+
+def search_box(entry, cls=None):
+    """A search field like Windows 11's: a round pill with the colored
+    magnifier on the left, no clear (×) button (style.css .search-box –
+    GTK's own icons of the entry are hidden there)."""
+    box = Gtk.Box(spacing=6)            # (the entry's hidden icon still adds a little)
+    box.add_css_class("search-box")
+    if cls:
+        box.add_css_class(cls)
+    box.append(icon("win11-search", 20))
+    box.append(entry)
+    click = Gtk.GestureClick()          # a click anywhere in the pill types into it
+    click.connect("pressed", lambda *_: entry.grab_focus())
+    box.add_controller(click)
+    return box
 
 
 # Your profile picture and name – the start menu and the lock screen
@@ -1443,6 +1460,9 @@ class QuickSettings:
         self.stack.set_transition_type(Gtk.StackTransitionType.SLIDE_LEFT_RIGHT)
         if not self.visible:
             spawn("pkill -x rofi")          # only one flyout at a time, like Windows
+            st = getattr(self.shell, "settings", None)
+            if st and st.visible:
+                st.hide()
             if self.shell.start.visible:
                 self.shell.start.hide()
             if self.shell.calendar.visible:
@@ -1485,6 +1505,9 @@ class QuickSettings:
 
     def catcher_for(self, who):
         """Show the click catcher for another flyout (start menu), or hide it."""
+        st = getattr(self.shell, "settings", None)
+        if who and who != "settings" and st and st.visible:
+            st.hide()                       # one flyout at a time, like Windows
         tb = getattr(self.shell, "taskbar", None)
         if who and who != "tray" and tb:
             tb.close_overflow()
@@ -1507,6 +1530,8 @@ class QuickSettings:
             self.shell.taskbar.close_overflow()
         elif self.backdrop_for == "clipboard":
             self.shell.clip.hide()
+        elif self.backdrop_for == "settings":
+            self.shell.settings.hide()
         else:
             self.hide()
 
@@ -2858,6 +2883,83 @@ class CalendarFlyout:
             spawn("swaync-client -op" if open_ else "swaync-client -cp")
 
 
+# ── Start menu: files and folders in the home folder ───────────────────────
+class FileIndex:
+    """The names of the files and folders in your home folder, kept in
+    memory for the start menu search. Hidden ones and build/cache folders
+    are left out. Rebuilt in the background when the menu opens (a walk
+    over the home folder takes a few ms)."""
+    SKIP = {"node_modules", "__pycache__", "target", "build", "dist", "venv", "site-packages"}
+    MAX = 50000
+    FRESH = 30                  # s: an index this young is used as it is
+    PHOTO = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".heic", ".bmp", ".svg", ".tif", ".tiff", ".avif")
+
+    def __init__(self):
+        self.items = []         # (name lower, path, is_dir, mtime)
+        self.built = 0.0
+        self.busy = False
+
+    def refresh(self, done=None):
+        if self.busy or time.monotonic() - self.built < self.FRESH:
+            return
+        self.busy = True
+
+        def walk():
+            home = os.path.expanduser("~")
+            out = []
+            for root, dirs, files in os.walk(home):
+                dirs[:] = [d for d in dirs if not d.startswith(".") and d not in self.SKIP]
+                for name, is_dir in [(d, True) for d in dirs] + [(f, False) for f in files]:
+                    if name.startswith("."):
+                        continue
+                    path = os.path.join(root, name)
+                    try:
+                        mtime = os.lstat(path).st_mtime
+                    except OSError:
+                        continue
+                    out.append((name.lower(), path, is_dir, mtime))
+                if len(out) >= self.MAX:
+                    break
+            return out
+
+        def finished(items):
+            self.items, self.built, self.busy = items, time.monotonic(), False
+            if done:
+                done()
+        bg(walk, finished)
+
+    @classmethod
+    def kind(cls, path, is_dir):
+        if is_dir:
+            return "folder"
+        return "photo" if path.lower().endswith(cls.PHOTO) else "doc"
+
+    def search(self, query, limit):
+        """Best first: the whole name, its start, a word's start, anywhere;
+        every word of the query has to be in the name. Newer files win ties."""
+        terms = query.lower().split()
+        if not terms:
+            return []
+        q = " ".join(terms)
+        hits = []
+        for name, path, is_dir, mtime in self.items:
+            if not all(t in name for t in terms):
+                continue
+            stem = name if is_dir else os.path.splitext(name)[0]
+            words = _words(name)
+            if stem == q or name == q:
+                sc = 100
+            elif name.startswith(q):
+                sc = 80
+            elif all(any(w.startswith(t) for w in words) for t in terms):
+                sc = 60
+            else:
+                sc = 40
+            hits.append((-sc, -mtime, path, is_dir))
+        hits.sort()
+        return [(p, d) for _sc, _m, p, d in hits[:limit]]
+
+
 # ── Start menu search ranking ───────────────────────────────────────────────
 LAUNCHES = os.path.join(os.environ.get("XDG_STATE_HOME", os.path.expanduser("~/.local/state")),
                         "winshell", "launches.json")
@@ -2953,13 +3055,13 @@ class StartMenu:
 
         body = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         body.add_css_class("start-body")
-        self.search = Gtk.SearchEntry(placeholder_text="Search for apps, settings, and documents")
-        self.search.add_css_class("start-search")
+        self.search = Gtk.SearchEntry(placeholder_text="Search for apps and documents")
+        self.search.set_hexpand(True)
         if hasattr(self.search.props, "search_delay"):
             self.search.props.search_delay = 40      # default 150 ms feels laggy
         self.search.connect("search-changed", lambda *_: self.filter())
         self.search.connect("activate", lambda *_: self.launch_selected() if self.query else self.launch_first())
-        body.append(self.search)
+        body.append(search_box(self.search, "start-search"))
 
         # page "apps": the A–Z grid; page "search": Windows 11 search results
         self.pages = Gtk.Stack(transition_type=Gtk.StackTransitionType.CROSSFADE,
@@ -3027,22 +3129,31 @@ class StartMenu:
             surf.set_input_region(cairo.Region(cairo.RectangleInt(0, 0, 100000, 100000)))
 
     # ── search results (Windows 11: best match + list left, details right) ──
-    MAX_RESULTS = 8
+    # apps always come first, then files: documents, photos, folders
+    MAX_APPS, MAX_FILES = 6, 8
+    GROUPS = {"app": "Apps", "doc": "Documents", "photo": "Photos", "folder": "Folders"}
+    KIND_NAME = {"app": "App", "doc": "Document", "photo": "Photo", "folder": "Folder"}
 
     def build_search_page(self):
         page = Gtk.Box(spacing=12)
         page.add_css_class("search-page")
-        left = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        left = Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.NEVER)
         left.set_size_request(300, -1)
+        self.results_box = left
         self.results = Gtk.ListBox(selection_mode=Gtk.SelectionMode.SINGLE)
         self.results.add_css_class("results")
         self.results.set_header_func(self.result_header)
-        self.results.connect("row-activated", lambda _l, row: self.launch(row.app))
+        self.results.connect("row-activated", lambda _l, row: self.open_row(row))
         self.results.connect("row-selected", lambda _l, row: self.show_details(row))
-        self.no_results = label("No results", "empty-text", xalign=0.5)
-        left.append(self.results)
-        left.append(self.no_results)
+        left.set_child(self.results)
         page.append(left)
+        # nothing found: in the middle of the whole page
+        self.no_results = label("No results", "empty-text", xalign=0.5)
+        self.no_results.set_hexpand(True)
+        self.no_results.set_halign(Gtk.Align.CENTER)
+        self.no_results.set_valign(Gtk.Align.START)
+        page.append(self.no_results)
+        self.files = FileIndex()
 
         self.details = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         self.details.add_css_class("details")
@@ -3050,27 +3161,37 @@ class StartMenu:
         page.append(self.details)
         return page
 
-    @staticmethod
-    def result_header(row, before):
-        """"Best match" above the first result, "Apps" above the second."""
+    @classmethod
+    def result_header(cls, row, before):
+        """"Best match" above the first result, then a heading wherever a
+        group starts: Apps, Documents, Photos, Folders."""
         if before is None:
             row.set_header(label("Best match", "results-head"))
-        elif before.get_index() == 0:
-            row.set_header(label("Apps", "results-head"))
+        elif before.get_index() == 0 or before.kind != row.kind:
+            row.set_header(label(cls.GROUPS[row.kind], "results-head"))
         else:
             row.set_header(None)
 
-    def result_row(self, app, name, best):
+    # like Windows 11: folders show the Explorer icon (as on the taskbar),
+    # photos the Photos one, every other file the Notepad one (make-icons.py)
+    KIND_ICON = {"folder": "win11-explorer", "photo": "win11-photo", "doc": "win11-document"}
+
+    @classmethod
+    def file_gicon(cls, path, is_dir):
+        return Gio.ThemedIcon.new(cls.KIND_ICON[FileIndex.kind(path, is_dir)])
+
+    def result_row(self, app, name, best, kind="app", path=None):
         box = Gtk.Box(spacing=12)
         box.add_css_class("result")
-        img = Gtk.Image.new_from_gicon(app_gicon(app))
+        gicon = app_gicon(app) if kind == "app" else self.file_gicon(path, kind == "folder")
+        img = Gtk.Image.new_from_gicon(gicon)
         img.set_pixel_size(32 if best else 20)
         box.append(img)
         text = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, valign=Gtk.Align.CENTER)
         text.set_hexpand(True)
         text.append(label(name, "result-name"))
         if best:
-            text.append(label("App", "result-kind"))
+            text.append(label(self.KIND_NAME[kind], "result-kind"))
         box.append(text)
         chev = icon("win11-chevron-right", 12)
         chev.add_css_class("result-chevron")
@@ -3078,7 +3199,7 @@ class StartMenu:
         row = Gtk.ListBoxRow(child=box)
         if best:
             row.add_css_class("best")
-        row.app, row.name = app, name
+        row.app, row.name, row.kind, row.path, row.gicon = app, name, kind, path, gicon
         return row
 
     def show_results(self):
@@ -3090,17 +3211,30 @@ class StartMenu:
                 ranked.append(c)
             c = c.get_next_sibling()
         ranked.sort(key=lambda c: (-c.score, len(c.fields["name"]), c.fields["name"]))
-        ranked = ranked[:self.MAX_RESULTS]
-        for i, c in enumerate(ranked):
-            self.results.append(self.result_row(c.app, c.name, i == 0))
-        self.no_results.set_visible(not ranked)
-        self.details.set_visible(bool(ranked))
-        if ranked:
+        rows = [self.result_row(c.app, c.name, i == 0) for i, c in enumerate(ranked[:self.MAX_APPS])]
+        files = self.files.search(self.query, self.MAX_FILES)
+        order = {"doc": 0, "photo": 1, "folder": 2}
+        # the best file stays on top of its group, the groups in a fixed order
+        firsts = files[:1] if not rows else []
+        rest = sorted(files[len(firsts):], key=lambda f: order[FileIndex.kind(*f)])
+        for path, is_dir in firsts + rest:
+            rows.append(self.result_row(None, os.path.basename(path), not rows,
+                                        FileIndex.kind(path, is_dir), path))
+        for r in rows:
+            self.results.append(r)
+        self.no_results.set_visible(not rows)
+        self.results_box.set_visible(bool(rows))
+        self.details.set_visible(bool(rows))
+        if rows:
             self.results.select_row(self.results.get_row_at_index(0))
+        self.results_box.get_vadjustment().set_value(0)
 
     def show_details(self, row):
         clear(self.details)
         if row is None:
+            return
+        if row.kind != "app":
+            self.show_file_details(row)
             return
         app = row.app
         top = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6, halign=Gtk.Align.CENTER)
@@ -3126,6 +3260,70 @@ class StartMenu:
             line.append(label(text, "action-text"))
             self.details.append(button(line, "action", on_click=fn))
 
+    def show_file_details(self, row):
+        # long names are cut short (…) instead of widening the menu
+        top = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        top.add_css_class("details-top")
+        img = Gtk.Image.new_from_gicon(row.gicon)
+        img.set_pixel_size(64)
+        top.append(img)
+        name = label(row.name, "details-name", xalign=0.5)
+        name.set_ellipsize(Pango.EllipsizeMode.MIDDLE)
+        name.set_max_width_chars(1)
+        name.set_hexpand(True)
+        top.append(name)
+        top.append(label(self.KIND_NAME[row.kind], "details-kind", xalign=0.5))
+        where = label(os.path.dirname(row.path).replace(os.path.expanduser("~"), "~", 1),
+                      "details-path", xalign=0.5)
+        where.set_max_width_chars(1)
+        where.set_hexpand(True)
+        where.set_ellipsize(Pango.EllipsizeMode.MIDDLE)
+        top.append(where)
+        self.details.append(top)
+        sep = Gtk.Separator()
+        sep.add_css_class("details-sep")
+        self.details.append(sep)
+        path = row.path
+        actions = [("win11-open", "Open", lambda: self.open_row(row))]
+        if row.kind != "folder":
+            actions.append(("win11-folder", "Open file location", lambda: self.show_in_folder(path)))
+        actions.append(("win11-copy", "Copy path", lambda: (
+            subprocess.Popen(["wl-copy", "--", path], start_new_session=True, env=child_env(),
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL), self.hide())))
+        for ic, text, fn in actions:
+            line = Gtk.Box(spacing=12)
+            line.append(icon(ic, 16))
+            line.append(label(text, "action-text"))
+            self.details.append(button(line, "action", on_click=fn))
+
+    def open_row(self, row):
+        if row.kind == "app":
+            self.launch(row.app)
+            return
+        self.hide()
+        try:
+            ctx = Gdk.Display.get_default().get_app_launch_context()
+            for var in OWN_ENV:
+                ctx.unsetenv(var)
+            Gio.AppInfo.launch_default_for_uri(Gio.File.new_for_path(row.path).get_uri(), ctx)
+        except Exception as e:
+            print("winshell: open failed:", e, file=sys.stderr)
+
+    def show_in_folder(self, path):
+        """The folder it is in, with the file selected (FileManager1: Dolphin)."""
+        self.hide()
+        uri = Gio.File.new_for_path(path).get_uri()
+
+        def fallback(conn, res):
+            try:
+                conn.call_finish(res)
+            except GLib.Error:
+                Gio.AppInfo.launch_default_for_uri(Gio.File.new_for_path(os.path.dirname(path)).get_uri(), None)
+        bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+        bus.call("org.freedesktop.FileManager1", "/org/freedesktop/FileManager1",
+                 "org.freedesktop.FileManager1", "ShowItems", GLib.Variant("(ass)", ([uri], "")),
+                 None, Gio.DBusCallFlags.NONE, 3000, None, fallback)
+
     def move_selection(self, delta):
         row = self.results.get_selected_row()
         i = (row.get_index() if row else -1) + delta
@@ -3136,7 +3334,7 @@ class StartMenu:
     def launch_selected(self):
         row = self.results.get_selected_row()
         if row:
-            self.launch(row.app)
+            self.open_row(row)
 
     def launch_action(self, app, action):
         self.hide()
@@ -3332,6 +3530,8 @@ class StartMenu:
         if self.shell.calendar.visible:
             self.shell.calendar.hide()
         spawn("pkill -x rofi")
+        # files for the search: fresh in the background (results update when ready)
+        self.files.refresh(lambda: self.query and self.show_results())
         if self.search.get_text():
             self.search.set_text("")
             self.filter()
@@ -5039,6 +5239,176 @@ class ClipboardPanel:
                 pass
         self.write([])
         self.build()
+
+
+class SettingsMenu:
+    """Win + I: the settings, like a Windows 11 flyout in the middle of the
+    screen – a search field, then one row per setting (icon, name, what it
+    is about). Arrow keys or the mouse pick one, Enter or a click opens it;
+    the wheel doesn't move the selection. A click outside, Escape or opening
+    another flyout (start menu, …) closes it."""
+    SCRIPTS = os.path.expanduser("~/.config/hypr/scripts")
+
+    def __init__(self, app, shell):
+        self.shell = shell
+        self.visible = False
+        self.rows = []
+        self.sel = 0
+        self.win = layer_window(app, "winshell-settings", LS.Layer.OVERLAY,
+                                keyboard=LS.KeyboardMode.EXCLUSIVE)
+        panel = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        panel.add_css_class("settings-menu")
+        panel.add_css_class("flyout")
+        self.panel = panel
+        panel.append(label("Settings", "sm-title"))
+        self.search = Gtk.SearchEntry(placeholder_text="Find a setting")
+        self.search.set_hexpand(True)
+        if hasattr(self.search.props, "search_delay"):
+            self.search.props.search_delay = 0
+        self.search.connect("search-changed", lambda *_: self.filter())
+        self.search.connect("activate", lambda *_: self.open_selected())
+        bar = search_box(self.search, "sm-search")
+        panel.append(bar)
+        self.list = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        self.list.add_css_class("sm-list")
+        panel.append(self.list)
+        self.empty = label("No settings found", "sm-empty", xalign=0.5)
+        panel.append(self.empty)
+        self.win.set_child(panel)
+        keys = Gtk.EventControllerKey(propagation_phase=Gtk.PropagationPhase.CAPTURE)
+        keys.connect("key-pressed", self.on_key)
+        self.win.add_controller(keys)
+
+    def items(self):
+        has = lambda cmd: shutil_which(cmd) is not None
+        sh = self.shell
+        out = [
+            ("win11-wifi-4", "Wi-Fi", "Networks nearby, connect", lambda: sh.qs.show("wifi")),
+            ("win11-bluetooth", "Bluetooth", "Pair and manage devices", lambda: spawn("blueman-manager")),
+            ("win11-speaker", "Sound", "Volume, output and input devices", lambda: spawn("pavucontrol")),
+            ("win11-monitor", "Displays", "Arrangement, scale, main display", lambda: sh.display_settings.show()),
+            ("win11-mouse", "Mouse", "Pointer speed, scrolling, buttons", lambda: sh.mouse_settings.show()),
+            ("win11-background", "Background", "Wallpaper", lambda: spawn(f"'{self.SCRIPTS}/wallpaper.sh' pick")),
+        ]
+        if has("nwg-look"):
+            out.append(("win11-palette", "Appearance", "Colors, fonts, themes", lambda: spawn("nwg-look")))
+        out += [
+            ("win11-ethernet", "Network connections", "Ethernet, VPN, advanced settings",
+             lambda: spawn("nm-connection-editor")),
+            ("win11-activity", "Task Manager", "Running apps and performance",
+             lambda: spawn("gnome-system-monitor")),
+            ("win11-code", "Edit Hyprland config", "hyprland.lua in your editor",
+             lambda: spawn("xdg-open ~/.config/hypr/hyprland.lua")),
+        ]
+        return out
+
+    def build(self):
+        clear(self.list)
+        self.rows = []
+        for ic, title, sub, fn in self.items():
+            row = Gtk.Box(spacing=0)
+            row.add_css_class("sm-row")
+            pill = Gtk.Box(valign=Gtk.Align.CENTER)       # Windows 11's blue mark of the selected row
+            pill.add_css_class("sm-pill")
+            row.append(pill)
+            img = icon(ic, 20)
+            img.add_css_class("sm-icon")
+            img.set_valign(Gtk.Align.CENTER)
+            row.append(img)
+            text = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, valign=Gtk.Align.CENTER)
+            text.set_hexpand(True)
+            text.append(label(title, "sm-name"))
+            text.append(label(sub, "sm-sub"))
+            row.append(text)
+            chev = icon("win11-chevron-right", 12)
+            chev.add_css_class("sm-chevron")
+            chev.set_valign(Gtk.Align.CENTER)
+            row.append(chev)
+            row.fn, row.words = fn, f"{title} {sub}".lower()
+            click = Gtk.GestureClick()
+            click.connect("released", lambda *_a, r=row: self.open(r))
+            row.add_controller(click)
+            motion = Gtk.EventControllerMotion()
+            motion.connect("enter", lambda *_a, r=row: self.select(r))
+            row.add_controller(motion)
+            self.list.append(row)
+            self.rows.append(row)
+        self.filter()
+
+    def visible_rows(self):
+        return [r for r in self.rows if r.get_visible()]
+
+    def filter(self):
+        terms = self.search.get_text().lower().split()
+        for r in self.rows:
+            r.set_visible(all(t in r.words for t in terms))
+        shown = self.visible_rows()
+        self.empty.set_visible(not shown)
+        self.sel = 0
+        self.mark()
+
+    def select(self, row):
+        shown = self.visible_rows()
+        if row in shown:
+            self.sel = shown.index(row)
+            self.mark()
+
+    def mark(self):
+        shown = self.visible_rows()
+        for i, r in enumerate(shown):
+            (r.add_css_class if i == self.sel else r.remove_css_class)("selected")
+        for r in self.rows:
+            if r not in shown:
+                r.remove_css_class("selected")
+
+    def on_key(self, _c, keyval, _code, _state):
+        shown = self.visible_rows()
+        if keyval == Gdk.KEY_Escape:
+            self.hide()
+            return True
+        if keyval in (Gdk.KEY_Down, Gdk.KEY_Up) and shown:
+            step = 1 if keyval == Gdk.KEY_Down else -1
+            self.sel = (self.sel + step) % len(shown)     # past the last: back to the first (and up)
+            self.mark()
+            return True
+        if keyval in (Gdk.KEY_Return, Gdk.KEY_KP_Enter):
+            self.open_selected()
+            return True
+        return False
+
+    def open_selected(self):
+        shown = self.visible_rows()
+        if shown:
+            self.open(shown[min(self.sel, len(shown) - 1)])
+
+    def open(self, row):
+        self.hide()
+        GLib.timeout_add(60, lambda: (row.fn(), False)[1])     # once the keyboard is given back
+
+    def toggle(self):
+        self.hide() if self.visible else self.show()
+
+    def show(self):
+        for other in (self.shell.start, self.shell.calendar, self.shell.qs, self.shell.clip):
+            if getattr(other, "visible", False):
+                other.hide()
+        spawn("pkill -x rofi")
+        self.search.set_text("")
+        self.build()
+        self.visible = True
+        self.shell.qs.catcher_for("settings")
+        slide_in(self.panel)
+        LS.set_keyboard_mode(self.win, LS.KeyboardMode.EXCLUSIVE)
+        self.win.present()
+        self.search.grab_focus()
+
+    def hide(self):
+        if not self.visible:
+            return
+        self.visible = False
+        LS.set_keyboard_mode(self.win, LS.KeyboardMode.NONE)
+        slide_out(self.panel, self.win)     # glides down a little while fading (.flyout.leaving)
+        self.shell.qs.catcher_for(None)
 
 
 # ── Taskbar (replaces Waybar) ───────────────────────────────────────────────
@@ -6974,6 +7344,7 @@ class WinShell(Gtk.Application):
         self.deskslide = DesktopSlide(self, self)
         self.desk = DesktopAnim(self, self)
         self.clip = ClipboardPanel(self, self)
+        self.settings = SettingsMenu(self, self)
         self.shutdown = ShutdownDialog(self, self)
         self.start = StartMenu(self, self)
         self.calendar = CalendarFlyout(self, self)
@@ -7193,6 +7564,8 @@ class WinShell(Gtk.Application):
             self.shutdown.hide() if arg == "hide" else self.shutdown.toggle()
         elif what == "clipboard":               # Win + V
             self.clip.hide() if arg == "hide" else self.clip.toggle()
+        elif what == "settings":                # Win + I
+            self.settings.hide() if arg == "hide" else self.settings.toggle()
         elif what == "desk":                    # hyprland.lua: minimize / show desktop animation
             if arg in ("out", "in") and len(args) > 3 and args[2].isidentifier() and args[3].isdigit():
                 self.desk.run(arg, args[2], int(args[3]), args[4:])

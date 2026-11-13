@@ -431,17 +431,28 @@ window.start-window { background: rgba(0, 0, 0, 0.004); }
     transition: transform 170ms cubic-bezier(0.4, 0, 0.7, 0.5);
 }
 .start-body { padding: 28px 32px 8px 32px; }
-.start-search {
-    min-height: 32px;
-    padding: 0 12px;
+/* search fields (start menu, …) like Windows 11: a dark round pill with a
+   light edge and the colored magnifier – no accent line, no clear (×) button */
+.search-box {
+    min-height: 36px;
+    padding: 0 16px;
     border-radius: 999px;
-    background: rgba(255, 255, 255, 0.05);
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    background: rgb(31, 31, 31);
+    border: 1px solid rgba(255, 255, 255, 0.10);
+}
+.search-box:focus-within { border-color: rgba(255, 255, 255, 0.16); }
+.search-box entry, .search-box entry:focus {
+    min-height: 0;
+    padding: 0;
+    margin: 0;
+    background: none;
+    border: none;
+    box-shadow: none;
+    outline: none;
     font-size: 13px;
 }
-.start-search:focus-within { border-bottom: 2px solid #4cc2ff; }
-.start-search text placeholder { color: rgba(255, 255, 255, 0.6); }
+.search-box entry > image { opacity: 0; min-width: 0; min-height: 0; margin: 0; padding: 0; -gtk-icon-size: 0; }
+.search-box entry text placeholder { color: rgba(255, 255, 255, 0.6); }
 .start-head { padding: 22px 24px 10px 24px; }
 .start-title { font-size: 14px; font-weight: 600; }
 
@@ -486,6 +497,7 @@ window.start-window { background: rgba(0, 0, 0, 0.004); }
 .details-top { padding: 28px 16px 18px 16px; }
 .details-name { font-size: 16px; font-weight: 600; }
 .details-kind { font-size: 12px; color: rgba(255, 255, 255, 0.6); }
+.details-path { font-size: 11px; color: rgba(255, 255, 255, 0.45); }
 .details-sep { margin: 0 16px 8px 16px; background: rgba(255, 255, 255, 0.08); min-height: 1px; }
 button.action {
     margin: 0 8px;
@@ -919,3 +931,28 @@ button.ds-keep.counting:active { background-color: #22678f; background-image: li
     from { background-size: 100% 100%; }
     to   { background-size: 0% 100%; }
 }
+
+/* ── Settings (Win + I): a Windows 11 flyout in the middle of the screen ── */
+.settings-menu {
+    min-width: 420px;
+    padding: 16px 12px 12px 12px;
+    background: rgb(32, 32, 32);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 8px;
+}
+.sm-title { font-size: 20px; font-weight: 600; margin: 2px 8px 14px 8px; }
+.sm-search { margin: 0 4px 10px 4px; }
+.sm-row {
+    min-height: 52px;
+    padding: 0 14px 0 0;
+    border-radius: 6px;
+}
+.sm-row:hover { background: rgba(255, 255, 255, 0.05); }
+.sm-row.selected { background: rgba(255, 255, 255, 0.07); }
+.sm-pill { min-width: 3px; min-height: 16px; margin: 0 9px 0 0; border-radius: 999px; background: transparent; }
+.sm-row.selected .sm-pill { background: #4cc2ff; }
+.sm-icon { margin: 0 14px 0 4px; }
+.sm-name { font-size: 14px; }
+.sm-sub { font-size: 12px; color: rgba(255, 255, 255, 0.6); }
+.sm-chevron { opacity: 0.55; }
+.sm-empty { color: rgba(255, 255, 255, 0.6); font-size: 13px; margin: 24px 0; }

@@ -122,6 +122,61 @@ save("explorer",
      '<path d="M5 21V18Q5 15.5 7.5 15.5H16.5Q19 15.5 19 18V21Z" fill="url(#el)"/>'
      '<path d="M7.6 18.05H16.4" stroke="#074f94" stroke-width="0.55" stroke-opacity="0.75"/>')
 
+# search boxes (start menu, Win + I, …), like Windows 11's: a magnifier whose
+# ring runs from blue into green at the top right, a soft grey glass inside,
+# the blue handle to the bottom right
+save("search",
+     '<defs><linearGradient id="sr" x1="0" y1="1" x2="1" y2="0"><stop offset="0" stop-color="#0b72d4"/>'
+     '<stop offset="0.6" stop-color="#1688e0"/><stop offset="1" stop-color="#48de78"/></linearGradient></defs>'
+     '<circle cx="10.2" cy="10.2" r="6.1" fill="#ffffff" fill-opacity="0.16"/>'
+     '<path d="M14.7 14.7L19.6 19.6" stroke="#0f78d8" stroke-width="2.5"/>'
+     '<circle cx="10.2" cy="10.2" r="6.1" stroke="url(#sr)" stroke-width="2.1"/>')
+
+# start menu search results: documents – a notepad (blue page with three
+# lines, four binding rings on top, a white page and a brown back below)
+save("document",
+     '<defs><linearGradient id="dp" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#7cd7f2"/>'
+     '<stop offset="1" stop-color="#43aed2"/></linearGradient>'
+     '<linearGradient id="dw" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#cfcfcf"/>'
+     '<stop offset="0.35" stop-color="#f3f3f3"/></linearGradient>'
+     '<linearGradient id="db" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#6e3a14"/>'
+     '<stop offset="0.45" stop-color="#ab5f28"/></linearGradient></defs>'
+     '<rect x="4.5" y="15.5" width="15" height="6" rx="1" fill="url(#db)"/>'
+     '<rect x="4.5" y="14" width="15" height="6" rx="1" fill="url(#dw)"/>'
+     '<rect x="4.5" y="3" width="15" height="15.5" rx="1" fill="url(#dp)"/>'
+     + "".join(f'<rect x="{x}" y="2" width="1.5" height="2.5" rx="0.75" fill="#066f94"/>'
+               for x in (6, 9.5, 13, 16.5))
+     + "".join(f'<rect x="6.5" y="{y}" width="11" height="1.5" rx="0.3" fill="#066f94"/>'
+               for y in (8, 11, 14)))
+# … photos (measured from Windows 11's Photos icon): a tile from bright blue
+# at the top to violet at the bottom right, the white sun top right, a light
+# cyan mountain with a rounded peak whose right slope folds over – the
+# deeper blue part below it is the back of the fold, rounded on top too
+save("photo",
+     '<defs><linearGradient id="pb" x1="0" y1="0" x2="0.55" y2="1"><stop offset="0" stop-color="#1688d6"/>'
+     '<stop offset="0.5" stop-color="#4560b4"/><stop offset="1" stop-color="#7462c0"/></linearGradient>'
+     # the light band: brighter along its upper edge, deeper along the lower
+     '<linearGradient id="pm" gradientUnits="userSpaceOnUse" x1="6" y1="14" x2="9.9" y2="17.9">'
+     '<stop offset="0" stop-color="#4fd8fd"/><stop offset="1" stop-color="#2aaeea"/></linearGradient>'
+     # the back of the fold: in the band's shadow next to it, lighter away from it
+     '<linearGradient id="pf" gradientUnits="userSpaceOnUse" x1="10" y1="17.75" x2="14.5" y2="22.25">'
+     '<stop offset="0" stop-color="#0567c9"/><stop offset="0.6" stop-color="#1590dc"/></linearGradient>'
+     '<radialGradient id="ps" cx="0.4" cy="0.35" r="0.7"><stop offset="0" stop-color="#ffffff"/>'
+     '<stop offset="1" stop-color="#dde1ea"/></radialGradient>'
+     '<clipPath id="pc"><rect x="2" y="2" width="20" height="20" rx="1.6"/></clipPath></defs>'
+     '<rect x="2" y="2" width="20" height="20" rx="1.6" fill="url(#pb)"/>'
+     '<g clip-path="url(#pc)">'
+     # traced from the original row by row (24 px box, the tile 2..22): the
+     # light band – left edge x + y = 20, a round peak, right edge x - y = 3.8
+     # straight down to the tile's edge (no dent at the fold) …
+     '<path d="M-2 22L10.2 9.8Q11.9 8.1 13.6 9.8L24.4 20.6L12 24H-2Z" fill="url(#pm)"/>'
+     # … and in front of it the deeper blue part: left edge x + y = 27.75,
+     # a broad round top (the fold), then the same right edge x - y = 3.8
+     '<path d="M3.75 24L13.1 14.65C14.3 13.45 15.5 12.4 16.4 12.6C16.6 12.7 16.8 13.0 17.1 13.3L24.4 20.6V24Z" fill="url(#pf)"/>'
+     '</g>'
+     '<circle cx="16.95" cy="6.3" r="1.95" fill="#1b2a70" opacity="0.22"/>'
+     '<circle cx="16.8" cy="6.1" r="1.95" fill="url(#ps)"/>')
+
 # Win + P (project): which screens show the picture – bright: on, faint: off
 def screen(x, y, op):
     return (f'<rect x="{x}" y="{y}" width="9.5" height="7" rx="1" stroke="{W}" stroke-opacity="{op}" '
@@ -270,6 +325,20 @@ save("snip", f'<circle cx="6" cy="17.5" r="2.5" {st}/><circle cx="6" cy="6.5" r=
 # start menu search: "Open" (arrow out of a box) and app actions (window)
 save("open", f'<path d="M10 5H6.5A1.5 1.5 0 0 0 5 6.5v11A1.5 1.5 0 0 0 6.5 19h11a1.5 1.5 0 0 0 1.5-1.5V14" {st}/>'
              f'<path d="M13.5 5H19v5.5M19 5l-8 8" {st}/>')
+# start menu search, a file's actions: its folder, copy the path
+save("folder", f'<path d="M3.75 7.5v9.75A1.75 1.75 0 0 0 5.5 19h13a1.75 1.75 0 0 0 1.75-1.75V9.75A1.75 1.75 0 0 0 18.5 8h-6.25'
+               f'l-2-2.25H5.5A1.75 1.75 0 0 0 3.75 7.5z" {st}/>')
+save("copy", f'<rect x="8.25" y="8.25" width="11.5" height="11.5" rx="2" {st}/>'
+             f'<path d="M15.75 8.25V6A1.75 1.75 0 0 0 14 4.25H6A1.75 1.75 0 0 0 4.25 6v8A1.75 1.75 0 0 0 6 15.75h2.25" {st}/>')
+# the settings menu (Win + I)
+save("mouse", f'<rect x="6.75" y="3.25" width="10.5" height="17.5" rx="5.25" {st}/><path d="M12 3.5v5.75" {st}/>')
+save("background", f'<rect x="3.25" y="4.75" width="17.5" height="14.5" rx="2" {st}/>'
+                   f'<path d="M3.5 16.5l5-4.75 4 3.75 2.75-2.5 5 4.25" {st}/><circle cx="15.5" cy="9" r="1.5" {st}/>')
+save("palette", f'<path d="M12 3.5a8.5 8.5 0 1 0 0 17c1.4 0 2-1 1.5-2.1-.6-1.2.2-2.4 1.6-2.4H17a3.5 3.5 0 0 0 3.5-3.5'
+                f'C20.5 7.3 16.7 3.5 12 3.5z" {st}/><circle cx="7.75" cy="11" r="1.1" fill="{W}"/>'
+                f'<circle cx="10.5" cy="7.5" r="1.1" fill="{W}"/><circle cx="14.75" cy="7.75" r="1.1" fill="{W}"/>')
+save("activity", f'<path d="M3.5 12.5h3.75l2.5-6.5 4.5 12 2.5-5.5h3.75" {st}/>')
+save("code", f'<path d="M8.5 7.5L4 12l4.5 4.5M15.5 7.5L20 12l-4.5 4.5M13.25 5.5l-2.5 13" {st}/>')
 save("window", f'<rect x="3.75" y="5" width="16.5" height="14" rx="2" {st}/><path d="M3.75 9h16.5" {st}/>')
 save("lock", f'<rect x="5" y="10.5" width="14" height="10" rx="2" {st}/><path d="M8 10.5V7.5a4 4 0 0 1 8 0v3" {st}/>')
 # power: open ring (gap at the top) + short stem, like Segoe Fluent "PowerButton"

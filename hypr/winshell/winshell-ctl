@@ -3,6 +3,7 @@
 #   winshell-ctl switch next|prev|commit|cancel
 #   winshell-ctl qs [toggle|main|wifi|bluetooth|hide]
 #   winshell-ctl menu [hide] | search <text> | calendar [hide] | osd volume|brightness|mic
+#   winshell-ctl settings [hide]   the settings flyout (Win + I)
 #   winshell-ctl tray [menu | hide <id> | show <id>]   hidden-icons flyout, first icon menu, hide/show an icon
 #   winshell-ctl notified <id> <urgency>   (swaync script: keeps at most 3 popups)
 #   winshell-ctl start | restart

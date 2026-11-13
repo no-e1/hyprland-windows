@@ -58,7 +58,7 @@ case "${1:-restore}" in
                     printf '%s\0icon\x1f%s\n' "$WEB_ENTRY" "web-browser"
                     list_walls | while read -r f; do entry "$f" ""; done
                     list_downloads | while read -r f; do entry "$f" "⬇  "; done
-                  } | rofi -dmenu -i -p "Background" -show-icons -theme "$HOME/.config/rofi/wallpaper.rasi")
+                  } | rofi -dmenu -i -p "Background" -show-icons -theme "$HOME/.config/rofi/wallpaper.rasi" -theme-str 'entry { placeholder: "Search backgrounds"; }')
         [ -z "$choice" ] && exit 0
         if [ "$choice" = "$WEB_ENTRY" ]; then
             xdg-open "$ONLINE" >/dev/null 2>&1 &

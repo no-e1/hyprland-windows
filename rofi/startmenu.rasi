@@ -57,7 +57,7 @@ textbox-search-icon {
     padding:        7px 0;
 }
 entry {
-    placeholder:       "Search for apps, settings, and documents";
+    placeholder:       "Search for apps and documents";
     placeholder-color: @fg-dim;
     cursor:            text;
     vertical-align:    0.5;
