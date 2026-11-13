@@ -177,6 +177,20 @@ save("photo",
      '<circle cx="16.95" cy="6.3" r="1.95" fill="#1b2a70" opacity="0.22"/>'
      '<circle cx="16.8" cy="6.1" r="1.95" fill="url(#ps)"/>')
 
+# Win + W, "Find more online…": the Photos tile, a little smaller, with a
+# blue globe badge at the bottom right (a clear gap around it)
+_photo = open(os.path.join(OUT, "win11-photo.svg")).read()
+_photo = _photo[_photo.index(">") + 1:_photo.rindex("</svg>")]
+save("find-online",
+     '<defs><linearGradient id="gb" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#3fa9f5"/>'
+     '<stop offset="1" stop-color="#0b63c4"/></linearGradient>'
+     '<mask id="gm"><rect width="24" height="24" fill="white"/><circle cx="17.6" cy="17.6" r="6.6" fill="black"/></mask></defs>'
+     f'<g mask="url(#gm)"><g transform="translate(-1.2 -1.2) scale(0.92)">{_photo}</g></g>'
+     '<circle cx="17.6" cy="17.6" r="5.4" fill="url(#gb)"/>'
+     '<g stroke="#ffffff" stroke-width="0.8" fill="none">'
+     '<circle cx="17.6" cy="17.6" r="3.5"/><ellipse cx="17.6" cy="17.6" rx="1.5" ry="3.5"/>'
+     '<path d="M14.1 17.6h7M14.6 15.9h6M14.6 19.3h6"/></g>')
+
 # Win + P (project): which screens show the picture – bright: on, faint: off
 def screen(x, y, op):
     return (f'<rect x="{x}" y="{y}" width="9.5" height="7" rx="1" stroke="{W}" stroke-opacity="{op}" '
