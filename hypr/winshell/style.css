@@ -147,7 +147,7 @@ button.tbp-close:hover { background: #c42b1c; }
 }
 .qs-tiles { padding: 22px 22px 6px 22px; }
 .qs-sliders {
-    padding: 14px 8px 14px 10px;
+    padding: 14px 2px 14px 10px;
     border-top: 1px solid rgba(255, 255, 255, 0.08);
 }
 .qs-page { padding: 14px 14px 10px 14px; }
@@ -193,6 +193,12 @@ button.tbp-close:hover { background: #c42b1c; }
 .tile-label { font-size: 12px; min-height: 32px; }   /* room for two lines */
 
 .slider-row image { min-width: 22px; }
+/* the speaker / sun: in from the edge like Windows, the bar starting at the
+   same place (narrower on the right, the knob's box must not reach it) */
+.slider-row button.slider-lead { padding: 7px 3px 7px 7px; }
+/* the speaker's drawing leans left in its box: 2 px further right, so it
+   stands centered under the sun (same button width: the bars stay aligned) */
+.slider-row button.slider-lead.vol-lead { padding: 7px 1px 7px 9px; }
 .slider-row button.slider-more { padding: 6px 2px 6px 4px; }
 scale { padding: 8px 0; }
 scale trough {

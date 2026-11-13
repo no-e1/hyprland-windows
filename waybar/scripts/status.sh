@@ -34,8 +34,10 @@ vol() {
     local out v
     out=$(wpctl get-volume @DEFAULT_AUDIO_SINK@ 2>/dev/null)
     v=$(awk '{printf "%d", $2 * 100 + 0.5}' <<<"$out")
-    if [[ "$out" == *MUTED* ]] || [ "${v:-0}" -eq 0 ]; then
+    if [[ "$out" == *MUTED* ]]; then
         json mute "Speakers: muted"
+    elif [ "${v:-0}" -eq 0 ]; then          # 0 % is not muted (like Windows)
+        json vol-0 "Speakers: 0%"
     else
         json "vol-$(( v < 34 ? 1 : v < 67 ? 2 : 3 ))" "Speakers: $v%"
     fi

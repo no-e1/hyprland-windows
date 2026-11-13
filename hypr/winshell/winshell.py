@@ -283,10 +283,25 @@ def button(child, *classes, on_click=None, tooltip=None):
     for c in classes:
         b.add_css_class(c)
     if on_click:
-        b.connect("clicked", lambda *_: on_click())
+        b.connect("clicked", lambda *_: _click_once(b, on_click))
     if tooltip:
         b.set_tooltip_text(tooltip)
     return b
+
+
+CLICK_BOUNCE = 0.11     # s
+
+
+def _click_once(b, on_click):
+    """The touchpad sometimes delivers one click twice, 50–65 ms apart
+    (seen in the log: the speaker button muted and unmuted at once, every
+    few clicks). Nobody clicks that fast on purpose: the second one is
+    dropped."""
+    now = time.monotonic()
+    if now - getattr(b, "_last_click", 0.0) < CLICK_BOUNCE:
+        return
+    b._last_click = now
+    on_click()
 
 
 SLIDE_WAIT = 3       # frames (at 60 Hz) until a freshly shown window is on screen
@@ -1218,6 +1233,7 @@ class QuickSettings:
         self.state = {}
         self.pending = {}
         self.last_slide = 0.0
+        self.audio_changed_at = 0.0         # speaker button / volume slider last used
         # tiles the user just clicked: key -> (wanted state, until). The
         # background refresh may read the old state while the change is
         # still being applied; it must not flip the tile back meanwhile.
@@ -1304,6 +1320,7 @@ class QuickSettings:
                                              on_icon=self.toggle_mute,
                                              on_more=lambda: self.open_page("sound"),
                                              more_icon="win11-sound-output")
+        self.vol_row.img.get_parent().add_css_class("vol-lead")     # the speaker a touch right (style.css)
         sliders = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=15)   # as far apart as Windows'
         sliders.add_css_class("qs-sliders")
         sliders.append(self.bright_row)
@@ -1377,7 +1394,7 @@ class QuickSettings:
         row = Gtk.Box(spacing=6)
         row.add_css_class("slider-row")
         img = icon(ic, 22)
-        lead = button(img, "flat-btn", on_click=on_icon)    # same size in both rows
+        lead = button(img, "flat-btn", "slider-lead", on_click=on_icon)    # same size in both rows
         if not on_icon:
             lead.set_can_target(False)
             lead.set_can_focus(False)
@@ -1386,6 +1403,11 @@ class QuickSettings:
         scale.set_hexpand(True)
         scale.set_draw_value(False)
         scale.connect("value-changed", lambda s: None if self.updating else on_change(int(s.get_value())))
+        # the knob's 24 px box sticks out 10 px past the bar's ends: with the
+        # knob at 0 it lay over the icon button – a click on the speaker
+        # also grabbed the knob, which unmuted again right away
+        scale.set_margin_start(4)
+        scale.set_margin_end(6)
         row.append(scale)
         self.value_tip(scale)
         # Like Windows, both sliders are equally long: the brightness row gets
@@ -1630,7 +1652,8 @@ class QuickSettings:
 
     # ── state ──
     def refresh(self):
-        bg(self.read_state, self.apply_state)
+        started = time.monotonic()
+        bg(self.read_state, lambda st: self.apply_state(st, started))
 
     def read_state(self):
         st = {}
@@ -1661,7 +1684,14 @@ class QuickSettings:
             st["bat"] = None
         return st
 
-    def apply_state(self, st):
+    def apply_state(self, st, started=None):
+        # A read takes a while (bluetoothctl, nmcli): one that began before
+        # the speaker button / volume slider was used reports the old sound
+        # state – the icon flipped back after every few clicks. Such a read
+        # keeps what is shown for the sound.
+        if started is not None and started < self.audio_changed_at:
+            st["muted"] = self.state.get("muted", st["muted"])
+            st["vol"] = self.state.get("vol", st["vol"])
         now = time.monotonic()
         for key, (value, until) in list(self.wanted.items()):
             if st.get(key) == value or now > until:
@@ -1723,8 +1753,10 @@ class QuickSettings:
 
     @staticmethod
     def volume_icon(vol, muted):
-        if muted or vol == 0:
+        if muted:
             return "win11-volume-mute"
+        if vol == 0:                    # 0 % is not muted: the speaker without waves, like Windows
+            return "win11-volume-0"
         return f"win11-volume-{1 if vol < 34 else 2 if vol < 67 else 3}"
 
     def later(self, fn, delay=600):
@@ -1874,12 +1906,27 @@ class QuickSettings:
         self.debounce("bright", lambda: ok(f"brightnessctl -q set {max(1, v)}%"))
 
     def set_volume(self, v):
+        if self.state.get("muted") and v == self.state.get("vol"):
+            return                      # not moved (a click on the knob): stays muted
+        # moving the slider unmutes (like Windows): the button knows it too
+        self.audio_changed_at = time.monotonic()
+        self.state["muted"], self.state["vol"] = False, v
+        self.wanted.pop("muted", None)
         self.vol_row.img.set_from_icon_name(self.volume_icon(v, False))
         self.debounce("vol", lambda: ok(f"wpctl set-mute @DEFAULT_AUDIO_SINK@ 0; "
                                         f"wpctl set-volume -l 1 @DEFAULT_AUDIO_SINK@ {v / 100:.2f}"))
 
     def toggle_mute(self):
-        bg(lambda: ok("wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle"), lambda _r: self.refresh())
+        """The speaker button: mute / unmute. Shown right away; set to that
+        exact state (not "toggle": two quick clicks, or a refresh that read
+        the state just before, flipped it back), and kept on screen until
+        the sound system reports it."""
+        muted = not self.state.get("muted", False)
+        self.audio_changed_at = time.monotonic()
+        self.wanted["muted"] = (muted, time.monotonic() + 3)
+        self.state["muted"] = muted
+        self.vol_row.img.set_from_icon_name(self.volume_icon(self.state.get("vol", 0), muted))
+        bg(lambda: ok(f"wpctl set-mute @DEFAULT_AUDIO_SINK@ {1 if muted else 0}"), lambda _r: self.refresh())
 
     def debounce(self, key, fn):
         self.last_slide = time.monotonic()
@@ -7679,6 +7726,8 @@ class WinShell(Gtk.Application):
         elif what == "qs":
             if arg == "hide":
                 self.qs.hide()
+            elif arg == "mute":                 # the speaker button (as if clicked)
+                self.qs.toggle_mute()
             elif arg in ("main", "wifi", "bluetooth", "sound"):
                 self.flyouts_on(None)
                 self.qs.show(arg)
