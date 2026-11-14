@@ -1,0 +1,14 @@
+[Unit]
+Description=Unload the Wi-Fi driver before sleep, load it again after (ath11k doesn't wake up reliably)
+Before=sleep.target
+StopWhenUnneeded=yes
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/libexec/wifi-recover sleep
+ExecStop=/usr/local/libexec/wifi-recover wake
+TimeoutSec=30
+
+[Install]
+WantedBy=sleep.target

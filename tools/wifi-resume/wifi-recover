@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+# Wi-Fi that doesn't wake up from sleep (Qualcomm ath11k, WCN6855: "failed
+# to resume mhi", NetworkManager then shows "Looking for networks…" forever
+# and gives up on the card). Runs as root:
+#   wifi-recover sleep    before sleep: unload the Wi-Fi driver (the card
+#                         then can't hang in its sleep state)
+#   wifi-recover wake     after sleep: load it again
+#   wifi-recover repair   Wi-Fi not connected: reset the card (driver out,
+#                         PCI device off and on, driver in); Bluetooth
+#                         adapter gone: reload it and restart bluez
+# Installed to /usr/local/libexec by install.sh (a root service must not run
+# a file your user can change).
+set -u
+STATE=/run/wifi-recover.state        # module + PCI address, known even when the card is gone
+
+log() { echo "wifi-recover: $*"; }
+
+detect() {
+    local dev mod pci
+    for dev in /sys/class/net/*; do
+        [ -d "$dev/wireless" ] || continue
+        mod=$(basename "$(readlink -f "$dev/device/driver/module")" 2>/dev/null)
+        pci=$(basename "$(readlink -f "$dev/device")" 2>/dev/null)
+        [ -n "$mod" ] && [ "$mod" != module ] && { echo "$mod $pci" > "$STATE"; break; }
+    done
+    MOD=ath11k_pci PCI=
+    [ -r "$STATE" ] && read -r MOD PCI < "$STATE"
+}
+
+unload() { timeout 20 modprobe -r "$MOD" 2>/dev/null; ! lsmod | grep -q "^$MOD "; }
+
+wifi_on()        { nmcli radio wifi 2>/dev/null | grep -q enabled; }
+wifi_connected() { nmcli -t -f TYPE,STATE dev 2>/dev/null | grep -q '^wifi:connected$'; }
+
+repair_wifi() {
+    log "resetting $MOD ${PCI:-(no PCI address)}"
+    unload || log "driver didn't unload"
+    if [ -n "$PCI" ] && [ -e "/sys/bus/pci/devices/$PCI" ]; then
+        echo 1 > "/sys/bus/pci/devices/$PCI/remove"       # power the card off …
+        sleep 1
+    fi
+    echo 1 > /sys/bus/pci/rescan                          # … and on again (firmware reloads)
+    sleep 1
+    modprobe "$MOD"
+    systemctl restart wpa_supplicant 2>/dev/null           # NetworkManager had given up on it
+}
+
+repair_bt() {
+    log "no Bluetooth adapter: reloading btusb, restarting bluez"
+    timeout 15 modprobe -r btusb 2>/dev/null
+    sleep 1
+    modprobe btusb
+    sleep 2
+    systemctl restart bluetooth
+}
+
+detect
+case "${1:-}" in
+    sleep)  unload || log "driver didn't unload before sleep" ;;
+    wake)   modprobe "$MOD" ;;
+    repair)
+        if wifi_on && ! wifi_connected; then repair_wifi; else log "Wi-Fi connected or off: left alone"; fi
+        if [ -z "$(ls /sys/class/bluetooth 2>/dev/null)" ]; then repair_bt; fi ;;
+    *) echo "usage: $0 sleep|wake|repair" >&2; exit 2 ;;
+esac
+exit 0

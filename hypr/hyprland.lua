@@ -1625,8 +1625,11 @@ hl.bind(win .. " + P", function() winshell_send("project") end)
 -- Ctrl + Win + Shift + B, like Windows' graphics reset: a screen hangs (still
 -- picture, black, no taskbar)? This reloads the config, switches the screens
 -- off and on and restarts winshell. Runs on its own, also while locked or
--- when winshell hangs.
+-- when winshell hangs. It also repairs Wi-Fi that didn't wake up from sleep
+-- ("Looking for networks…" for ever) and a lost Bluetooth adapter. With Alt
+-- held too it works the same (Hyprland needs the exact keys).
 hl.bind("CTRL + " .. win .. " + SHIFT + B", hl.dsp.exec_cmd(scripts .. "/reset-display.sh"), { locked = true })
+hl.bind("CTRL + " .. win .. " + SHIFT + ALT + B", hl.dsp.exec_cmd(scripts .. "/reset-display.sh"), { locked = true })
 
 -- Win + Print: save a screenshot of the whole screen
 hl.bind(win .. " + Print", hl.dsp.exec_cmd(scripts .. "/screenshot.sh full"))

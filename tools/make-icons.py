@@ -377,7 +377,22 @@ save("chevron-right", f'<path d="M9.5 6l6 6-6 6" {st}/>')
 save("chevron-left", f'<path d="M14.5 6l-6 6 6 6" {st}/>')
 save("chevron-up", f'<path d="M6 14.5l6-6 6 6" {st}/>')
 save("chevron-down", f'<path d="M6 9.5l6 6 6-6" {st}/>')
-save("refresh", arc(12, 12, 7.5, 40, 330, W).replace('0 0 1', '0 1 1') + f'<path d="M15.5 4.5l3.5.9-1 3.4" {st}/>')
+# refresh: a circle open at the top right, a filled arrowhead sitting exactly
+# on the arc's end and pointing along it (clockwise); centred on 12/12 so it
+# can spin around its middle (winshell turns it while searching)
+def refresh_icon(a0=75, a1=340, r=7.5, length=3.9, width=4.5):
+    p0 = (12 + r * math.sin(math.radians(a0)), 12 - r * math.cos(math.radians(a0)))
+    p1 = (12 + r * math.sin(math.radians(a1)), 12 - r * math.cos(math.radians(a1)))
+    t = (math.cos(math.radians(a1)), math.sin(math.radians(a1)))      # clockwise direction
+    n = (-t[1], t[0])
+    bx, by = p1[0] - t[0] * 0.6, p1[1] - t[1] * 0.6                    # base just behind the end
+    tip = (bx + t[0] * length, by + t[1] * length)
+    b1 = (bx + n[0] * width / 2, by + n[1] * width / 2)
+    b2 = (bx - n[0] * width / 2, by - n[1] * width / 2)
+    return (f'<path d="M{p0[0]:.2f} {p0[1]:.2f} A{r} {r} 0 1 1 {p1[0]:.2f} {p1[1]:.2f}" {st}/>'
+            f'<path d="M{tip[0]:.2f} {tip[1]:.2f}L{b1[0]:.2f} {b1[1]:.2f}L{b2[0]:.2f} {b2[1]:.2f}Z" '
+            f'fill="{W}" stroke="{W}" stroke-width="0.8"/>')
+save("refresh", refresh_icon())
 save("headphones", f'<path d="M4 15v-3a8 8 0 0 1 16 0v3" {st}/><rect x="3.5" y="14" width="4" height="6.5" rx="1.5" {st}/><rect x="16.5" y="14" width="4" height="6.5" rx="1.5" {st}/>')
 # sound output page: built-in speaker and a monitor (HDMI/DisplayPort)
 save("speaker", f'<rect x="6" y="3" width="12" height="18" rx="2" {st}/><circle cx="12" cy="14.5" r="3" {st}/><path d="M12 7.2h.01" {st}/>')

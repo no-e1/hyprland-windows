@@ -860,7 +860,24 @@ button.tray-menu-item:disabled { color: rgba(255, 255, 255, 0.4); }
 .section-title { font-size: 14px; font-weight: 600; padding: 10px 12px 4px; }
 separator.qs-sep { background: rgba(255, 255, 255, 0.08); min-height: 1px; margin: 6px 0; }
 .empty-small { padding: 14px 0; font-size: 12px; }
-.rescan-btn { transition: opacity 160ms ease-out; }
+/* "search again": round, light hover, the arrow dips when pressed; when a
+   search starts it turns once (SpinIcon), then fades out until it's over */
+button.flat-btn.rescan-btn {
+    min-width: 30px;
+    min-height: 30px;
+    padding: 0;
+    border-radius: 15px;
+    transition: opacity 200ms ease-out, background-color 120ms ease-out;
+}
+button.flat-btn.rescan-btn:hover { background: rgba(255, 255, 255, 0.08); }
+button.flat-btn.rescan-btn:active { background: rgba(255, 255, 255, 0.04); }
+.rescan-btn .spin-icon {
+    transition: transform 160ms cubic-bezier(0.2, 0.9, 0.3, 1.4);
+}
+.rescan-btn:active .spin-icon { transform: scale(0.8); transition: transform 70ms ease-out; }
+.wifi-stuck { padding: 34px 0 0; }
+.wifi-stuck .empty-text { padding: 0; }
+.dim-text { color: rgba(255, 255, 255, 0.45); font-size: 11px; }
 .sink { padding: 10px 12px 10px 4px; }
 .sink.selected { background: rgba(255, 255, 255, 0.06); }
 .sel-bar {

@@ -1,0 +1,11 @@
+// Lets the person at the screen start the Wi-Fi repair without a password
+// (Ctrl + Win + Shift + B, "Repair" in Quick Settings) – only this one
+// service, only "start", only a local active session.
+polkit.addRule(function (action, subject) {
+    if (action.id == "org.freedesktop.systemd1.manage-units" &&
+        action.lookup("unit") == "wifi-recover.service" &&
+        action.lookup("verb") == "start" &&
+        subject.local && subject.active) {
+        return polkit.Result.YES;
+    }
+});

@@ -1,0 +1,7 @@
+[Unit]
+Description=Reset a hung Wi-Fi card / missing Bluetooth adapter (Ctrl + Win + Shift + B, "Repair" in Quick Settings)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/libexec/wifi-recover repair
+TimeoutStartSec=90

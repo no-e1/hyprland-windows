@@ -1224,6 +1224,65 @@ class ScanDots(Gtk.DrawingArea):
             cr.fill()
 
 
+class SpinIcon(Gtk.Widget):
+    """An icon that can turn once around its middle (the "search again"
+    arrow: one turn when a search starts, then the button fades out)."""
+    TURN = 0.5                  # s for one turn
+
+    def __init__(self, name, size=16):
+        super().__init__()
+        self.set_layout_manager(Gtk.BinLayout())
+        self.add_css_class("spin-icon")
+        self.img = icon(name, size)
+        self.img.set_parent(self)
+        self.angle = 0.0
+        self.tick = 0
+        self.t0 = 0
+        self.done = None
+
+    def do_dispose(self):
+        if self.img:
+            self.img.unparent()
+            self.img = None
+
+    def do_snapshot(self, snap):
+        if not self.img:
+            return
+        w, h = self.get_width() / 2, self.get_height() / 2
+        snap.translate(Graphene.Point().init(w, h))
+        snap.rotate(self.angle)
+        snap.translate(Graphene.Point().init(-w, -h))
+        self.snapshot_child(self.img, snap)
+
+    @property
+    def turning(self):
+        return bool(self.tick)
+
+    def turn(self, done=None):
+        """One full turn (eases in and out); done() runs at its end."""
+        self.done = done
+        if not self.tick:
+            self.t0 = 0
+            self.tick = self.add_tick_callback(self.on_tick)
+
+    def on_tick(self, _w, clock):
+        now = clock.get_frame_time() / 1e6
+        if not self.t0:
+            self.t0 = now
+        p = min(1.0, (now - self.t0) / self.TURN)
+        e = 4 * p ** 3 if p < 0.5 else 1 - (-2 * p + 2) ** 3 / 2      # ease in-out
+        self.angle = 360 * e
+        self.queue_draw()
+        if p < 1:
+            return True
+        self.angle = 0.0
+        self.tick = 0
+        done, self.done = self.done, None
+        if done:
+            done()
+        return False
+
+
 # ── Quick settings ───────────────────────────────────────────────────────
 class QuickSettings:
     def __init__(self, app):
@@ -1238,6 +1297,7 @@ class QuickSettings:
         # background refresh may read the old state while the change is
         # still being applied; it must not flip the tile back meanwhile.
         self.wanted = {}
+        self.repairing = False              # wifi-recover.service runs
 
         # transparent full-screen layer that closes the flyout on outside clicks
         self.backdrop = layer_window(app, "winshell-catcher", LS.Layer.TOP,
@@ -1452,8 +1512,9 @@ class QuickSettings:
         head.append(sp)
         rescan = None
         if on_rescan:                           # search again (a search ends after a while)
-            rescan = button(icon("win11-refresh", 16), "flat-btn", "rescan-btn",
-                            on_click=on_rescan, tooltip="Search again")
+            spin = SpinIcon("win11-refresh", 16)
+            rescan = button(spin, "flat-btn", "rescan-btn", on_click=on_rescan, tooltip="Search again")
+            rescan.spin = spin
             rescan.set_valign(Gtk.Align.CENTER)
             head.append(rescan)
         sw = Gtk.Switch(valign=Gtk.Align.CENTER)
@@ -1487,7 +1548,7 @@ class QuickSettings:
     def build_wifi(self):
         page, self.wifi_switch, self.wifi_list = self.page(
             "Wi-Fi", self.set_wifi, "More Wi-Fi settings", "nm-connection-editor",
-            on_rescan=lambda: self.load_wifi(rescan=True))
+            on_rescan=self.on_wifi_rescan)
         return page
 
     def build_bt(self):
@@ -1503,11 +1564,21 @@ class QuickSettings:
 
     @staticmethod
     def show_rescan(lst, show):
-        """The "search again" button: only when the radio is on and no search runs."""
-        if lst.rescan:
-            lst.rescan.set_opacity(1 if show else 0)
-            lst.rescan.set_can_target(show)
-            lst.rescan.set_can_focus(show)
+        """The "search again" button: there when the radio is on and no
+        search runs. When a search starts it turns once, then fades out
+        until the search is over."""
+        b = lst.rescan
+        if not b:
+            return
+        b.set_can_target(show)
+        b.set_can_focus(show)
+        if show:
+            b.spin.done = None              # a turn still running: don't hide at its end
+            b.set_opacity(1)
+        elif lst.dots.running and b.get_opacity() > 0:
+            b.spin.turn(lambda: None if b.get_can_target() else b.set_opacity(0))
+        elif not b.spin.turning:
+            b.set_opacity(0)
 
     # ── show / hide ──
     def toggle(self, page="main"):
@@ -1658,6 +1729,10 @@ class QuickSettings:
     def read_state(self):
         st = {}
         st["wifi"] = sh("nmcli radio wifi").strip() == "enabled"
+        # the Wi-Fi card's state ("" = no card at all): "unavailable" for
+        # long means it hung (didn't wake up from sleep) – see wifi_stuck()
+        st["wifi_dev"] = next((l.split(":", 1)[1] for l in sh("nmcli -t -f TYPE,STATE dev").splitlines()
+                               if l.startswith("wifi:")), "")
         st["ssid"] = ""
         for line in sh("nmcli -t -f ACTIVE,SIGNAL,SSID dev wifi list --rescan no").splitlines():
             if line.startswith("yes:"):
@@ -1708,6 +1783,14 @@ class QuickSettings:
             else:
                 st[key] = value
         self.state = st
+        bad = st["wifi"] and st.get("wifi_dev") in ("", "unavailable", "unmanaged")
+        if not bad:
+            self.wifi_bad_since = None
+        elif getattr(self, "wifi_bad_since", None) is None:
+            self.wifi_bad_since = now
+        if self.wifi_stuck() != getattr(self, "wifi_stuck_shown", False) \
+                and self.stack.get_visible_child_name() == "wifi" and not self.repairing:
+            self.show_wifi(self.nets or [])
         self.updating = True
         try:
             self.set_tile("wifi", st["wifi"], st["ssid"] or "Wi-Fi")
@@ -1796,6 +1879,7 @@ class QuickSettings:
                                         "empty-text", xalign=0.5))
             if on:
                 self.wifi_list.dots.start(delay=0)
+                self.show_rescan(self.wifi_list, False)     # the arrow turns while it looks
 
         def after(_r):
             if gen != self.wifi_gen:            # switched again meanwhile
@@ -1826,6 +1910,7 @@ class QuickSettings:
                                       "empty-text", xalign=0.5))
             if on:
                 self.bt_list.dots.start(delay=0)    # searching starts with the switch, not seconds later
+                self.show_rescan(self.bt_list, False)
 
         def after(r):
             if op != self.bt_op:                    # switched again meanwhile: that one decides
@@ -1959,6 +2044,54 @@ class QuickSettings:
         self.pending[key] = GLib.timeout_add(40, fire)
 
     # ── Wi-Fi page ──
+    WIFI_STUCK = 10                 # s "unavailable" while on: the card hung
+
+    def wifi_stuck(self):
+        """Wi-Fi is on but the card has been unusable for a while – after
+        sleep the ath11k card sometimes doesn't wake up, and then only a
+        reset helps (wifi-recover.service, tools/wifi-resume)."""
+        since = getattr(self, "wifi_bad_since", None)
+        return since is not None and time.monotonic() - since >= self.WIFI_STUCK
+
+    def repair_wifi(self):
+        if self.repairing:
+            return
+        self.repairing = True
+        self.wifi_gen = getattr(self, "wifi_gen", 0) + 1
+        gen = self.wifi_gen
+        clear(self.wifi_list)
+        self.wifi_list.append(label("Repairing Wi-Fi…", "empty-text", xalign=0.5))
+        self.wifi_list.dots.start(delay=0)
+        self.show_rescan(self.wifi_list, False)
+
+        def run():
+            if not ok(["systemctl", "cat", "wifi-recover.service"], timeout=5):
+                return "missing"
+            return "ok" if ok(["systemctl", "start", "wifi-recover.service"], timeout=100) else "failed"
+
+        def done(r):
+            self.repairing = False
+            self.wifi_bad_since = None              # give the fresh card time to come up
+            if r != "ok":
+                self.wifi_list.dots.stop()
+                spawn(["notify-send", "-a", "Wi-Fi", "-i", "network-wireless-offline",
+                       "Wi-Fi repair " + ("not installed" if r == "missing" else "failed"),
+                       "Run once: sudo tools/wifi-resume/install.sh" if r == "missing"
+                       else "See: journalctl -u wifi-recover"])
+                self.show_wifi(self.nets or [])
+                self.show_rescan(self.wifi_list, True)
+                return
+            self.refresh()
+            # the card needs a few seconds before it can scan
+            self.later(lambda: gen == self.wifi_gen and self.load_wifi(True), 3000)
+        bg(run, done)
+
+    def on_wifi_rescan(self):
+        if self.wifi_stuck():
+            self.repair_wifi()
+        else:
+            self.load_wifi(rescan=True)
+
     def load_wifi(self, rescan=False):
         if self.nets:
             self.show_wifi(self.nets)
@@ -2024,6 +2157,17 @@ class QuickSettings:
         clear(self.wifi_list)
         if not self.state.get("wifi", True):
             self.wifi_list.append(label("Wi-Fi is turned off", "empty-text", xalign=0.5))
+            return
+        self.wifi_stuck_shown = stuck = self.wifi_stuck()
+        if stuck:                       # the card hung: offer the reset instead of looking for ever
+            box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+            box.add_css_class("wifi-stuck")
+            box.append(label("Wi-Fi isn't responding", "empty-text", xalign=0.5))
+            fix = button("Repair", "accent-btn", on_click=self.repair_wifi)
+            fix.set_halign(Gtk.Align.CENTER)
+            box.append(fix)
+            box.append(label("Or press Ctrl + Win + Shift + B", "dim-text", xalign=0.5))
+            self.wifi_list.append(box)
             return
         if not nets:
             self.wifi_list.append(label("Looking for networks…", "empty-text", xalign=0.5))
