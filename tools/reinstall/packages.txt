@@ -1,0 +1,147 @@
+# Packages for a minimal Fedora (Everything netinstall, "Minimal Install")
+# to run this setup – what the KDE edition brought along and the setup
+# uses, plus what was installed on top. restore.sh installs them.
+# One per line; # starts a comment.
+
+# Hyprland and its parts
+hyprland
+hypridle
+hyprlock
+xdg-desktop-portal-hyprland
+xdg-desktop-portal-gtk
+xdg-desktop-portal-kde
+qt5-qtwayland
+qt6-qtwayland
+greetd                      # starts Hyprland right after the disk is unlocked (no login screen)
+
+# winshell (taskbar, start menu, flyouts, lock screen, winterm)
+python3-gobject
+python3-cairo
+gtk4
+gtk4-layer-shell
+vte291-gtk4
+graphene
+gdk-pixbuf2
+python3-evdev               # the mouse double-click filter
+SwayNotificationCenter
+rofi
+swaybg
+grim
+slurp
+wl-clipboard
+brightnessctl
+playerctl
+libnotify
+jq
+xdg-user-dirs
+xdg-utils
+iw
+util-linux                  # rfkill
+gtk-update-icon-cache
+fontconfig
+
+# sound
+pipewire
+pipewire-pulseaudio
+pipewire-alsa
+pipewire-utils
+wireplumber
+pulseaudio-utils            # pactl (taskbar volume)
+pavucontrol
+alsa-sof-firmware
+
+# network, Bluetooth, VPN
+NetworkManager
+NetworkManager-wifi
+NetworkManager-openvpn
+NetworkManager-bluetooth
+nm-connection-editor
+bluez
+bluez-obexd
+blueman
+mullvad-vpn
+cifs-utils
+samba-client
+
+# sign-in, admin prompts, fingerprint, disk encryption
+kf6-kwallet                 # Brave keeps the key to its saved passwords in the KDE wallet
+pam-kwallet
+kwalletmanager5
+polkit
+polkit-kde
+fprintd
+fprintd-pam
+cryptsetup
+plymouth
+plymouth-system-theme
+
+# KDE parts the setup uses: Dolphin (Explorer), its previews and the Qt look
+dolphin
+kio-extras
+kio-admin
+ffmpegthumbs
+kdegraphics-thumbnailers
+kf6-kconfig                 # kwriteconfig6 (install.sh)
+kde-cli-tools
+plasma-integration          # QT_QPA_PLATFORMTHEME=kde
+breeze-icon-theme
+breeze-gtk
+breeze-cursor-theme
+ark
+okular
+gwenview
+
+# power, disks
+tuned
+tuned-ppd
+upower
+gvfs
+gvfs-smb
+udisks2
+ntfs-3g
+exfatprogs
+efibootmgr
+
+# fonts
+google-noto-sans-fonts
+google-noto-sans-mono-fonts
+google-noto-serif-fonts
+google-noto-color-emoji-fonts
+google-noto-sans-cjk-vf-fonts
+rsms-inter-fonts
+
+# drivers and firmware (AMD Ryzen 7840U / Radeon 780M, Qualcomm Wi-Fi, Realtek LAN)
+linux-firmware
+amd-gpu-firmware
+amd-ucode-firmware
+atheros-firmware
+realtek-firmware
+mesa-dri-drivers
+mesa-vulkan-drivers
+mesa-va-drivers
+
+# media
+ffmpeg-free
+mpv
+gstreamer1-plugins-good
+gstreamer1-plugins-bad-free
+gstreamer1-plugins-ugly-free
+gstreamer1-plugin-libav
+
+# apps
+kitty
+brave-browser
+firefox
+discord
+codium
+steam
+steam-devices
+libreoffice
+gnome-system-monitor
+wdisplays
+
+# development, building (tools/build-hyprbars.sh, build-swaync.sh)
+git
+gh
+podman
+podman-compose
