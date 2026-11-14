@@ -171,6 +171,15 @@ WORKSPACE_ANIM = { leaf = "workspaces", enabled = true, speed = 4, bezier = "win
 hl.animation(WORKSPACE_ANIM)
 
 ---------------------------------------------------------------------
+-- Colours: no automatic HDR. A full-screen video that asks for HDR / wide
+-- colours (YouTube in Brave) switched the laptop screen to that mode: a few
+-- seconds black (the screen is set up anew), and as the panel only runs at
+-- 8 bit the colours came out wrong ("wide color gamut is enabled but the
+-- display is not in 10-bit mode"). Videos simply play in normal colours.
+---------------------------------------------------------------------
+hl.config({ render = { cm_auto_hdr = 0 } })
+
+---------------------------------------------------------------------
 -- Input
 ---------------------------------------------------------------------
 hl.config({
@@ -335,12 +344,20 @@ end
 local function client_maximized(addr, on, quiet)
     hl.dispatch(hl.dsp.window.fullscreen_state({ internal = 0, client = on and 1 or 0,
                                                  window = "address:" .. addr }))
+    -- "maximized" for the app only (internal 0, client 1) unhooks Hyprland
+    -- from the app's own full-screen requests: a YouTube video asked for full
+    -- screen, the app was told yes, but the window stayed as big as before
+    -- (the taskbar stayed). Keep them hooked up (window.fullscreen handles it).
+    hl.dispatch(hl.dsp.window.set_prop({ prop = "sync_fullscreen", value = "1", window = "address:" .. addr }))
     square_corners(addr, on)
     if AppMaximized and not quiet then AppMaximized(addr, on) end
 end
 -- windows that are maximized already (config reload, login)
 for _, w in ipairs(hl.get_windows() or {}) do
-    if w.fullscreen_client == 1 then square_corners(w.address, true) end
+    if w.fullscreen_client == 1 then
+        square_corners(w.address, true)
+        hl.dispatch(hl.dsp.window.set_prop({ prop = "sync_fullscreen", value = "1", window = "address:" .. w.address }))
+    end
 end
 
 -- the window an event is about (Hyprland passes the window object itself)
@@ -666,6 +683,31 @@ function WinForget()
     end
 end
 
+-- windows in full screen: address -> "max" / "normal" (what they were before)
+app_fullscreen = app_fullscreen or {}
+-- just left full screen: the app also sends a maximize / restore then, which
+-- the title bar plugin passes on like a click on □ (WinMaxWindow) – it
+-- toggled the window the wrong way. Ignored for a moment.
+fs_just_left = fs_just_left or {}
+
+-- Tabbing away from a full-screen window (Alt+Tab, the taskbar, a click on
+-- another window): it leaves full screen and stays maximized behind –
+-- not a full-screen window left lying under the others.
+hl.on("window.active", function()
+    local cur = hl.get_active_window()
+    for a in pairs(app_fullscreen) do
+        if not cur or cur.address ~= a then
+            local w = hl.get_window("address:" .. a)
+            if w and w.fullscreen == 2 then
+                app_fullscreen[a] = "tab"
+                hl.dispatch(hl.dsp.window.fullscreen_state({ internal = 0, client = 0, window = "address:" .. a }))
+            elseif not w then
+                app_fullscreen[a] = nil
+            end
+        end
+    end
+end)
+
 -- Apps asking to be maximized (their own maximize button, double click on
 -- their title bar) get the Windows-style maximize instead.
 hl.on("window.fullscreen", function(ev)
@@ -677,6 +719,33 @@ hl.on("window.fullscreen", function(ev)
             fs_hook_paused[a] = true
             hl.dispatch(hl.dsp.window.fullscreen_state({ internal = 0, client = 0, window = "address:" .. a }))
             later(300, function() fs_hook_paused[a] = nil end)
+        end
+        return
+    end
+    -- Full screen (the app asked for it – a YouTube video, F11 in a game –
+    -- or Win + Shift + Up): remember whether the window was maximized, and
+    -- maximize it again when it leaves full screen.
+    local a = w.address
+    if w.fullscreen == 2 then
+        if app_fullscreen[a] == nil then app_fullscreen[a] = saved_geometry[a] and "max" or "normal" end
+        return
+    end
+    if app_fullscreen[a] and w.fullscreen == 0 then
+        local was = app_fullscreen[a]
+        app_fullscreen[a] = nil
+        fs_just_left[a] = true
+        later(800, function() fs_just_left[a] = nil end)
+        if was == "max" and saved_geometry[a] then
+            client_maximized(a, true, true)     -- maximized again (size as before)
+        elseif was == "tab" then
+            -- tabbed away: maximized behind the others (a moment later – done
+            -- right inside this event, the full-screen change still running
+            -- overwrote it)
+            later(80, function()
+                local cur = hl.get_window("address:" .. a)
+                if not cur or cur.fullscreen ~= 0 then return end
+                if saved_geometry[a] then client_maximized(a, true, true) else WinMax("max", cur) end
+            end)
         end
         return
     end
@@ -973,6 +1042,7 @@ function WinMaxWindow(addr)
     if drag and drag.moved then return end
     local w = hl.get_window("address:" .. addr)
     if not w or max_toggled[w.address] then return end
+    if app_fullscreen[w.address] or fs_just_left[w.address] then return end    -- full screen in / out
     max_toggled[w.address] = true
     later(500, function() max_toggled[w.address] = nil end)
     if saved_geometry[w.address] or w.fullscreen_client == 1 then
