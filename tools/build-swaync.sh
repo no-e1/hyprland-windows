@@ -12,7 +12,7 @@ OUT="$HOME/.local/share/hypr-plugins"
 mkdir -p "$OUT"
 TOOLS="$(cd "$(dirname "$0")" && pwd)"
 
-podman run --rm -v "$OUT:/out:Z" -v "$TOOLS:/tools:ro,Z" -e VER="$VER" registry.fedoraproject.org/fedora:43 bash -euxc '
+podman run --rm -v "$OUT:/out:Z" -v "$TOOLS:/tools:ro,Z" -e VER="$VER" "registry.fedoraproject.org/fedora:$(rpm -E %fedora)" bash -euxc '
 dnf -y -q install gcc vala meson ninja-build git pkgconf-pkg-config \
     gtk4-devel libadwaita-devel gtk4-layer-shell-devel json-glib-devel granite-7-devel \
     libgee-devel wayland-devel pulseaudio-libs-devel blueprint-compiler sassc \

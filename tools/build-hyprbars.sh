@@ -4,10 +4,27 @@
 # drag-to-edge snapping patch applied.  Output:
 #   ~/.local/share/hypr-plugins/hyprbars.so
 #
-# Versions = the libraries bundled in the ashbuk/Hyprland-Fedora COPR package.
+# Versions = the libraries bundled in the ashbuk/Hyprland-Fedora COPR package:
+# read from its vendor folder, so the plugin always matches the installed
+# Hyprland (a plugin built against other library versions doesn't load).
+# The container is the same Fedora release as this system.
 set -euo pipefail
 
 HL_VER="v$(hyprctl version -j | jq -r .tag | sed 's/^v//')"
+FEDORA="$(rpm -E %fedora)"
+VENDOR=/usr/libexec/hyprland/vendor/lib64
+ver() {   # ver <lib> <fallback>: the version of a vendored library (libfoo.so.X.Y.Z)
+    local f; f=$(ls "$VENDOR/lib$1.so."*.*.* 2>/dev/null | head -n1)
+    [ -n "$f" ] && echo "v${f##*.so.}" || echo "$2"
+}
+V_UTILS=$(ver hyprutils v0.14.3); V_LANG=$(ver hyprlang v0.6.8); V_WIRE=$(ver hyprwire v0.3.1)
+V_AQ=$(ver aquamarine v0.15.1); V_GFX=$(ver hyprgraphics v0.5.1); V_CURSOR=$(ver hyprcursor v0.1.13)
+# hyprland-plugins has a tag per minor release only (v0.57.0 for 0.57.1 too)
+PL_VER="$HL_VER"
+git ls-remote --exit-code --tags https://github.com/hyprwm/hyprland-plugins "$PL_VER" >/dev/null 2>&1 \
+    || PL_VER="$(echo "$HL_VER" | sed -E 's/^(v[0-9]+\.[0-9]+)\..*/\1.0/')"
+echo "Hyprland $HL_VER (plugins $PL_VER) on Fedora $FEDORA: hyprutils $V_UTILS, hyprlang $V_LANG," \
+     "hyprwire $V_WIRE, aquamarine $V_AQ, hyprgraphics $V_GFX, hyprcursor $V_CURSOR"
 OUT="$HOME/.local/share/hypr-plugins"
 mkdir -p "$OUT"
 CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/hyprbars-build"; mkdir -p "$CACHE"
@@ -15,7 +32,9 @@ CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/hyprbars-build"; mkdir -p "$CACHE"
 
 TOOLS="$(cd "$(dirname "$0")" && pwd)"
 
-podman run --rm -v "$OUT:/out:Z" -v "$CACHE:/cache:Z" -v "$TOOLS:/tools:ro,Z" -e HL_VER="$HL_VER" registry.fedoraproject.org/fedora:43 bash -euxc '
+podman run --rm -v "$OUT:/out:Z" -v "$CACHE:/cache:Z" -v "$TOOLS:/tools:ro,Z" -e HL_VER="$HL_VER" -e PL_VER="$PL_VER" \
+    -e V_UTILS="$V_UTILS" -e V_LANG="$V_LANG" -e V_WIRE="$V_WIRE" -e V_AQ="$V_AQ" -e V_GFX="$V_GFX" -e V_CURSOR="$V_CURSOR" \
+    "registry.fedoraproject.org/fedora:$FEDORA" bash -euxc '
 dnf -y -q install gcc-c++ cmake ninja-build meson git pkgconf-pkg-config \
     wayland-devel wayland-protocols-devel pixman-devel libdrm-devel libinput-devel \
     systemd-devel libxkbcommon-devel mesa-libEGL-devel mesa-libgbm-devel libglvnd-devel \
@@ -27,7 +46,7 @@ dnf -y -q install gcc-c++ cmake ninja-build meson git pkgconf-pkg-config \
     lcms2-devel libcanberra-devel glib2-devel sdbus-cpp-devel mesa-libGLES-devel \
     readline-devel cpio make curl python3 >/dev/null
 
-# Lua 5.5 (Fedora 43 only ships 5.4)
+# Lua 5.5 (Fedora ships 5.4)
 tar xzf /cache/lua-5.5.1.tar.gz -C /tmp
 make -s -C /tmp/lua-5.5.1 linux MYCFLAGS=-fPIC >/dev/null
 make -s -C /tmp/lua-5.5.1 install INSTALL_TOP=/usr/local >/dev/null
@@ -43,13 +62,13 @@ b() { # repo tag [cmake-args]
     cmake --install "/src/$1/build" >/dev/null
 }
 b hyprwayland-scanner v0.4.5
-b hyprutils          v0.14.3
-b hyprlang           v0.6.8
-b hyprwire           v0.3.1
+b hyprutils          "$V_UTILS"
+b hyprlang           "$V_LANG"
+b hyprwire           "$V_WIRE"
 b hyprland-protocols v0.8.0
-b aquamarine         v0.15.1
-b hyprgraphics       v0.5.1
-b hyprcursor         v0.1.13
+b aquamarine         "$V_AQ"
+b hyprgraphics       "$V_GFX"
+b hyprcursor         "$V_CURSOR"
 
 # glaze (header-only)
 git clone -q --depth 1 -b v7.2.0 https://github.com/stephenberry/glaze /src/glaze
@@ -63,7 +82,7 @@ cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr -
 make installheaders PREFIX=/usr
 pkg-config --modversion hyprland
 
-git clone -q --depth 1 -b "$HL_VER" https://github.com/hyprwm/hyprland-plugins /src/hp
+git clone -q --depth 1 -b "$PL_VER" https://github.com/hyprwm/hyprland-plugins /src/hp
 cd /src/hp && git apply /tools/hyprbars-snap.patch
 cd /src/hp/hyprbars && make CXX=g++ && cp hyprbars.so /out/hyprbars.so.new
 '

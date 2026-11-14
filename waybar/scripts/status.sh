@@ -82,7 +82,12 @@ case "$1" in
         wait ;;
     vol)
         vol
-        pactl subscribe 2>/dev/null | grep --line-buffered -E "'change' on (sink|server)" |
+        # at login this starts together with PipeWire: the speakers may
+        # appear, and their saved mute come back, only a moment later (the
+        # icon showed sound while muted). So also on a new sink, and a few
+        # more looks during the first seconds.
+        { sleep 2; vol; sleep 4; vol; } &
+        pactl subscribe 2>/dev/null | grep --line-buffered -E "'(change|new)' on (sink|server)" |
             while read -r _; do vol; done &
         wait ;;
     bat)

@@ -1,0 +1,99 @@
+# Plymouth: the disk passphrase prompt as the Windows 11 style sign-in of
+# winshell's lock screen. The pictures come from make-theme.py, drawn for
+# a screen @REF_H@ px high; on another height everything is scaled to fit.
+
+W = Window.GetWidth();
+H = Window.GetHeight();
+k = H / @REF_H@;
+
+fun scaled(img) {
+    return img.Scale(Math.Int(img.GetWidth() * k), Math.Int(img.GetHeight() * k));
+}
+
+Window.SetBackgroundTopColor(0.09, 0.09, 0.11);
+Window.SetBackgroundBottomColor(0.09, 0.09, 0.11);
+
+bg = Sprite(Image("background.png").Scale(W, H));
+bg.SetZ(-100);
+
+avatar_img = scaled(Image("avatar.png"));
+name_img = scaled(Image("name.png"));
+box_img = scaled(Image("box.png"));
+ph_img = scaled(Image("placeholder.png"));
+dot_img = scaled(Image("dot.png"));
+
+name_gap = @NAME_GAP@ * k;
+box_gap = @BOX_GAP@ * k;
+pad = @PAD@ * k;
+dot_step = @DOT_STEP@ * k;
+
+# avatar, name and field together in the middle of the screen
+total = avatar_img.GetHeight() + name_gap + name_img.GetHeight() + box_gap + box_img.GetHeight();
+top = Math.Int((H - total) / 2);
+
+avatar = Sprite(avatar_img);
+avatar.SetPosition(Math.Int((W - avatar_img.GetWidth()) / 2), top, 10);
+
+name_y = top + avatar_img.GetHeight() + name_gap;
+name = Sprite(name_img);
+name.SetPosition(Math.Int((W - name_img.GetWidth()) / 2), Math.Int(name_y), 10);
+
+box_x = Math.Int((W - box_img.GetWidth()) / 2);
+box_y = Math.Int(name_y + name_img.GetHeight() + box_gap);
+box = Sprite(box_img);
+box.SetPosition(box_x, box_y, 10);
+box.SetOpacity(0);
+
+ph = Sprite(ph_img);
+ph.SetPosition(Math.Int(box_x + pad), Math.Int(box_y + (box_img.GetHeight() - ph_img.GetHeight()) / 2), 11);
+ph.SetOpacity(0);
+
+max_dots = Math.Int((box_img.GetWidth() - 2 * pad) / dot_step);
+for (i = 0; i < max_dots; i++) {
+    dots[i] = Sprite(dot_img);
+    dots[i].SetPosition(Math.Int(box_x + pad + i * dot_step),
+                        Math.Int(box_y + (box_img.GetHeight() - dot_img.GetHeight()) / 2), 11);
+    dots[i].SetOpacity(0);
+}
+
+message = Sprite();
+message.SetZ(12);
+
+fun show_dots(n) {
+    for (i = 0; i < max_dots; i++) {
+        if (i < n) dots[i].SetOpacity(1);
+        else dots[i].SetOpacity(0);
+    }
+}
+
+# the passphrase prompt: the field, "Password" until something is typed
+fun display_password(prompt, bullets) {
+    box.SetOpacity(1);
+    if (bullets > 0) ph.SetOpacity(0);
+    else ph.SetOpacity(1);
+    show_dots(bullets);
+}
+Plymouth.SetDisplayPasswordFunction(display_password);
+
+# unlocked, booting on: only the picture and the name stay (like Windows
+# showing the account while it signs in)
+fun display_normal() {
+    box.SetOpacity(0);
+    ph.SetOpacity(0);
+    show_dots(0);
+}
+Plymouth.SetDisplayNormalFunction(display_normal);
+
+# messages (wrong passphrase, …) below the field
+fun display_message(text) {
+    img = Image.Text(text, 1, 1, 1, 0.92);
+    message.SetImage(img);
+    message.SetPosition(Math.Int((W - img.GetWidth()) / 2),
+                        Math.Int(box_y + box_img.GetHeight() + 16 * k * 2), 12);
+}
+Plymouth.SetMessageFunction(display_message);
+
+fun hide_message(text) {
+    message.SetImage(Image.Text("", 1, 1, 1));
+}
+Plymouth.SetHideMessageFunction(hide_message);

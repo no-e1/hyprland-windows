@@ -1,0 +1,8 @@
+[Plymouth Theme]
+Name=Windows 11 sign-in
+Description=The disk passphrase prompt as the Windows 11 style sign-in of winshell's lock screen
+ModuleName=script
+
+[script]
+ImageDir=/usr/share/plymouth/themes/win11-signin
+ScriptFile=/usr/share/plymouth/themes/win11-signin/win11-signin.script
