@@ -20,6 +20,7 @@ done
 mkdir -p "$HOME/.local/bin" "$HOME/.local/share/applications"
 ln -sf "$REPO/hypr/winshell/winterm.py" "$HOME/.local/bin/winterm"
 ln -sf "$REPO/applications/winterm.desktop" "$HOME/.local/share/applications/winterm.desktop"
+ln -sf "$REPO/applications/spotify.desktop" "$HOME/.local/share/applications/spotify.desktop"   # sharp on Wayland
 
 icons="$HOME/.local/share/icons/hicolor/scalable/status"
 mkdir -p "$icons"

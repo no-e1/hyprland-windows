@@ -513,8 +513,9 @@ end)
 local BAR_HEIGHT = 32
 -- Apps that draw their own title bar with X / □ / – : they get no second
 -- (hyprbars) title bar. Exact window classes, plus class prefixes.
+-- (Spotify isn't here: on Wayland it draws no – □ X of its own)
 OWN_TITLEBAR = { "brave-browser", "discord", "vesktop", "webcord", "steam",
-                 "spotify", "obsidian", "slack", "firefox", "org.mozilla.firefox",
+                 "obsidian", "slack", "firefox", "org.mozilla.firefox",
                  "code", "code-oss", "codium", "vscodium", "VSCodium",
                  "com.visualstudio.CodeOSS",    -- VSCodium on Wayland
                  -- winshell's settings dialogs: their own bar with – and X

@@ -358,6 +358,28 @@ def slide_out(widget, win, ms=150, gone_cb=None):
     widget._leave_id = GLib.timeout_add(ms, gone)
 
 
+def tween(widget, start, end, setter, ms=240):
+    """Glide a value from start to end (ease-out) on widget's frame clock:
+    setter(value) each frame. A new tween on the same widget takes over
+    from wherever the old one was."""
+    old = getattr(widget, "_tween", 0)
+    if old:
+        widget.remove_tick_callback(old)
+    t0 = [0.0]
+
+    def tick(w, clock):
+        now = clock.get_frame_time() / 1e6
+        if not t0[0]:
+            t0[0] = now
+        p = min(1.0, (now - t0[0]) * 1000 / ms)
+        setter(start + (end - start) * (1 - (1 - p) ** 3))
+        if p >= 1:
+            w._tween = 0
+            return False
+        return True
+    widget._tween = widget.add_tick_callback(tick)
+
+
 def clear(box):
     while child := box.get_first_child():
         box.remove(child)
@@ -1293,6 +1315,7 @@ class QuickSettings:
         self.pending = {}
         self.last_slide = 0.0
         self.audio_changed_at = 0.0         # speaker button / volume slider last used
+        self.audio_seen_at = 0.0            # AudioWatch last reported the volume (newer than a slow read)
         # tiles the user just clicked: key -> (wanted state, until). The
         # background refresh may read the old state while the change is
         # still being applied; it must not flip the tile back meanwhile.
@@ -1608,7 +1631,32 @@ class QuickSettings:
             slide_in(self.panel)
             self.win.present()
             GLib.timeout_add(1500, self.live_refresh)
+            aw = getattr(self.shell, "audio", None)
+            if aw and aw.last:                  # the volume right away, not after the slow read
+                self.show_audio(*aw.last[1:])
         self.refresh()
+
+    def show_audio(self, vol, muted):
+        """The speaker volume as it is right now (AudioWatch): the slider
+        follows at once – unless it is being dragged."""
+        if time.monotonic() - self.audio_changed_at < 1.5 or time.monotonic() - self.last_slide < 1.5:
+            return
+        self.audio_seen_at = time.monotonic()
+        self.wanted.pop("muted", None)
+        self.state["vol"], self.state["muted"] = vol, muted
+        self.vol_row.img.set_from_icon_name(self.volume_icon(vol, muted))
+        if not self.visible:
+            self.set_quietly(self.vol, vol)
+            return
+        tween(self.vol, self.vol.get_value(), vol, lambda v: self.set_quietly(self.vol, v), ms=220)
+
+    def set_quietly(self, scale, v):
+        """Move a slider without it counting as the user's change."""
+        self.updating = True
+        try:
+            scale.set_value(v)
+        finally:
+            self.updating = False
 
     def live_refresh(self):
         if not self.visible:
@@ -1773,7 +1821,7 @@ class QuickSettings:
         # the speaker button / volume slider was used reports the old sound
         # state – the icon flipped back after every few clicks. Such a read
         # keeps what is shown for the sound.
-        if started is not None and started < self.audio_changed_at:
+        if started is not None and started < max(self.audio_changed_at, self.audio_seen_at):
             st["muted"] = self.state.get("muted", st["muted"])
             st["vol"] = self.state.get("vol", st["vol"])
         now = time.monotonic()
@@ -2034,6 +2082,9 @@ class QuickSettings:
 
     def debounce(self, key, fn):
         self.last_slide = time.monotonic()
+        if key == "vol" and getattr(self.vol, "_tween", 0):     # the user's hand wins over a glide
+            self.vol.remove_tick_callback(self.vol._tween)
+            self.vol._tween = 0
         if key in self.pending:
             GLib.source_remove(self.pending[key])
 
@@ -4021,6 +4072,7 @@ class OSD:
     @staticmethod
     def fill(p, res, text):
         name, value, muted = res
+        showing = p.win.get_visible() and not getattr(p.box, "_leave_id", 0)
         p.img.set_from_icon_name(name)
         message = value is None             # microphone: on / muted, no level
         p.bar.set_visible(not message)
@@ -4033,17 +4085,92 @@ class OSD:
             p.msg.set_text(text if text is not None else
                            ("Microphone muted" if muted else "Microphone on"))
         else:
-            p.bar.set_fraction(max(0, min(100, value)) / 100)
             (p.bar.add_css_class if muted else p.bar.remove_css_class)("muted")
-            p.lbl.set_text(text if text is not None else str(value))
+            frac = max(0, min(100, value)) / 100
+            if showing and text is None and p.bar.get_visible():
+                # already on screen: bar and number glide to the new value
+                def step(f):
+                    p.bar.set_fraction(f)
+                    p.lbl.set_text(str(round(f * 100)))
+                tween(p.bar, p.bar.get_fraction(), frac, step, ms=200)
+            else:
+                if getattr(p.bar, "_tween", 0):
+                    p.bar.remove_tick_callback(p.bar._tween)
+                    p.bar._tween = 0
+                p.bar.set_fraction(frac)
+                p.lbl.set_text(text if text is not None else str(value))
         p.win.present()
+        if not showing:
+            slide_in(p.box)                 # glides up a little and fades in
 
     def hide(self):
         self.timer = None
         for p in [self.main] + list(self.others.values()):
-            p.win.set_visible(False)
+            if p.win.get_visible():
+                slide_out(p.box, p.win, ms=170)
         return False
 
+
+
+class AudioWatch:
+    """Follows the speaker volume live (pactl subscribe): a change that
+    doesn't come from the volume keys – Bluetooth headphones' own buttons,
+    another app, scrolling on the taskbar – shows the volume flyout at the
+    bottom too, and the Quick Settings slider moves along at once instead
+    of on its next read."""
+    def __init__(self, app):
+        self.app = app
+        self.last = None                # (default sink, volume, muted)
+        self.timer = 0
+        threading.Thread(target=self.watch, daemon=True).start()
+        GLib.idle_add(self.poke)
+
+    def watch(self):
+        while True:
+            try:
+                proc = subprocess.Popen(["pactl", "subscribe"], stdout=subprocess.PIPE, text=True,
+                                        stderr=subprocess.DEVNULL, env=child_env(),
+                                        start_new_session=True, preexec_fn=die_with_parent)
+                for line in proc.stdout:
+                    if ("'change'" in line or "'new'" in line) and (" sink #" in line or " server" in line):
+                        GLib.idle_add(self.poke)
+                proc.wait()
+            except OSError:
+                pass
+            time.sleep(2)                   # PipeWire restarted: follow it again
+
+    def poke(self):
+        if not self.timer:                  # one read per burst of events
+            self.timer = GLib.timeout_add(30, self.read_now)
+        return False
+
+    def read_now(self):
+        self.timer = 0
+        bg(self.read, self.changed)
+        return False
+
+    @staticmethod
+    def read():
+        sink = sh(["pactl", "get-default-sink"], timeout=3).strip()
+        out = sh("wpctl get-volume @DEFAULT_AUDIO_SINK@", timeout=3)
+        mv = re.search(r"([\d.]+)", out)
+        if not sink or not mv:
+            return None
+        return sink, round(float(mv.group(1)) * 100), "MUTED" in out
+
+    def changed(self, res):
+        if not res:
+            return
+        prev, self.last = self.last, res
+        sink, vol, muted = res
+        qs = self.app.qs
+        if qs:
+            qs.show_audio(vol, muted)
+        if prev is None or prev[0] != sink or prev[1:] == res[1:]:
+            return                          # first look, other speakers, or nothing changed
+        if qs and (qs.visible or time.monotonic() - qs.audio_changed_at < 1.5):
+            return                          # the panel's own slider / button: it shows it already
+        self.app.osd.update((QuickSettings.volume_icon(vol, muted), vol, muted))
 
 
 # ── Long notifications ──────────────────────────────────────────────────────
@@ -7679,6 +7806,7 @@ class WinShell(Gtk.Application):
         self.switcher = Switcher(self, icons)
         self.qs = QuickSettings(self)
         self.osd = OSD(self)
+        self.audio = AudioWatch(self)            # volume changed elsewhere (headphones): flyout
         self.notify_guard = NotifyGuard()        # no notification as high as the screen
         self.snap = SnapPreview(self)
         self.freeze = Freeze(self)
