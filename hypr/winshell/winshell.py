@@ -7022,6 +7022,8 @@ class Taskbar:
         px, py = box.pos.get(w, (0, 0))
         self.idrag = {"kind": kind, "box": box, "w": w, "sx": x, "sy": y,
                       "grab": (x - px, y - py), "active": False}
+        if kind == "app":
+            w.add_css_class("pressing")         # a touch smaller while pressed (style.css)
 
     def drag_update(self, g, dx, dy):
         st = getattr(self, "idrag", None)
@@ -7035,6 +7037,9 @@ class Taskbar:
             g.set_state(Gtk.EventSequenceState.CLAIMED)   # no click on release
             if st["kind"] == "app":
                 self.drag_key = st["w"].key
+                # picked up: bigger while it follows the pointer, like Windows
+                st["w"].remove_css_class("pressing")
+                st["w"].add_css_class("lifted")
             else:
                 self.tray_drag_start(st)
         if st["kind"] == "app":
@@ -7046,6 +7051,9 @@ class Taskbar:
 
     def drag_finish(self, ok_):
         st, self.idrag = getattr(self, "idrag", None), None
+        if st and st["kind"] == "app":          # let go: its normal size again
+            st["w"].remove_css_class("pressing")
+            st["w"].remove_css_class("lifted")
         if not st or not st["active"]:
             return
         if st["kind"] == "app":

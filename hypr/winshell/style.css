@@ -691,8 +691,13 @@ button.tb-start.pressing .start-logo { transform: scale(0.88); }
 button.tb-app { min-width: 24px; padding: 0 8px; }   /* min-width excludes padding: 40 px in all */
 button.tb-app.active { background: rgba(255, 255, 255, 0.06); }
 button.tb-app.active:hover { background: rgba(255, 255, 255, 0.10); }
+/* like Windows: pressed a touch smaller, picked up to drag it bigger
+   (.pressing: pressed, also through a flyout's catcher; .lifted: dragged –
+   winshell.py drag_begin / drag_update) */
+button.tb-app image { transition: transform 120ms ease-out; }
 button.tb-app:active image,
-button.tb-app.pressing image { transform: scale(0.88); }   /* .pressing: clicked through a flyout's catcher */
+button.tb-app.pressing image { transform: scale(0.9); }
+button.tb-app.lifted image { transform: scale(1.18); }
 /* several windows of the app: when the button is lit (in front, hovered) a
    second card peeks out behind it on the right, like Windows 11's stacked
    look (without the button's own background it looked like a loose line) */
@@ -747,52 +752,52 @@ button.tb-peek {
    tb-dip: goes down together with the window flying into it – same 240 ms,
    same curve (DeskCanvas) – and right back up once it has landed */
 @keyframes tb-dip {
-    0.0% { transform: translateY(0.00px); }
-    4.9% { transform: translateY(0.08px); }
-    9.8% { transform: translateY(0.30px); }
-    14.6% { transform: translateY(0.62px); }
-    19.5% { transform: translateY(1.04px); }
-    24.4% { transform: translateY(1.50px); }
-    29.3% { transform: translateY(2.00px); }
-    34.1% { transform: translateY(2.50px); }
-    39.0% { transform: translateY(2.96px); }
-    43.9% { transform: translateY(3.38px); }
-    48.8% { transform: translateY(3.70px); }
-    53.7% { transform: translateY(3.92px); }
-    58.5% { transform: translateY(4.00px); }
-    63.4% { transform: translateY(4.00px); }
-    68.0% { transform: translateY(3.83px); }
-    72.6% { transform: translateY(3.38px); }
-    77.1% { transform: translateY(2.73px); }
-    81.7% { transform: translateY(2.00px); }
-    86.3% { transform: translateY(1.27px); }
-    90.9% { transform: translateY(0.62px); }
-    95.4% { transform: translateY(0.17px); }
-    100.0% { transform: translateY(0.00px); }
+    0.0% { transform: translateY(0.00px) scale(1); }
+    4.9% { transform: translateY(0.08px) scale(1); }
+    9.8% { transform: translateY(0.30px) scale(1); }
+    14.6% { transform: translateY(0.62px) scale(1); }
+    19.5% { transform: translateY(1.04px) scale(1); }
+    24.4% { transform: translateY(1.50px) scale(1); }
+    29.3% { transform: translateY(2.00px) scale(1); }
+    34.1% { transform: translateY(2.50px) scale(1); }
+    39.0% { transform: translateY(2.96px) scale(1); }
+    43.9% { transform: translateY(3.38px) scale(1.005); }
+    48.8% { transform: translateY(3.70px) scale(1.024); }
+    53.7% { transform: translateY(3.92px) scale(1.048); }
+    58.5% { transform: translateY(4.00px) scale(1.066); }
+    63.4% { transform: translateY(4.00px) scale(1.069); }
+    68.0% { transform: translateY(3.83px) scale(1.058); }
+    72.6% { transform: translateY(3.38px) scale(1.037); }
+    77.1% { transform: translateY(2.73px) scale(1.016); }
+    81.7% { transform: translateY(2.00px) scale(1.002); }
+    86.3% { transform: translateY(1.27px) scale(1); }
+    90.9% { transform: translateY(0.62px) scale(1); }
+    95.4% { transform: translateY(0.17px) scale(1); }
+    100.0% { transform: translateY(0.00px) scale(1); }
 }
 @keyframes tb-hop {
-    0.0% { transform: translateY(-0.00px); }
-    4.2% { transform: translateY(-1.32px); }
-    8.4% { transform: translateY(-2.31px); }
-    12.6% { transform: translateY(-3.02px); }
-    16.8% { transform: translateY(-3.50px); }
-    21.1% { transform: translateY(-3.79px); }
-    25.3% { transform: translateY(-3.94px); }
-    29.5% { transform: translateY(-3.99px); }
-    33.7% { transform: translateY(-4.00px); }
-    49.5% { transform: translateY(-4.00px); }
-    53.7% { transform: translateY(-3.92px); }
-    57.9% { transform: translateY(-3.70px); }
-    62.1% { transform: translateY(-3.38px); }
-    66.3% { transform: translateY(-2.96px); }
-    70.5% { transform: translateY(-2.50px); }
-    74.7% { transform: translateY(-2.00px); }
-    78.9% { transform: translateY(-1.50px); }
-    83.2% { transform: translateY(-1.04px); }
-    87.4% { transform: translateY(-0.62px); }
-    91.6% { transform: translateY(-0.30px); }
-    95.8% { transform: translateY(-0.08px); }
-    100.0% { transform: translateY(-0.00px); }
+    0.0% { transform: translateY(-0.00px) scale(1); }
+    4.2% { transform: translateY(-1.32px) scale(1.009); }
+    8.4% { transform: translateY(-2.31px) scale(1.031); }
+    12.6% { transform: translateY(-3.02px) scale(1.056); }
+    16.8% { transform: translateY(-3.50px) scale(1.069); }
+    21.1% { transform: translateY(-3.79px) scale(1.065); }
+    25.3% { transform: translateY(-3.94px) scale(1.045); }
+    29.5% { transform: translateY(-3.99px) scale(1.020); }
+    33.7% { transform: translateY(-4.00px) scale(1.003); }
+    49.5% { transform: translateY(-4.00px) scale(1); }
+    53.7% { transform: translateY(-3.92px) scale(1); }
+    57.9% { transform: translateY(-3.70px) scale(1); }
+    62.1% { transform: translateY(-3.38px) scale(1); }
+    66.3% { transform: translateY(-2.96px) scale(1); }
+    70.5% { transform: translateY(-2.50px) scale(1); }
+    74.7% { transform: translateY(-2.00px) scale(1); }
+    78.9% { transform: translateY(-1.50px) scale(1); }
+    83.2% { transform: translateY(-1.04px) scale(1); }
+    87.4% { transform: translateY(-0.62px) scale(1); }
+    91.6% { transform: translateY(-0.30px) scale(1); }
+    95.8% { transform: translateY(-0.08px) scale(1); }
+    100.0% { transform: translateY(-0.00px) scale(1); }
 }
 button.tb-app.tb-dip image { animation: tb-dip 410ms linear; }
 button.tb-app.tb-hop image { animation: tb-hop 380ms linear; }

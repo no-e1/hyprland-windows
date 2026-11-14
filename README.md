@@ -76,6 +76,8 @@ Touchpad: 3 fingers down/up shows the desktop / brings the windows back,
 Hyprland 0.57+ (Lua config), python3-gobject, gtk4, gtk4-layer-shell,
 vte291-gtk4 (winterm), swaync, rofi, hypridle, hyprlock (fallback lock),
 NetworkManager, bluez, wireplumber, brightnessctl, playerctl, grim, slurp,
-wl-clipboard, dolphin, a polkit agent; for the settings: blueman,
-pavucontrol, nm-connection-editor, gnome-system-monitor; podman to build
-the plugins.
+wl-clipboard, dolphin, a polkit agent, python3-pillow (lock screen),
+binutils (Hyprland needs its `nm` for the title bar plugin's hooks); for
+the settings: blueman, pavucontrol, nm-connection-editor,
+gnome-system-monitor; podman to build the plugins, plymouth-plugin-script
+for the boot sign-in theme.

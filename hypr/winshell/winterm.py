@@ -38,7 +38,9 @@ from gi.repository import Gdk, Gio, GLib, Graphene, Gtk, Pango, Vte  # noqa: E40
 APP_ID = "io.github.noe1.winterm"
 FONT = "Cascadia Mono 12"
 SCROLLBACK = 10000
-TITLE_CHARS = 18            # a tab's title at most this wide: tabs of about 175 px
+TITLE_CHARS = 18            # a tab's title at most this wide (fits in TAB_W)
+TAB_W = 205                 # px: every tab this wide (a short title too), like Windows Terminal
+                            # (plus 16 px padding: 221 px, a fourth wider than a short title's tab was)
 
 # Campbell, Windows Terminal's default colours
 BG, FG, CURSOR = "#0c0c0c", "#cccccc", "#ffffff"
@@ -156,6 +158,7 @@ class Tab:
     # ── the tab in the title bar ──
     def build_tab(self):
         box = Gtk.Box(spacing=0, valign=Gtk.Align.END, hexpand=False)
+        box.set_layout_manager(TabLayout(TAB_W))
         box.add_css_class("wt-tab")
         img = Gtk.Image.new_from_icon_name("win11-terminal")
         img.set_pixel_size(16)
@@ -274,6 +277,22 @@ class Tab:
     def zoom(self, step):
         scale = 1.0 if step == 0 else max(0.5, min(3.0, self.term.get_font_scale() + step))
         self.term.set_font_scale(scale)
+
+
+class TabLayout(Gtk.BoxLayout):
+    """A tab's row: TAB_W wide whatever its title (the title alone gave tabs
+    as wide as their text), but still able to get narrower when the tabs
+    don't all fit – only its natural width is raised, not its minimum."""
+
+    def __init__(self, natural):
+        super().__init__()
+        self.natural = natural
+
+    def do_measure(self, widget, orientation, for_size):
+        mn, nat, mb, nb = Gtk.BoxLayout.do_measure(self, widget, orientation, for_size)
+        if orientation == Gtk.Orientation.HORIZONTAL:
+            nat = max(nat, self.natural)
+        return mn, nat, mb, nb
 
 
 class Window(Gtk.ApplicationWindow):
