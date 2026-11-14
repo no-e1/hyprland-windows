@@ -145,6 +145,27 @@ button.tbp-close:hover { background: #c42b1c; }
     border: 1px solid rgba(255, 255, 255, 0.09);
     border-radius: 8px;
 }
+/* what's playing, above Quick Settings (MediaCard), like Windows 11 –
+   measured from Windows' (360 px wide, as wide as the panel): 178 px high,
+   app line at the top, 58 px cover, the buttons 67 px apart */
+.media-card {
+    padding: 16px 22px 21px 22px;
+    background: rgb(34, 34, 38);
+    border: 1px solid rgba(255, 255, 255, 0.09);
+    border-radius: 8px;
+}
+.media-head { margin-bottom: 13px; }
+.media-app { font-size: 12px; color: rgba(255, 255, 255, 0.86); }
+.media-body { min-height: 58px; }
+.media-title { font-size: 14px; font-weight: 600; }
+.media-artist { font-size: 12px; color: rgba(255, 255, 255, 0.72); }
+.media-art { border-radius: 4px; }
+.media-controls { margin-top: 14px; }
+button.flat-btn.media-btn { min-width: 48px; min-height: 40px; padding: 0; border-radius: 4px; }
+button.flat-btn.media-btn:hover { background: rgba(255, 255, 255, 0.07); }
+button.flat-btn.media-btn:active { background: rgba(255, 255, 255, 0.04); }
+button.flat-btn.media-btn:active image { opacity: 0.75; }
+button.flat-btn.media-btn:disabled image { opacity: 0.35; }
 .qs-tiles { padding: 22px 22px 6px 22px; }
 .qs-sliders {
     padding: 14px 2px 14px 10px;

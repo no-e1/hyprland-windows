@@ -1305,6 +1305,243 @@ class SpinIcon(Gtk.Widget):
         return False
 
 
+# ── Media card above Quick Settings ──────────────────────────────────────
+class MediaCard:
+    """What's playing, like Windows 11's media flyout above Quick Settings:
+    the app (icon + name), title, artist, cover, previous / play-pause /
+    next. Any MPRIS player counts (Spotify, a video in the browser, …);
+    notification sounds aren't players, so they never show up. The player
+    that started playing last is shown; it stays (paused) until it goes away."""
+    MPRIS = "org.mpris.MediaPlayer2"
+    PATH = "/org/mpris/MediaPlayer2"
+    ART = os.path.join(os.environ.get("XDG_CACHE_HOME", os.path.expanduser("~/.cache")), "winshell", "art")
+
+    def __init__(self, on_resize):
+        self.on_resize = on_resize          # shown / hidden: the flyout fits itself again
+        self.players = {}                   # bus name -> info
+        self.played_at = {}                 # bus name -> when it last started playing
+        self.current = None
+        self.art_url = None
+        self.timer = 0
+        self.build()
+        try:
+            self.bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+        except GLib.Error:
+            self.bus = None
+            return
+        self.bus.signal_subscribe(None, "org.freedesktop.DBus.Properties", "PropertiesChanged",
+                                  self.PATH, None, Gio.DBusSignalFlags.NONE, lambda *a: self.poke())
+        self.bus.signal_subscribe("org.freedesktop.DBus", "org.freedesktop.DBus", "NameOwnerChanged",
+                                  "/org/freedesktop/DBus", None, Gio.DBusSignalFlags.NONE,
+                                  lambda *a: a[5].unpack()[0].startswith(self.MPRIS) and self.poke())
+        self.poke()
+
+    # ── look ──
+    def build(self):
+        card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        card.add_css_class("media-card")
+        head = Gtk.Box(spacing=8)
+        head.add_css_class("media-head")
+        self.app_img = icon("audio-x-generic", 16)
+        self.app_lbl = label("", "media-app", xalign=0)
+        head.append(self.app_img)
+        head.append(self.app_lbl)
+        card.append(head)
+
+        body = Gtk.Box(spacing=12)
+        body.add_css_class("media-body")
+        text = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2, hexpand=True,
+                       valign=Gtk.Align.CENTER)
+        self.title_lbl = label("", "media-title", xalign=0)
+        self.artist_lbl = label("", "media-artist", xalign=0)
+        text.append(self.title_lbl)
+        text.append(self.artist_lbl)
+        body.append(text)
+        self.art = Gtk.Picture(content_fit=Gtk.ContentFit.COVER, can_shrink=True)
+        self.art.add_css_class("media-art")
+        self.art.set_size_request(58, 58)
+        self.art.set_overflow(Gtk.Overflow.HIDDEN)
+        self.art.set_valign(Gtk.Align.CENTER)
+        body.append(self.art)
+        click = Gtk.GestureClick()          # text / cover: bring the app to the front
+        click.connect("released", lambda *_: self.call(self.MPRIS, "Raise"))
+        body.add_controller(click)
+        card.append(body)
+
+        ctl = Gtk.Box(spacing=19, halign=Gtk.Align.CENTER)
+        ctl.add_css_class("media-controls")
+        self.prev_btn = button(icon("win11-media-prev", 24), "flat-btn", "media-btn",
+                               on_click=lambda: self.call(None, "Previous"), tooltip="Previous")
+        self.play_btn = button(icon("win11-media-play", 24), "flat-btn", "media-btn",
+                               on_click=lambda: self.call(None, "PlayPause"), tooltip="Play")
+        self.next_btn = button(icon("win11-media-next", 24), "flat-btn", "media-btn",
+                               on_click=lambda: self.call(None, "Next"), tooltip="Next")
+        for b in (self.prev_btn, self.play_btn, self.next_btn):
+            ctl.append(b)
+        card.append(ctl)
+        card.set_visible(False)
+        self.card = card
+
+    # ── players ──
+    def poke(self):
+        if not self.timer:                  # one look per burst of signals
+            self.timer = GLib.timeout_add(60, self.scan)
+        return False
+
+    def scan(self):
+        self.timer = 0
+        bg(self.read_all, self.show)
+        return False
+
+    def get_all(self, name, iface):
+        r = self.bus.call_sync(name, self.PATH, "org.freedesktop.DBus.Properties", "GetAll",
+                               GLib.Variant("(s)", (iface,)), GLib.VariantType("(a{sv})"),
+                               Gio.DBusCallFlags.NONE, 1500, None)
+        return r.unpack()[0]
+
+    def read_all(self):
+        try:
+            r = self.bus.call_sync("org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus",
+                                   "ListNames", None, GLib.VariantType("(as)"),
+                                   Gio.DBusCallFlags.NONE, 1500, None)
+        except GLib.Error:
+            return None
+        out = {}
+        for name in r.unpack()[0]:
+            if not name.startswith(self.MPRIS + ".") or name == self.MPRIS + ".playerctld":
+                continue                    # playerctld only mirrors another player
+            try:
+                pl = self.get_all(name, self.MPRIS + ".Player")
+                root = self.get_all(name, self.MPRIS)
+            except GLib.Error:
+                continue
+            md = pl.get("Metadata") or {}
+            artist = md.get("xesam:artist") or []
+            out[name] = {
+                "status": pl.get("PlaybackStatus", "Stopped"),
+                "title": str(md.get("xesam:title") or ""),
+                "artist": ", ".join(artist) if isinstance(artist, list) else str(artist),
+                "art": str(md.get("mpris:artUrl") or ""),
+                "can_prev": bool(pl.get("CanGoPrevious", True)),
+                "can_next": bool(pl.get("CanGoNext", True)),
+                "can_play": bool(pl.get("CanPlay", True) or pl.get("CanPause", True)),
+                "identity": root.get("Identity") or name.split(".")[3].capitalize(),
+                "desktop": root.get("DesktopEntry") or "",
+            }
+        return out
+
+    def pick(self, before):
+        """The player to show: the one that started playing last; when none
+        plays, the one that played last (paused) – as long as it has a title."""
+        now = time.monotonic()
+        for name, p in self.players.items():
+            if p["status"] == "Playing" and before.get(name) != "Playing":
+                self.played_at[name] = now
+        for name in list(self.played_at):
+            if name not in self.players:
+                del self.played_at[name]
+        live = [n for n, p in self.players.items() if p["title"]]
+        pool = ([n for n in live if self.players[n]["status"] == "Playing"]
+                or [n for n in live if self.players[n]["status"] == "Paused"])
+        if not pool:
+            return None
+        return max(pool, key=lambda n: (self.played_at.get(n, 0), n == self.current))
+
+    def show(self, players):
+        if players is None:
+            return
+        before = {n: p["status"] for n, p in self.players.items()}
+        self.players = players
+        name = self.current = self.pick(before)
+        was = self.card.get_visible()
+        if not name:
+            self.card.set_visible(False)
+            if was:
+                self.on_resize()
+            return
+        p = self.players[name]
+        self.app_lbl.set_text(p["identity"])
+        self.app_img.set_from_gicon(self.app_icon(p))
+        self.title_lbl.set_text(p["title"])
+        self.artist_lbl.set_text(p["artist"])
+        self.artist_lbl.set_visible(bool(p["artist"]))
+        playing = p["status"] == "Playing"
+        self.play_btn.get_child().set_from_icon_name("win11-media-pause" if playing else "win11-media-play")
+        self.play_btn.set_tooltip_text("Pause" if playing else "Play")
+        self.prev_btn.set_sensitive(p["can_prev"])
+        self.next_btn.set_sensitive(p["can_next"])
+        self.play_btn.set_sensitive(p["can_play"])
+        self.load_art(p["art"])
+        self.card.set_visible(True)
+        if not was:
+            self.on_resize()
+
+    @staticmethod
+    def app_icon(p):
+        for n in (p["desktop"], p["identity"].lower()):
+            if not n:
+                continue
+            try:
+                info = Gio.DesktopAppInfo.new(n + ".desktop")
+            except TypeError:
+                info = None
+            if info and info.get_icon():
+                return info.get_icon()
+        return Gio.ThemedIcon.new("audio-x-generic")
+
+    def load_art(self, url):
+        if url == self.art_url:
+            return
+        self.art_url = url
+        if not url:
+            self.art.set_visible(False)
+            return
+
+        def fetch():
+            if url.startswith("file://"):
+                return GLib.filename_from_uri(url)[0]
+            if not url.startswith(("http://", "https://")):
+                return None
+            import hashlib
+            import urllib.request
+            os.makedirs(self.ART, exist_ok=True)
+            path = os.path.join(self.ART, hashlib.sha1(url.encode()).hexdigest())
+            if not os.path.exists(path):
+                try:
+                    with urllib.request.urlopen(url, timeout=6) as r, open(path + ".part", "wb") as f:
+                        f.write(r.read(4 << 20))
+                    os.replace(path + ".part", path)
+                except OSError:
+                    return None
+                # keep the cache small: the newest 60 covers
+                files = sorted((os.path.join(self.ART, f) for f in os.listdir(self.ART)),
+                               key=os.path.getmtime)
+                for old in files[:-60]:
+                    try:
+                        os.unlink(old)
+                    except OSError:
+                        pass
+            return path
+
+        def done(path):
+            if url != self.art_url:
+                return                      # the song changed meanwhile
+            try:
+                self.art.set_paintable(Gdk.Texture.new_from_filename(path))
+                self.art.set_visible(True)
+            except (GLib.Error, TypeError):
+                self.art.set_visible(False)
+        bg(fetch, done)
+
+    def call(self, iface, method):
+        if not self.current or not self.bus:
+            return
+        self.bus.call(self.current, self.PATH, iface or self.MPRIS + ".Player", method, None, None,
+                      Gio.DBusCallFlags.NONE, 2000, None, None, None)
+        if method == "Raise":               # the flyout makes way for the app
+            SHELL.qs.hide()
+
+
 # ── Quick settings ───────────────────────────────────────────────────────
 class QuickSettings:
     def __init__(self, app):
@@ -1343,9 +1580,14 @@ class QuickSettings:
 
         panel = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         panel.add_css_class("qs")
-        panel.add_css_class("flyout")
         panel.set_overflow(Gtk.Overflow.HIDDEN)
-        self.panel = panel
+        # the media card sits above the panel; both glide in together
+        whole = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14)
+        whole.add_css_class("flyout")
+        self.media = MediaCard(self.fit)
+        whole.append(self.media.card)
+        whole.append(panel)
+        self.panel = whole
         self.stack = Gtk.Stack(transition_type=Gtk.StackTransitionType.SLIDE_LEFT_RIGHT,
                                transition_duration=160, vhomogeneous=False, interpolate_size=True)
         self.stack.add_named(self.build_main(), "main")
@@ -1360,7 +1602,7 @@ class QuickSettings:
                            lambda s, _p: None if s.get_transition_running() else self.fit())
         panel.append(self.stack)
         panel.append(self.build_footer())
-        self.win.set_child(panel)
+        self.win.set_child(whole)
 
         # keep the state warm so the flyout opens fully drawn, without a flash
         self.nets = []

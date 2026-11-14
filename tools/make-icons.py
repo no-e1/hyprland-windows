@@ -393,6 +393,14 @@ def refresh_icon(a0=75, a1=340, r=7.5, length=3.9, width=4.5):
             f'<path d="M{tip[0]:.2f} {tip[1]:.2f}L{b1[0]:.2f} {b1[1]:.2f}L{b2[0]:.2f} {b2[1]:.2f}Z" '
             f'fill="{W}" stroke="{W}" stroke-width="0.8"/>')
 save("refresh", refresh_icon())
+# media card above Quick Settings (Windows 11): filled, softly rounded
+# triangles and bars (stroke + fill in the same colour rounds the corners)
+fl = f'fill="{W}" stroke="{W}" stroke-width="1.6" stroke-linejoin="round"'
+save("media-play", f'<path d="M8 5.5v13l10.5-6.5z" {fl}/>')
+save("media-pause", f'<rect x="7" y="5.5" width="3" height="13" rx="0.6" {fl}/>'
+                    f'<rect x="14" y="5.5" width="3" height="13" rx="0.6" {fl}/>')
+save("media-prev", f'<path d="M18 6.5v11l-8.5-5.5z" {fl}/><rect x="6" y="6.5" width="1.4" height="11" rx="0.5" {fl}/>')
+save("media-next", f'<path d="M6 6.5v11l8.5-5.5z" {fl}/><rect x="16.6" y="6.5" width="1.4" height="11" rx="0.5" {fl}/>')
 save("headphones", f'<path d="M4 15v-3a8 8 0 0 1 16 0v3" {st}/><rect x="3.5" y="14" width="4" height="6.5" rx="1.5" {st}/><rect x="16.5" y="14" width="4" height="6.5" rx="1.5" {st}/>')
 # sound output page: built-in speaker and a monitor (HDMI/DisplayPort)
 save("speaker", f'<rect x="6" y="3" width="12" height="18" rx="2" {st}/><circle cx="12" cy="14.5" r="3" {st}/><path d="M12 7.2h.01" {st}/>')

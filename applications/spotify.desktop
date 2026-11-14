@@ -2,7 +2,7 @@
 Name=Spotify
 GenericName=Music Player
 Comment=Listen to music using Spotify
-Icon=spotify-client
+Icon=win11-app-spotify
 # native Wayland (sharp at 200 %); through XWayland it is drawn at half
 # resolution and stretched – blurry. On Wayland it draws no – □ X:
 # it gets the Windows title bar (hyprland.lua OWN_TITLEBAR) (hyprland-windows)
