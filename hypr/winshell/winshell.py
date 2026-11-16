@@ -1657,15 +1657,27 @@ class QuickSettings:
         outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=9)
         row = Gtk.Box()
         row.add_css_class("tile")
+        row.name = text
         img = icon(ic, 20)
-        main = button(img, "tile-main", on_click=on_toggle)
+        main = button(img, "tile-main", on_click=on_toggle, tooltip=text)
         main.set_hexpand(True)
         row.append(main)
+        row.main = main
         if on_more:
-            more = button(icon("win11-chevron-right", 16), "tile-more", on_click=on_more)
+            more = button(icon("win11-chevron-right", 16), "tile-more", on_click=on_more,
+                          tooltip=f"{text} settings")
             more.set_hexpand(True)
             row.append(more)
             row.set_homogeneous(True)       # the divider right in the middle of the tile
+        # held down: the whole tile sinks in a little (style.css .tile.pressed),
+        # on release it springs back – the click is felt before anything changes
+        press = Gtk.GestureClick()
+        press.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
+        press.connect("pressed", lambda *_: row.add_css_class("pressed"))
+        press.connect("released", lambda *_: row.remove_css_class("pressed"))
+        press.connect("stopped", lambda *_: row.remove_css_class("pressed"))
+        press.connect("cancel", lambda *_: row.remove_css_class("pressed"))
+        row.add_controller(press)
         lbl = label(text, "tile-label", xalign=0.5)
         lbl.set_wrap(True)
         lbl.set_lines(2)
@@ -2123,15 +2135,40 @@ class QuickSettings:
 
     def want(self, key, on, hold=4):
         """Show a clicked tile's new state right away (before it is applied)."""
+        changed = bool(self.state.get(key)) != bool(on)
         self.wanted[key] = (on, time.monotonic() + hold)
         self.state[key] = on
         self.set_tile(key, on)
+        if changed:
+            self.animate_tile(key, on)
+        # still not confirmed when the hold runs out: stop the busy pulse anyway
+        GLib.timeout_add(int(hold * 1000) + 100, lambda: self.set_tile(key, self.state.get(key)) and False)
 
     def set_tile(self, key, on, text=None):
         row, lbl, _ = self.tiles[key]
         (row.add_css_class if on else row.remove_css_class)("on")
+        # clicked, not applied yet (Wi-Fi / Bluetooth take a moment): the icon
+        # breathes until the real state is read back (style.css .tile.busy)
+        want = self.wanted.get(key)
+        busy = want is not None and time.monotonic() < want[1]
+        (row.add_css_class if busy else row.remove_css_class)("busy")
+        row.main.set_tooltip_text(f"Turn {row.name} {'off' if on else 'on'}")
         if text is not None:
             lbl.set_text(text)
+
+    def animate_tile(self, key, on):
+        """One short animation per switch (style.css): turning on, the tile
+        pops and its icon gives a little turn; turning off,
+        it just settles back. Started a frame later, so a second quick click
+        replays it instead of leaving it half done."""
+        row = self.tiles[key][0]
+        kind = "flip-on" if on else "flip-off"
+        for c in ("flip-on", "flip-off"):
+            row.remove_css_class(c)
+        GLib.timeout_add(16, lambda: row.add_css_class(kind) and False)
+        gen = getattr(row, "anim_gen", 0) + 1
+        row.anim_gen = gen
+        GLib.timeout_add(520, lambda: gen == row.anim_gen and row.remove_css_class(kind) and False)
 
     @staticmethod
     def volume_icon(vol, muted):
@@ -4617,7 +4654,11 @@ class TaskView:
         back = Gtk.GestureClick()
         back.connect("released", lambda *_: self.visible and self.hide())
         root.add_controller(back)
+        # capture phase: the arrow keys reach us before the flow box /
+        # scrolled window – those took them for their own focus moves, so
+        # the arrows never got to on_key and did nothing
         keys = Gtk.EventControllerKey()
+        keys.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
         keys.connect("key-pressed", self.on_key)
         self.win.add_controller(keys)
 
