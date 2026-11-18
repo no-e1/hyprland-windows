@@ -4248,8 +4248,11 @@ class OSD:
 
     def pill(self):
         p = types.SimpleNamespace()
+        # window right on top of the taskbar (the 24 px gap is the pill's
+        # margin, style.css .osd): like the start menu the pill slides out of
+        # the taskbar and back into it, clipped at the window's bottom edge
         p.win = layer_window(self.app, "winshell-osd", LS.Layer.OVERLAY,
-                             anchors=(LS.Edge.BOTTOM,), margins={LS.Edge.BOTTOM: 24})
+                             anchors=(LS.Edge.BOTTOM,), margins={LS.Edge.BOTTOM: 0})
         p.box = Gtk.Box(spacing=14)
         p.box.add_css_class("osd")
         p.img = icon("win11-volume-3", 18)
