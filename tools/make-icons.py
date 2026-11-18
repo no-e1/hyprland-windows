@@ -10,14 +10,15 @@ def svg(body):
     return ('<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" '
             'fill="none" stroke-linecap="round" stroke-linejoin="round">' + body + '</svg>\n')
 
-# the status icons next to the clock a bit bigger (from the middle), so they
-# match the network icons, which fill nearly the whole box
-SCALE_UP = {"volume-": 1.12}       # (the battery is drawn that big already)
+# status icons next to the clock scaled from the middle: the speaker a bit
+# bigger than drawn, the network icons (which fill nearly the whole box) a bit
+# smaller, so both sit slightly smaller than the battery
+SCALE = {"volume-": 1.04, "wifi-": 0.93, "ethernet": 0.93, "no-internet": 0.93}
 
 
 def save(name, body):
-    for prefix, k in SCALE_UP.items():
-        if name.startswith(prefix):
+    for prefix, k in SCALE.items():
+        if name.startswith(prefix) and not name.endswith("-lock"):     # -lock: built from the scaled wifi-N
             body = f'<g transform="translate(12 12) scale({k}) translate(-12 -12)">{body}</g>'
             break
     with open(os.path.join(OUT, f"win11-{name}.svg"), "w") as f:
@@ -63,13 +64,13 @@ save("wifi-noinet",
 # no connection at all (no Wi-Fi, no cable): Windows' globe with a "no" sign
 save("no-internet",                     # as big as the other status icons
      '<mask id="nim"><rect width="24" height="24" fill="white"/>'
-     '<circle cx="18.4" cy="18.4" r="6.1" fill="black"/></mask>'
+     '<circle cx="17.6" cy="16.9" r="7.8" fill="black"/></mask>'
      f'<g mask="url(#nim)" stroke="{W}" stroke-width="{SW}">'
-     '<circle cx="10.6" cy="10.6" r="9.1"/>'
-     '<ellipse cx="10.6" cy="10.6" rx="3.9" ry="9.1"/>'
-     '<path d="M1.5 10.6h18.2M3 6h15.2M3 15.2h15.2"/></g>'
-     f'<circle cx="18.4" cy="18.4" r="4.4" stroke="{W}" stroke-width="{SW}"/>'
-     f'<path d="M15.3 21.5l6.2-6.2" stroke="{W}" stroke-width="{SW}"/>')
+     '<circle cx="12" cy="12" r="10"/>'
+     '<ellipse cx="12" cy="12" rx="4.3" ry="10"/>'
+     '<path d="M2.9 8.33h18.2M2.9 15.67h18.2"/></g>'
+     f'<circle cx="17.6" cy="16.9" r="5.6" stroke="{W}" stroke-width="{SW}"/>'
+     f'<path d="M13.65 20.85l7.9-7.9" stroke="{W}" stroke-width="{SW}"/>')
 # Ethernet: monitor with cable
 # ── App icons in colour (taskbar, Alt+Tab) ───────────────────────────
 # Terminal, in the style of Windows Terminal: a dark window with a strip of
