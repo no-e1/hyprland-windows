@@ -6585,6 +6585,20 @@ class DisplaySettings:
             cycled = self.set_screen(name, sp, old.get(name)) or cycled
         return cycled
 
+    @classmethod
+    def set_screens_now(cls, specs, old):
+        """set_screens without the dialog (a screen was plugged in)."""
+        cycled = False
+        for sp in displays.safe_order(list(specs.values())):
+            name = re.search(r'output = "([^"]+)"', sp).group(1)
+            if re.search(r'disabled = true', sp):
+                if SHELL:
+                    SHELL.drop_bar(name)
+                hypr_eval(f"hl.monitor({sp})")
+                continue
+            cycled = cls.set_screen(name, sp, old.get(name)) or cycled
+        return cycled
+
     cycling = {}                        # screen -> the settings it gets when it's back on
 
     @classmethod
@@ -6662,11 +6676,19 @@ class DisplaySettings:
         if not c:
             return
         lines = ["-- written by winshell's Display settings (Win + I → Displays)",
-                 "-- where the screens stand; delete this file to go back to automatic"]
+                 "-- each screen by make, model and serial (desc:), not by its connector:",
+                 "-- behind a docking station a screen's connector changes. Where the",
+                 "-- screens stand per set of screens: ~/.config/winshell/display.json",
+                 "-- delete both files to go back to automatic"]
+        mons = displays.all_monitors()
+        ids = {m["name"]: displays.ident(m) for m in mons}
         layout = {}
         for name, spec in c["new"].items():
-            lines.append(f"hl.monitor({spec})")
+            sid = ids.get(name)
+            out = '"desc:' + sid.replace('\\', '\\\\').replace('"', '\\"') + '"' if sid else f'"{name}"'
+            lines.append("hl.monitor(" + spec.replace(f'output = "{name}"', "output = " + out, 1) + ")")
             layout[name] = spec.split(",", 1)[1].rstrip(" }").strip()     # mode, position, scale
+        displays.remember([m for m in self.items if m["name"] in c["new"]], mons)
         try:
             with open(MONITORS_LUA, "w") as f:
                 f.write("\n".join(lines) + "\n")
@@ -6959,7 +6981,9 @@ class ProjectMenu:
         print(f"winshell: project {mode} (sel {self.sel}): {specs}", file=sys.stderr, flush=True)
         if not specs:
             return                          # only one screen, or it is like that already
-        displays.save(project=mode)
+        projects = displays.load().get("projects", {})
+        projects[displays.combo(displays.all_monitors())] = mode     # for this set of screens
+        displays.save(project=mode, projects=projects)
         snap = self.shell.screens_snapshot()
         mirrored = {m["name"] for m in displays.all_monitors()
                     if (m.get("mirrorOf") or "none") != "none"}
@@ -8114,8 +8138,10 @@ class WinShell(Gtk.Application):
         self.primary = ""
         self.flyout_screen = None
         self.arrange_tries = 0
+        self.plug_id, self.plugged_combo = 0, None      # screens_plugged
         self.arrange_bars()
         Gdk.Display.get_default().get_monitors().connect("items-changed", self.screens_changed)
+        GLib.timeout_add(1500, self.screens_plugged)    # started with the dock plugged in
         import tray as tray_mod
         self.tray = tray_mod.Tray(lambda: GLib.idle_add(self.taskbar.tray_changed))
         import thispc                       # "This PC" for Dolphin: drive tiles with free space
@@ -8192,6 +8218,38 @@ class WinShell(Gtk.Application):
         if self.arrange_id:
             GLib.source_remove(self.arrange_id)
         self.arrange_id = GLib.timeout_add(800, self.arrange_bars)
+        if self.plug_id:
+            GLib.source_remove(self.plug_id)
+        self.plug_id = GLib.timeout_add(1000, self.screens_plugged)
+
+    def screens_plugged(self):
+        """Another set of screens is plugged in (a docking station, a cable):
+        every screen as it was the last time – resolution and scale per
+        screen, positions and Win + P per set of screens (displays.py). On
+        its own Hyprland gives a new screen its fastest mode and "auto"
+        scale and puts it wherever; the P24h-30 came up at 74.78 Hz and
+        100 % and the laptop's screen went off. Only screens that differ
+        are set (setting one again makes it flicker)."""
+        self.plug_id = 0
+        mons = displays.all_monitors()
+        key = displays.combo(mons)
+        if not mons or key == self.plugged_combo:
+            return False                    # same screens (one only switched off / on, a mode changed)
+        first = self.plugged_combo is None
+        self.plugged_combo = key
+        if first and len(mons) < 2:
+            return False                    # winshell starting with the laptop alone: as hyprland.lua set it
+        want, mode = displays.plugged_specs(mons)
+        now = {m["name"]: displays.current_spec(m) for m in mons}
+        todo = {n: sp for n, sp in want.items() if not displays.same(sp, now.get(n, ""))}
+        print(f"winshell: screens {key!r} ({mode}): {todo}", file=sys.stderr, flush=True)
+        if not todo:
+            return False
+        snap = self.screens_snapshot()
+        cycled = DisplaySettings.set_screens_now(todo, now)
+        GLib.timeout_add(1900 if cycled else 900,
+                         lambda: (self.restore_screens(snap), self.arrange_bars(), False)[-1])
+        return False
 
     def show_dnd(self, on):
         """Do not disturb on / off: the bell next to the clock on every taskbar."""

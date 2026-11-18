@@ -33,8 +33,26 @@ def load():
         return {}
 
 
+def ident(m):
+    """Which screen it is – make, model and serial ("Lenovo Group Limited
+    P24h-30 V90DDT0H"), not the connector: behind a docking station the
+    same screen comes up as DP-2 one day and DP-5 the next."""
+    return (m.get("description") or m.get("name") or "").strip()
+
+
+def combo(mons):
+    """The set of screens plugged in – like Windows, where they stand and
+    how they project is kept per set (laptop alone, laptop + the screen at
+    home, laptop + the one at school, …)."""
+    return " | ".join(sorted(ident(m) for m in mons))
+
+
 def save(**kw):
     cfg = load()
+    if "primary" in kw:                 # the main display: also by identity
+        m = next((m for m in all_monitors() if m["name"] == kw["primary"]), None)
+        if m:
+            cfg["primary_screen"] = ident(m)
     cfg.update(kw)
     os.makedirs(os.path.dirname(CONFIG), exist_ok=True)
     tmp = CONFIG + ".tmp"
@@ -47,7 +65,11 @@ def primary_name(mons=None):
     """Connector name of the main display (e.g. "eDP-1")."""
     mons = monitors() if mons is None else mons
     names = [m["name"] for m in mons]
-    chosen = load().get("primary")
+    cfg = load()
+    by_ident = next((m["name"] for m in mons if ident(m) == cfg.get("primary_screen")), None)
+    if by_ident:
+        return by_ident
+    chosen = cfg.get("primary")
     if chosen in names:
         return chosen
     if not mons:
@@ -211,7 +233,10 @@ def spec(i, **extra):
 def on_spec(m, saved=None):
     """hl.monitor() table that switches a screen on: as saved in Display
     settings, else as it is / as Hyprland prefers."""
-    saved = load().get("layout", {}) if saved is None else saved
+    rest = saved_rest(m)
+    if rest:
+        return '{ output = "%s", %s }' % (m["name"], rest)
+    saved = load().get("layout", {}) if saved is None else saved      # old files: by connector
     if m["name"] in saved:
         rest = saved[m["name"]]
         if "disabled" not in rest:
@@ -223,6 +248,131 @@ def on_spec(m, saved=None):
         return (f'{{ output = "{m["name"]}", mode = "preferred", position = "auto", scale = "auto", '
                 f'disabled = false, mirror = "" }}')
     return spec(items_from([m])[0])
+
+
+# ── kept per screen (mode, scale) and per set of screens (positions, Win + P) ──
+def remember(items, mons=None):
+    """Display settings → Keep: every screen's resolution, refresh rate and
+    scale under its identity, the positions under this set of screens."""
+    mons = all_monitors() if mons is None else mons
+    ids = {m["name"]: ident(m) for m in mons}
+    cfg = load()
+    screens = cfg.setdefault("screens", {})
+    pos = cfg.setdefault("layouts", {}).setdefault(combo(mons), {})
+    for i in items:
+        sid = ids.get(i["name"])
+        if not sid:
+            continue
+        screens[sid] = {"mode": f'{i["pw"]}x{i["ph"]}@{i["rate"]:.3f}', "scale": round(i["scale"], 8)}
+        pos[sid] = f'{i["lx"]}x{i["ly"]}'
+    os.makedirs(os.path.dirname(CONFIG), exist_ok=True)
+    tmp = CONFIG + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(cfg, f, indent=2)
+    os.replace(tmp, CONFIG)
+
+
+def saved_rest(m, mons=None, cfg=None):
+    """The saved part of a hl.monitor() table for screen m (mode, position,
+    scale), or None when this screen was never set up."""
+    cfg = load() if cfg is None else cfg
+    scr = cfg.get("screens", {}).get(ident(m))
+    if not scr:
+        return None
+    mons = all_monitors() if mons is None else mons
+    at = cfg.get("layouts", {}).get(combo(mons), {}).get(ident(m), "auto")
+    return (f'mode = "{scr["mode"]}", position = "{at}", scale = {scr["scale"]:.8g}, '
+            f'disabled = false, mirror = ""')
+
+
+def recommended_scale(m, pw, ph):
+    """Like Windows' "(Recommended)": about 96 dpi per 100 % on a monitor,
+    120 dpi on a laptop's own screen (2880 px on 14" → 200 %, a 24" 1440p
+    monitor → 125 %), to the nearest scale the screen can do."""
+    mm = m.get("physicalWidth") or 0
+    if mm < 100:                        # size unknown (projectors, some TVs)
+        return 1
+    want = pw / (mm / 25.4) / (120 if m["name"].startswith("eDP") else 96)
+    return min(valid_scales(pw, ph, None), key=lambda v: abs(v - want))
+
+
+def preferred_mode(m):
+    """The screen's own preferred mode (Hyprland lists it first) – not the
+    fastest one: "preferred" in Hyprland took 74.78 Hz on the P24h-30."""
+    modes = m.get("availableModes") or []
+    try:
+        res, hz = modes[0].split("@")
+        pw, ph = (int(v) for v in res.split("x"))
+        rate = float(hz.rstrip("Hz"))
+    except (IndexError, ValueError):
+        return m["width"], m["height"], m.get("refreshRate") or 60
+    if (pw, ph) == (m["width"], m["height"]) and abs((m.get("refreshRate") or 0) - rate) < 0.05:
+        rate = m["refreshRate"]                 # the exact value (59.951)
+    return pw, ph, rate
+
+
+def plugged_specs(mons=None):
+    """A screen was plugged in or out: how this set of screens is to be,
+    like Windows – as it was the last time this set was plugged in (Win + P,
+    positions), each screen with its own resolution and scale. A screen
+    never seen before gets its preferred mode and the recommended scale and
+    goes to the right of the others ("Extend", like Windows). Returns
+    (wanted hl.monitor() tables by connector, Win + P mode)."""
+    mons = all_monitors() if mons is None else mons
+    if not mons:
+        return {}, "extend"
+    cfg = load()
+    key = combo(mons)
+    mode = cfg.get("projects", {}).get(key, "extend")
+    if len(mons) > 1 and mode != "extend":
+        return {re.search(r'output = "([^"]+)"', sp).group(1): sp
+                for sp in project_specs(mode, mons)}, mode
+    layout = cfg.get("layouts", {}).get(key, {})
+    items, new = [], []
+    for m in mons:
+        scr = cfg.get("screens", {}).get(ident(m))
+        if scr:
+            res, hz = scr["mode"].split("@")
+            pw, ph = (int(v) for v in res.split("x"))
+            rate, sc = float(hz), scr["scale"]
+        else:
+            pw, ph, rate = preferred_mode(m)
+            sc = recommended_scale(m, pw, ph)
+        i = {"name": m["name"], "pw": pw, "ph": ph, "rate": rate, "scale": sc,
+             "lw": round(pw / sc), "lh": round(ph / sc)}
+        at = layout.get(ident(m))
+        if at:
+            i["lx"], i["ly"] = (int(v) for v in at.split("x"))
+            items.append(i)
+        else:
+            new.append(i)
+    if not items:                       # nothing known for this set: the laptop's screen first
+        new.sort(key=lambda i: (not i["name"].startswith("eDP"), i["name"]))
+        first = new.pop(0)
+        first["lx"], first["ly"] = 0, 0
+        items.append(first)
+    for i in new:                       # new in this set: to the right, top edges in line
+        i["lx"] = max(o["lx"] + o["lw"] for o in items)
+        i["ly"] = min(o["ly"] for o in items)
+        items.append(i)
+    return {i["name"]: spec(i) for i in items}, "extend"
+
+
+def current_spec(m):
+    """The hl.monitor() table for how screen m is right now (to compare)."""
+    if m.get("disabled"):
+        return f'{{ output = "{m["name"]}", disabled = true }}'
+    if (m.get("mirrorOf") or "none") != "none":
+        return f'{{ output = "{m["name"]}", mirror = "{m["mirrorOf"]}" }}'
+    return spec(items_from([m])[0])
+
+
+def same(a, b):
+    """Two hl.monitor() tables that set the same (refresh rates to 0.05 Hz)."""
+    def norm(sp):
+        sp = re.sub(r'@(\d+\.?\d*)', lambda x: "@%.1f" % float(x.group(1)), sp)
+        return re.sub(r'scale = ([\d.]+)', lambda x: "scale = %.4f" % float(x.group(1)), sp)
+    return norm(a) == norm(b)
 
 
 # ── Win + P ──
