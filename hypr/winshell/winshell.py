@@ -7021,7 +7021,7 @@ class SecondaryTaskbar:
         right.append(button(clock_with_dnd(self), "tb-clock",
                             on_click=lambda: (self.shell.flyouts_on(self.connector),
                                               self.shell.calendar.toggle())))
-        right.append(button(Gtk.Box(), "tb-peek", on_click=lambda: spawn(f"{SCRIPTS}/wallpaper.sh next")))
+        right.append(button(Gtk.Box(), "tb-peek", on_click=lambda: hypr_eval("ShowDesktop()")))   # like Win + D
         bar.set_end_widget(right)
         self.win.set_child(bar)
         self.refresh()
@@ -7639,7 +7639,7 @@ class Taskbar:
                                                                                  self.shell.calendar.toggle())))
         self.tick()
 
-        right.append(button(Gtk.Box(), "tb-peek", on_click=lambda: spawn(f"{SCRIPTS}/wallpaper.sh next")))
+        right.append(button(Gtk.Box(), "tb-peek", on_click=lambda: hypr_eval("ShowDesktop()")))   # like Win + D
         return right
 
     def tick(self):

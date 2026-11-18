@@ -805,6 +805,14 @@ button.tb-peek {
     border-radius: 0;
     border-left: 1px solid transparent;   /* no divider line, same width */
 }
+/* show desktop sliver: no grey hover, a thin white line like Windows 11 */
+.taskbar button.tb-peek:hover {
+    background-color: transparent;
+    background-image: linear-gradient(#ffffff, #ffffff);
+    background-size: 1px 16px;
+    background-position: left center;
+    background-repeat: no-repeat;
+}
 
 /* overflow flyout with hidden tray icons, and app/tray context menus */
 .tray-flyout {
