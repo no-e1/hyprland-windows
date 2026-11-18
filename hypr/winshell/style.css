@@ -790,7 +790,8 @@ button.tb-app.active .dash { min-width: 16px; background: #4cc2ff; }
 
 /* right side */
 .tb-right { margin-right: 0; }
-button.tb-tray-arrow { min-width: 24px; padding: 0 4px; margin-right: -4px; }   /* close to Wi-Fi, like Windows */
+button.tb-tray-arrow { min-width: 23px; padding: 0 2px; margin-right: 1px; }   /* close to the icons, like Windows, but
+                                                                            no overlap: 27 px wide, same place as before */
 button.tb-tray-item { min-width: 28px; }
 .tb-tray { margin-right: 0; }
 button.tb-quick { padding: 0 4px; margin: 4px 2px; }

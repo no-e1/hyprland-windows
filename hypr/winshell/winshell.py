@@ -598,6 +598,9 @@ class SlideBox(Gtk.Widget):
                 self.pos[w] = (x, y)
             if abs(px - x) > 0.5 or abs(py - y) > 0.5:
                 moving = True
+            else:                   # close enough: exactly on its slot, no half pixel
+                px, py = x, y       # left over that lets two hover backgrounds touch
+                self.pos[w] = (x, y)
             t = Gsk.Transform().translate(Graphene.Point().init(px, py))
             w.allocate(ww, hh, -1, t)
         if moving and not self.tick_id:
