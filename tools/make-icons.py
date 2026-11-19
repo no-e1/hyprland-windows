@@ -603,9 +603,125 @@ def powerpoint():
 
 
 
+# ── the apps themselves, for LibreOffice Writer / Calc / Impress: drawn
+# after Windows 11's Word, Excel and PowerPoint icons, measured off pictures
+# of them (each in that picture's pixel coordinates, the viewBox squares it).
+# Their own letters – L, C, I – not Microsoft's W, X, P.
+def svg_open(view):
+    return f'<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="{view}">'
+
+
+def stops(*st):
+    return "".join(f'<stop offset="{o}" stop-color="{c}"/>' for o, c in st)
+
+
+def lin(i, x1, y1, x2, y2, *st):
+    return (f'<linearGradient id="{i}" gradientUnits="userSpaceOnUse" x1="{x1}" y1="{y1}" '
+            f'x2="{x2}" y2="{y2}">{stops(*st)}</linearGradient>')
+
+
+def rrect(x0, y0, x1, y1, tl=0, tr=0, br=0, bl=0):
+    """A rectangle with its own radius at each corner."""
+    return (f"M{x0 + tl} {y0}H{x1 - tr}" + (f"A{tr} {tr} 0 0 1 {x1} {y0 + tr}" if tr else "")
+            + f"V{y1 - br}" + (f"A{br} {br} 0 0 1 {x1 - br} {y1}" if br else "")
+            + f"H{x0 + bl}" + (f"A{bl} {bl} 0 0 1 {x0} {y1 - bl}" if bl else "")
+            + f"V{y0 + tl}" + (f"A{tl} {tl} 0 0 1 {x0 + tl} {y0}" if tl else "") + "Z")
+
+
+def soft_shadow(x0, y0, x1, y1, r, dx, dy, blur, op, clip):
+    """The square's shadow: blurred (no steps), and only on the body (`clip`,
+    the body's path) – nothing spills onto the background."""
+    return (f'<defs><filter id="sh" x="-50%" y="-50%" width="200%" height="200%">'
+            f'<feGaussianBlur stdDeviation="{blur}"/></filter>'
+            f'<clipPath id="shc"><path d="{clip}"/></clipPath></defs>'
+            f'<g clip-path="url(#shc)"><rect x="{x0 + dx}" y="{y0 + dy}" width="{x1 - x0}" '
+            f'height="{y1 - y0}" rx="{r}" fill="#000" fill-opacity="{op}" filter="url(#sh)"/></g>')
+
+
+def writer_app():
+    """Word's icon (500 px picture): three bands folded over each other on a
+    rounded page – light cyan to lilac, blue to violet, deep blue – and the
+    square bottom left."""
+    X0, X1, Y0, Y1, R = 161, 373, 13, 267, 30         # the page
+    bx0, by0, bx1, by1, br = 126, 133, 239.5, 246.5, 21
+    defs = (lin("t", X0, 0, 364, 0, (0, "#86e5ff"), (.17, "#4ad8fd"), (.28, "#3bd4fe"),
+                (.52, "#3bd4fe"), (.73, "#78c5ff"), (1, "#adb8ff"))
+            + lin("m", 230, 183, 373, 98, (0, "#1492f0"), (.4, "#2190f0"), (1, "#7a7bf3"))
+            + lin("d", X0, 183, 340, 267, (0, "#0035bf"), (1, "#1455f3"))
+            + lin("b", bx0, by0, bx0 + 60, by1, (0, "#3b80ea"), (1, "#06289c")))
+    return (svg_open("118.5 9 262 262") + f"<defs>{defs}</defs>"
+            f'<path d="{rrect(X0, Y0, X1, Y1, R, R, R, R)}" fill="url(#d)"/>'          # bottom band = the page
+            f'<path d="{rrect(X0, 80, X1, 183, br=15)}" fill="url(#m)"/>'               # middle band
+            f'<path d="{rrect(X0, Y0, X1, 98, tl=R, tr=R, br=15)}" fill="url(#t)"/>'    # top band
+            # the middle band's round top-left corner lies on the top band
+            f'<path d="M{X0} 98H{X0 + 20}A20 20 0 0 0 {X0} 118Z" fill="url(#t)"/>'
+            + soft_shadow(bx0, by0, bx1, by1, br, 2, 3, 4, ".35", rrect(X0, Y0, X1, Y1, R, R, R, R))
+            + f'<path d="{rrect(bx0, by0, bx1, by1, br, br, br, br)}" fill="url(#b)"/>'
+            # L: as tall as Word's W (158–221), as heavy
+            '<path d="M161 158H176V207.5H205V221H161Z" fill="#fff"/>'
+            '</svg>\n')
+
+
+def calc_app():
+    """Excel's icon (180 px picture): a light tile top right, a light green
+    column top left with a mid-green tile folded over it, deep green below,
+    and the square bottom left."""
+    X0, X1, Y0, Y1, R = 34, 147, 23, 158, 12
+    bx0, by0, bx1, by1, br = 15.5, 87.5, 76.5, 150.5, 9
+    defs = (lin("d", 95, 70, 145, 155, (0, "#11541a"), (1, "#3a9440"))
+            + lin("l", X0, 0, 90, 0, (0, "#b8e483"), (.45, "#86d561"), (1, "#5cbd47"))
+            + lin("m", 40, 70, 100, 112, (0, "#45a142"), (1, "#50a54f"))
+            + lin("t", 92, 23, 146, 67, (0, "#c2ee79"), (1, "#74e569"))
+            + lin("b", bx0, by0, bx1, by1, (0, "#2aa865"), (1, "#0d5832")))
+    cx, cy, rx, ry, w = 46, 116.75, 11.3, 12.8, 9.4       # the C: a thick open ring, as big as the X
+    k = 0.70                                               # its ends at ±45°
+    c = (f'M{cx + rx * k:.2f} {cy - ry * k:.2f}A{rx} {ry} 0 1 0 {cx + rx * k:.2f} {cy + ry * k:.2f}')
+    return (svg_open("11.5 21 139 139") + f"<defs>{defs}</defs>"
+            f'<path d="{rrect(X0, Y0, X1, Y1, R, R, R, R)}" fill="url(#d)"/>'
+            # the light column runs on under the tile top right (its round
+            # corner shows it) – below that the deep green covers it again
+            f'<path d="{rrect(X0, Y0, 101, 95, tl=R)}" fill="url(#l)"/>'
+            f'<rect x="91" y="67.5" width="{X1 - 91}" height="28" fill="url(#d)"/>'
+            f'<path d="{rrect(X0, 68, 91, 112.5, tl=20, br=10)}" fill="url(#m)"/>'
+            # the deep green's round top-left corner, mid green behind it
+            f'<path d="M91 67.5H101A10 10 0 0 0 91 77.5Z" fill="url(#m)"/>'
+            f'<path d="{rrect(91, Y0, X1, 67.5, 10, R, 10, 10)}" fill="url(#t)"/>'
+            + soft_shadow(bx0, by0, bx1, by1, br, 1, 1.5, 1.6, ".4", rrect(X0, Y0, X1, Y1, R, R, R, R))
+            + f'<path d="{rrect(bx0, by0, bx1, by1, br, br, br, br)}" fill="url(#b)"/>'
+            f'<path d="{c}" fill="none" stroke="#fff" stroke-width="{w}"/>'
+            '</svg>\n')
+
+
+def impress_app():
+    """PowerPoint's icon (500 px picture): the circle in three parts, the
+    square in front with its soft shadow on the circle."""
+    cx, cy, r = 271.5, 249.5, 187.5
+    bx0, by0, bx1, by1, br = 41, 145, 250, 354, 19
+    circle = f'M{cx - r} {cy}a{r} {r} 0 1 0 {2 * r} 0a{r} {r} 0 1 0-{2 * r} 0z'
+    return (svg_open("35 34.5 430 430") +
+            '<defs><linearGradient id="b" x1="0" y1="0" x2="1" y2="1">'
+            '<stop offset="0" stop-color="#ca4a29"/><stop offset="1" stop-color="#b3331a"/></linearGradient>'
+            # the dark seam on the left quarter where the light one lies on it
+            '<linearGradient id="s" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#000" stop-opacity="0"/>'
+            '<stop offset="1" stop-color="#000" stop-opacity=".07"/></linearGradient>'
+            f'<clipPath id="c"><path d="{circle}"/></clipPath></defs>'
+            f'<path d="M{cx} {cy - r}A{r} {r} 0 0 0 {cx - r} {cy}H{cx}Z" fill="#ee6b45"/>'
+            f'<rect x="{cx - 8}" y="{cy - r}" width="8" height="{r}" fill="url(#s)" clip-path="url(#c)"/>'
+            f'<path d="M{cx} {cy - r}A{r} {r} 0 0 1 {cx + r} {cy}H{cx}Z" fill="#ff8f6a"/>'
+            f'<path d="M{cx - r} {cy}A{r} {r} 0 0 0 {cx + r} {cy}Z" fill="#d45331"/>'
+            + soft_shadow(bx0, by0, bx1, by1, br, 3, 4, 7, ".3", circle) +
+            f'<rect x="{bx0}" y="{by0}" width="{bx1 - bx0}" height="{by1 - by0}" rx="{br}" fill="url(#b)"/>'
+            # I: PowerPoint's P stem (20.5 wide, 198–301.5), in the middle of the square
+            '<rect x="135.25" y="198" width="20.5" height="103.5" fill="#fff"/>'
+            '</svg>\n')
+
+
 for _k, _fn in (("word", word), ("excel", excel), ("powerpoint", powerpoint)):
     with open(os.path.join(OUT, f"win11-doc-{_k}.svg"), "w") as f:
         f.write(_fn())
+    # LibreOffice Writer / Calc / Impress wear these (APP_ICONS in winshell.py)
+    with open(os.path.join(OUT, f"win11-app-{_k}.svg"), "w") as f:
+        f.write({"word": writer_app, "excel": calc_app, "powerpoint": impress_app}[_k]())
 
 # Waybar CSS: one rule per state class -> icon
 css = ["/* Generated by tools/make-icons.py – do not edit */"]

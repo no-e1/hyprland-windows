@@ -451,7 +451,19 @@ def clock_with_dnd(bar):
 
 # Our own icons for some apps – the same in the start menu as on the taskbar
 APP_ICONS = {"winterm.desktop": "win11-terminal",
-             "org.kde.dolphin.desktop": "win11-explorer"}
+             "org.kde.dolphin.desktop": "win11-explorer",
+             "org.kde.gwenview.desktop": "win11-photo",
+             # LibreOffice with Word / Excel / PowerPoint-like icons (make-icons.py)
+             "libreoffice-writer.desktop": "win11-app-word",
+             "libreoffice-calc.desktop": "win11-app-excel",
+             "libreoffice-impress.desktop": "win11-app-powerpoint"}
+# ... and Windows' names: kitty is "Terminal", Gwenview the "Photos" app
+APP_NAMES = {"winterm.desktop": "Terminal",
+             "org.kde.gwenview.desktop": "Photos"}
+
+
+def app_name(app):
+    return APP_NAMES.get(app.get_id() or "") or app.get_display_name()
 
 
 def app_gicon(app):
@@ -655,7 +667,11 @@ class AppIcons:
 
     OVERRIDE = {"io.github.noe1.winterm": "win11-terminal",
                 "io.github.noe1.winshell": "win11-settings-app",
-                "org.kde.dolphin": "win11-explorer"}
+                "org.kde.dolphin": "win11-explorer",
+                "org.kde.gwenview": "win11-photo",
+                "libreoffice-writer": "win11-app-word",
+                "libreoffice-calc": "win11-app-excel",
+                "libreoffice-impress": "win11-app-powerpoint"}
 
     def get(self, cls):
         c = (cls or "").lower()
@@ -4076,17 +4092,34 @@ class StartMenu:
         spawn(f"sleep 0.2; {SCRIPTS}/powermenu.sh '{action}'")
 
     # apps -----------------------------------------------------------------
-    # kitty is the terminal of this setup: it shows up as "Terminal", and the
-    # other terminal apps that came with the system stay out of the menu
-    RENAME = {"winterm.desktop": "Terminal"}
+    # kitty is the terminal of this setup (shown as "Terminal", APP_NAMES);
+    # the other terminal apps that came with the system stay out of the menu
     HIDDEN = {"org.kde.konsole.desktop", "xterm.desktop", "uxterm.desktop",
               "org.gnome.Terminal.desktop", "org.gnome.Ptyxis.desktop", "foot.desktop",
-              "footclient.desktop", "foot-server.desktop"}
+              "footclient.desktop", "foot-server.desktop",
+              # lpf (RPM Fusion's builder for Spotify & co.) runs on its own –
+              # nothing to open by hand
+              "lpf.desktop", "lpf-gui.desktop", "lpf-notify.desktop",
+              "lpf-spotify-client.desktop",
+              # Win + I → Displays does what wdisplays does, Windows-like;
+              # KWallet's manager is no app to open (and off here anyway)
+              "network.cycles.wdisplays.desktop", "org.kde.kwalletmanager.desktop",
+              # KDE helpers that work behind the scenes: Ark opens zips on a
+              # double click (Windows has no zip app either), KDE's settings
+              # only hold the Breeze theme, Okular / mpv lost PDFs and media
+              # to Brave and VLC (mimeapps.list)
+              "org.kde.ark.desktop", "kdesystemsettings.desktop",
+              "org.kde.okular.desktop", "mpv.desktop",
+              # tools winshell opens itself: rofi runs Win + R / Win + X /
+              # Win + W, pavucontrol is "More volume settings" and Settings →
+              # Sound – no apps of their own, like on Windows
+              "rofi.desktop", "rofi-theme-selector.desktop",
+              "org.pulseaudio.pavucontrol.desktop"}
 
     def load_apps(self):
         apps = [a for a in Gio.AppInfo.get_all()
                 if a.should_show() and a.get_id() not in self.HIDDEN]
-        name_of = lambda a: self.RENAME.get(a.get_id(), a.get_display_name())
+        name_of = app_name
         apps.sort(key=lambda a: name_of(a).lower())
         self.apps = apps
         clear(self.flow)
@@ -4807,7 +4840,10 @@ class TaskView:
         head.append(img)
         t = label(c["title"] or c["class"], "card-title")
         t.set_hexpand(True)
+        # min and max 1 char: a long title (Teams') otherwise wants its whole
+        # width, and the homogeneous flow box stretches every card to it
         t.set_width_chars(1)
+        t.set_max_width_chars(1)
         head.append(t)
         x = Gtk.Button(child=icon("win11-close", 12))
         x.add_css_class("tv-close")
@@ -7306,6 +7342,10 @@ class Taskbar:
     # (Display settings) with Windows' settings gear
     ICON_OVERRIDE = {"winterm.desktop": "win11-terminal",
                      "org.kde.dolphin.desktop": "win11-explorer",
+                     "org.kde.gwenview.desktop": "win11-photo",
+                     "libreoffice-writer.desktop": "win11-app-word",
+                     "libreoffice-calc.desktop": "win11-app-excel",
+                     "libreoffice-impress.desktop": "win11-app-powerpoint",
                      "class:io.github.noe1.winshell": "win11-settings-app"}
     DEFAULT_PINNED = ["brave-browser.desktop", "winterm.desktop"]
 
@@ -7422,7 +7462,7 @@ class Taskbar:
             # an app with windows shows its preview instead (TaskPreview) –
             # a tooltip on top of it covered the pictures
             b.set_tooltip_text(None if wins else
-                               (app.get_display_name() if app else k.split(":", 1)[-1]))
+                               (app_name(app) if app else k.split(":", 1)[-1]))
         for other in getattr(self.shell, "secondaries", {}).values():
             other.refresh()
 
@@ -7579,7 +7619,7 @@ class Taskbar:
         pinned = key in self.cfg["pinned"]
         items = []
         if app:
-            items.append((app.get_display_name(), lambda: self.launch(key)))
+            items.append((app_name(app), lambda: self.launch(key)))
             items.append(("Unpin from taskbar" if pinned else "Pin to taskbar",
                           lambda: self.set_pinned(key, not pinned)))
         if wins:
