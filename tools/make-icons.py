@@ -425,6 +425,188 @@ save("start", '<defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1">'
               + "".join(f'<rect x="{x}" y="{y}" width="9.6" height="9.6" rx="1" fill="url(#g)"/>'
                         for x in (2, 12.4) for y in (2, 12.4)))
 
+# ── Archives (zip, tar.gz, 7z, rar, …): a folder with a zipper, like
+# Windows 11's "compressed folder". Drawn in the coordinates of a 225 × 166
+# picture of it, the viewBox centres the folder in a square. Used for every
+# archive type through mime/win11-archives.xml (install.sh).
+def archive_icon():
+    teeth, x = "", 53.0
+    while x < 190:
+        teeth += (f'<rect x="{x:.2f}" y="93.5" width="6.2" height="9" rx=".9" fill="url(#zt)"/>'
+                  f'<rect x="{x + 5.25:.2f}" y="100.5" width="6.2" height="9" rx=".9" fill="url(#zt)"/>')
+        x += 10.5
+    front = ("M22 54a8 8 0 0 1 8-8H87c6 0 9-1.6 12.5-4.4l4.5-3.4c3-2.2 6-3.4 11-3.4H202"
+             "a8 8 0 0 1 8 8V{b}a8 8 0 0 1-8 8H30a8 8 0 0 1-8-8z")
+    return (
+        '<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="14 -18.5 204 204">'
+        '<defs>'
+        '<linearGradient id="zb" x1="22" y1="10" x2="120" y2="60" gradientUnits="userSpaceOnUse">'
+        '<stop offset="0" stop-color="#ffc117"/><stop offset="1" stop-color="#f2b31c"/></linearGradient>'
+        '<linearGradient id="zf" x1="22" y1="34" x2="210" y2="157" gradientUnits="userSpaceOnUse">'
+        '<stop offset="0" stop-color="#ffe8a3"/><stop offset="1" stop-color="#ffc935"/></linearGradient>'
+        '<linearGradient id="zm" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#e6e6e6"/>'
+        '<stop offset=".55" stop-color="#cdcdcd"/><stop offset="1" stop-color="#a8a8a8"/></linearGradient>'
+        '<linearGradient id="zv" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ececec"/>'
+        '<stop offset="1" stop-color="#b4b4b4"/></linearGradient>'
+        '<linearGradient id="zt" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#f6f6f6"/>'
+        '<stop offset=".6" stop-color="#e3e3e3"/><stop offset="1" stop-color="#a9a9a9"/></linearGradient>'
+        '</defs>'
+        # back with the tab, its edge in shadow above the front, the front's darker bottom edge
+        '<path d="M22 18a8 8 0 0 1 8-8H90c6 0 9 2 12 6l6 8c2.5 3.2 5 5 9 5H202a8 8 0 0 1 8 8V150H22z" fill="url(#zb)"/>'
+        '<path d="M22 50a8 8 0 0 1 8-8H87c6 0 9-1.6 12.5-4.4l4.5-3.4c3-2.2 6-3.4 11-3.4H202a8 8 0 0 1 8 8v110H22z" '
+        'fill="#d9a01a" opacity=".55"/>'
+        f'<path d="{front.format(b=150)}" fill="#c38d14"/>'
+        f'<path d="{front.format(b=148.5)}" fill="url(#zf)"/>'
+        # the zipper: tape, interlocking teeth, end stop on the right
+        '<rect x="48" y="93" width="148" height="17" fill="#8a6212"/>'
+        '<rect x="48" y="100.5" width="148" height="2.5" fill="#6b4c0d"/>' + teeth +
+        '<rect x="193" y="92" width="17" height="19" rx="1.2" fill="url(#zv)"/>'
+        '<path d="M193 101.5h17" stroke="#9c9c9c" stroke-width="1.2"/>'
+        # the slider on the left with its pull hanging down (a hole in it)
+        '<path d="M28 88h22a4 4 0 0 1 4 4v17a4 4 0 0 1-4 4H28a8 8 0 0 1-8-8v-9a8 8 0 0 1 8-8z" fill="url(#zv)"/>'
+        '<rect x="34" y="92" width="19" height="58" rx="3" fill="url(#zm)" stroke="#8e8e8e" stroke-width=".8"/>'
+        '<rect x="38.5" y="133" width="10" height="11" rx="1" fill="#ffd96e" stroke="#8e8e8e" stroke-width="1"/>'
+        '<rect x="24" y="96.5" width="25" height="6.5" rx="2" fill="#dadada" stroke="#959595" stroke-width=".8"/>'
+        '</svg>\n')
+
+
+with open(os.path.join(OUT, "win11-archive.svg"), "w") as f:
+    f.write(archive_icon())
+
+# ── Word / Excel / PowerPoint files (and their OpenDocument cousins), like
+# Windows 11's: the app's colors and a logo-like mark on a page, a badge
+# bottom left – with a plain white symbol in it, not the app's letter (the
+# Office logos are Microsoft's). Drawn in the coordinates of a screenshot of
+# each Windows icon, the viewBox puts it into a square. mime/win11-office.xml
+# maps the file types to them.
+def badge_glyph(kind, x, y, s):
+    """White symbol in the badge instead of an app's letter: lines of text,
+    a table, a slide."""
+    u = s / 24                                   # a 24-unit grid on the badge
+    def X(v): return f"{x + v * u:.2f}"
+    def Y(v): return f"{y + v * u:.2f}"
+    w = f'stroke="#ffffff" stroke-width="{1.9 * u:.2f}" stroke-linecap="round" fill="none"'
+    if kind == "W":
+        return (f'<path d="M{X(6.5)} {Y(7.5)}H{X(17.5)}M{X(6.5)} {Y(12)}H{X(17.5)}M{X(6.5)} {Y(16.5)}H{X(13.5)}" {w}/>')
+    if kind == "X":
+        return (f'<rect x="{X(6)}" y="{Y(6.5)}" width="{12 * u:.2f}" height="{11 * u:.2f}" rx="{1.5 * u:.2f}" {w}/>'
+                f'<path d="M{X(6)} {Y(12)}H{X(18)}M{X(12)} {Y(6.5)}V{Y(17.5)}" {w}/>')
+    return (f'<rect x="{X(5.5)}" y="{Y(7)}" width="{13 * u:.2f}" height="{9 * u:.2f}" rx="{1.5 * u:.2f}" {w}/>'
+            f'<path d="M{X(12)} {Y(16)}V{Y(18.5)}M{X(9.5)} {Y(18.5)}H{X(14.5)}" {w}/>')
+
+
+def page(x0, y0, x1, y1, r_tr, r=7):
+    """A page with a big round top-right corner (Windows 11's file icon)."""
+    return (f"M{x0 + r} {y0}H{x1 - r_tr}A{r_tr} {r_tr} 0 0 1 {x1} {y0 + r_tr}V{y1 - r}"
+            f"a{r} {r} 0 0 1-{r} {r}H{x0 + r}a{r} {r} 0 0 1-{r}-{r}V{y0 + r}a{r} {r} 0 0 1 {r}-{r}z")
+
+
+def icon(pid, pg, logo, badge, letter, c1, c2, view, ref_view):
+    x0, y0, x1, y1, r_tr = pg
+    bx0, by0, bx1, by1 = badge
+    br, gap = (bx1 - bx0) * 0.19, 6.5
+    pth = page(x0, y0, x1, y1, r_tr)
+    size = (by1 - by0)
+    return (f'<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="{view}">'
+            f'<defs>'
+            f'<linearGradient id="{pid}pg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#fbfbfb"/>'
+            f'<stop offset="1" stop-color="#ececec"/></linearGradient>'
+            f'<linearGradient id="{pid}b" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="{c1}"/>'
+            f'<stop offset="1" stop-color="{c2}"/></linearGradient>'
+            f'<mask id="{pid}m"><rect x="-500" y="-500" width="1500" height="1500" fill="white"/>'
+            f'<rect x="{bx0 - gap}" y="{by0 - gap}" width="{bx1 - bx0 + 2 * gap}" height="{by1 - by0 + 2 * gap}" '
+            f'rx="{br + gap}" fill="black"/></mask>'
+            f'</defs>'
+            f'<path d="{pth}" fill="url(#{pid}pg)"/>'
+            f'<g mask="url(#{pid}m)"><path d="{pth}" fill="none" stroke="#8f8f8f" stroke-width="2.6"/>{logo}</g>'
+            f'<rect x="{bx0}" y="{by0}" width="{bx1 - bx0}" height="{by1 - by0}" rx="{br}" fill="url(#{pid}b)"/>'
+            f'<rect x="{bx0 + .75}" y="{by0 + .75}" width="{bx1 - bx0 - 1.5}" height="{by1 - by0 - 1.5}" rx="{br - .75}" '
+            f'fill="none" stroke="#ffffff" stroke-opacity=".18" stroke-width="1.5"/>'
+            + badge_glyph(letter, bx0, by0, bx1 - bx0) +
+            '</svg>\n')
+
+
+def square(x0, y0, x1, y1, pad=6):
+    cx, cy, s = (x0 + x1) / 2, (y0 + y1) / 2, max(x1 - x0, y1 - y0) + 2 * pad
+    return f"{cx - s / 2:.1f} {cy - s / 2:.1f} {s:.1f} {s:.1f}"
+
+
+def word():
+    lx0, ly0, lx1, ly1 = 88, 39, 168, 139
+    g = ('<linearGradient id="wdt" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#3fc6f6"/>'
+         '<stop offset=".6" stop-color="#3dd2f8"/><stop offset="1" stop-color="#b9a6f7"/></linearGradient>'
+         '<linearGradient id="wdm" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#3a95ee"/>'
+         '<stop offset=".55" stop-color="#3c9af0"/><stop offset="1" stop-color="#7a6ff0"/></linearGradient>'
+         '<linearGradient id="wdl" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#1846d8"/>'
+         '<stop offset="1" stop-color="#1957ef"/></linearGradient>'
+         '<linearGradient id="wds" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#000" stop-opacity=".22"/>'
+         '<stop offset="1" stop-color="#000" stop-opacity="0"/></linearGradient>')
+    logo = (f'<defs>{g}</defs>'
+            f'<rect x="{lx0}" y="{ly0}" width="{lx1 - lx0}" height="{ly1 - ly0}" rx="7" fill="url(#wdl)"/>'
+            # middle band: rounded where it folds over the bottom one, its shadow on it
+            f'<rect x="{lx0}" y="104" width="{lx1 - lx0}" height="7" fill="url(#wds)"/>'
+            f'<path d="M{lx0} 82a12 12 0 0 1 12-12H{lx1}V93a12 12 0 0 1-12 12H{lx0}z" fill="url(#wdm)"/>'
+            f'<rect x="{lx0}" y="71" width="{lx1 - lx0}" height="6" fill="url(#wds)"/>'
+            f'<path d="M{lx0 + 7} {ly0}H{lx1 - 7}a7 7 0 0 1 7 7V60a12 12 0 0 1-12 12H{lx0}V{ly0 + 7}a7 7 0 0 1 7-7z" '
+            f'fill="url(#wdt)"/>')
+    pg = (56, 0, 200, 171, 30)
+    return icon("w", pg, logo, (29, 100, 117, 187), "W", "#2f74ea", "#0c2c98",
+                square(29, 0, 200, 187), "0 0 234 190")
+
+
+def excel():
+    lx0, ly0, lx1, ly1, mx, my, my2 = 77, 25, 156, 125, 116.5, 58, 92
+    g = ('<linearGradient id="xtl" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#bfe27c"/>'
+         '<stop offset="1" stop-color="#63c45a"/></linearGradient>'
+         '<linearGradient id="xtr" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#b3e66c"/>'
+         '<stop offset="1" stop-color="#6fdf68"/></linearGradient>'
+         '<linearGradient id="xml" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#4caa4d"/>'
+         '<stop offset="1" stop-color="#3d9a45"/></linearGradient>'
+         '<linearGradient id="xbr" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#175f26"/>'
+         '<stop offset="1" stop-color="#3b9a3e"/></linearGradient>')
+    logo = (f'<defs>{g}</defs>'
+            f'<rect x="{lx0}" y="{ly0}" width="{lx1 - lx0}" height="{ly1 - ly0}" rx="7" fill="url(#xbr)"/>'
+            f'<path d="M{lx0} {my}H{mx}V{my2 - 10}a10 10 0 0 1-10 10H{lx0}z" fill="url(#xml)"/>'
+            f'<path d="M{lx0 + 7} {ly0}H{mx + 2}V{my}H{lx0}V{ly0 + 7}a7 7 0 0 1 7-7z" fill="url(#xtl)"/>'
+            f'<rect x="{mx}" y="{ly0}" width="{lx1 - mx}" height="{my - ly0 + 2}" rx="8" fill="url(#xtr)"/>')
+    pg = (23, 3, 208, 147, 34)
+    return icon("x", pg, logo, (17, 87, 103, 172), "X", "#2b9c5d", "#0b5530",
+                square(17, 3, 208, 172), "0 0 225 173")
+
+
+def powerpoint():
+    cx, cy, r = 112.5, 89.5, 47.5
+    g = ('<linearGradient id="pr" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#e04a4f"/>'
+         '<stop offset="1" stop-color="#e2423f"/></linearGradient>'
+         '<linearGradient id="pl" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#f45aa6"/>'
+         '<stop offset=".35" stop-color="#e84a5c" stop-opacity="0"/></linearGradient>'
+         '<linearGradient id="po" x1="0" y1="1" x2="1" y2="0"><stop offset="0" stop-color="#ff6d4a"/>'
+         '<stop offset="1" stop-color="#ffa51e"/></linearGradient>'
+         '<radialGradient id="pk" cx=".5" cy=".5" r=".5"><stop offset="0" stop-color="#ff6fb0"/>'
+         '<stop offset="1" stop-color="#ff6fb0" stop-opacity="0"/></radialGradient>'
+         '<linearGradient id="pf" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#b9202f" stop-opacity="0"/>'
+         '<stop offset="1" stop-color="#a81c2c" stop-opacity=".75"/></linearGradient>'
+         )
+    q = 12                                  # the orange quarter's round inner corner
+    fy = cy - (r * r - 14 * 14) ** 0.5      # where the fold strip meets the circle
+    # no clipPath: Qt's SVG renderer (Dolphin) ignores it – every part ends
+    # on the circle by itself
+    logo = (f'<defs>{g}</defs>'
+            f'<circle cx="{cx}" cy="{cy}" r="{r}" fill="url(#pr)"/>'
+            f'<circle cx="{cx}" cy="{cy}" r="{r}" fill="url(#pl)"/>'
+            f'<path d="M{cx - 14} {fy:.2f}A{r} {r} 0 0 1 {cx} {cy - r}V{cy}H{cx - 14}z" fill="url(#pf)"/>'
+            f'<ellipse cx="{cx + 14}" cy="{cy + 2}" rx="18" ry="9" fill="url(#pk)"/>'
+            f'<path d="M{cx} {cy - r}A{r} {r} 0 0 1 {cx + r} {cy}H{cx + q}a{q} {q} 0 0 1-{q}-{q}z" fill="url(#po)"/>')
+    pg = (21, 17, 205, 158, 34)
+    return icon("p", pg, logo, (14, 101, 100, 187), "P", "#e22c3e", "#a10a21",
+                square(14, 17, 205, 187), "0 0 252 192")
+
+
+
+for _k, _fn in (("word", word), ("excel", excel), ("powerpoint", powerpoint)):
+    with open(os.path.join(OUT, f"win11-doc-{_k}.svg"), "w") as f:
+        f.write(_fn())
+
 # Waybar CSS: one rule per state class -> icon
 css = ["/* Generated by tools/make-icons.py – do not edit */"]
 def rule(sel, name, size=20):

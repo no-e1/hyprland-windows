@@ -30,6 +30,14 @@ done
 gtk-update-icon-cache -f -t -q "$HOME/.local/share/icons/hicolor" 2>/dev/null || true   # a stale cache hides new icons
 "$REPO/tools/make-icon-theme.sh" >/dev/null || echo "Win11-dark icon theme missing – skipped Win11-modern"
 
+# file type icons: archives as a Windows 11 "compressed folder", Word /
+# Excel / PowerPoint files like Windows' (mime/*.xml)
+mkdir -p "$HOME/.local/share/mime/packages"
+for f in "$REPO"/mime/*.xml; do
+    ln -sf "$f" "$HOME/.local/share/mime/packages/$(basename "$f")"
+done
+update-mime-database "$HOME/.local/share/mime" 2>/dev/null || true
+
 # Windows' UI font for web pages: Selawik standing in for Segoe UI
 mkdir -p "$HOME/.local/share/fonts" "$HOME/.config/fontconfig/conf.d"
 ln -sfn "$REPO/fonts/selawik" "$HOME/.local/share/fonts/selawik"

@@ -3815,9 +3815,34 @@ class StartMenu:
     # photos the Photos one, every other file the Notepad one (make-icons.py)
     KIND_ICON = {"folder": "win11-explorer", "photo": "win11-photo", "doc": "win11-document"}
 
+    @staticmethod
+    def own_type_icon(path):
+        """The icon a file type has from our own mime packages (an archive:
+        win11-archive, mime/win11-archives.xml; a PDF: Brave's) – None for
+        the rest, which keep the plain Windows document icon."""
+        try:
+            ct = Gio.content_type_guess(os.path.basename(path), None)[0]
+            names = Gio.content_type_get_icon(ct).get_names()
+        except (GLib.Error, TypeError):
+            return None
+        # Gio lists the mime package's icon first; without one it starts with
+        # the type's standard name ("application-zip")
+        if names and names[0] != ct.replace("/", "-"):
+            return names[0]
+        return None
+
     @classmethod
     def file_gicon(cls, path, is_dir):
-        return Gio.ThemedIcon.new(cls.KIND_ICON[FileIndex.kind(path, is_dir)])
+        kind = FileIndex.kind(path, is_dir)
+        own = cls.own_type_icon(path) if kind == "doc" else None
+        return Gio.ThemedIcon.new(own or cls.KIND_ICON[kind])
+
+    @classmethod
+    def kind_name(cls, kind, path):
+        """"Compressed (zipped) Folder" for archives, like Windows' search."""
+        if kind == "doc" and path and cls.own_type_icon(path) == "win11-archive":
+            return "Compressed (zipped) Folder"
+        return cls.KIND_NAME[kind]
 
     def result_row(self, app, name, best, kind="app", path=None):
         box = Gtk.Box(spacing=12)
@@ -3830,7 +3855,7 @@ class StartMenu:
         text.set_hexpand(True)
         text.append(label(name, "result-name"))
         if best:
-            text.append(label(self.KIND_NAME[kind], "result-kind"))
+            text.append(label(self.kind_name(kind, path), "result-kind"))
         box.append(text)
         chev = icon("win11-chevron-right", 12)
         chev.add_css_class("result-chevron")
@@ -3911,7 +3936,7 @@ class StartMenu:
         name.set_max_width_chars(1)
         name.set_hexpand(True)
         top.append(name)
-        top.append(label(self.KIND_NAME[row.kind], "details-kind", xalign=0.5))
+        top.append(label(self.kind_name(row.kind, row.path), "details-kind", xalign=0.5))
         where = label(os.path.dirname(row.path).replace(os.path.expanduser("~"), "~", 1),
                       "details-path", xalign=0.5)
         where.set_max_width_chars(1)

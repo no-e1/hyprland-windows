@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Every archive (zip, tar.gz, 7z, rar, …) gets the Windows 11 "compressed folder"
+     icon, win11-archive (tools/make-icons.py). Installed by install.sh into
+     ~/.local/share/mime/packages. Not static libraries (application/x-archive). -->
+<mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
+  <mime-type type="application/zip"><icon name="win11-archive"/></mime-type>
+  <mime-type type="application/x-7z-compressed"><icon name="win11-archive"/></mime-type>
+  <mime-type type="application/vnd.rar"><icon name="win11-archive"/></mime-type>
+  <mime-type type="application/x-tar"><icon name="win11-archive"/></mime-type>
+  <mime-type type="application/x-compressed-tar"><icon name="win11-archive"/></mime-type>
+  <mime-type type="application/x-bzip2-compressed-tar"><icon name="win11-archive"/></mime-type>
+  <mime-type type="application/x-bzip3-compressed-tar"><icon name="win11-archive"/></mime-type>
+  <mime-type type="application/x-xz-compressed-tar"><icon name="win11-archive"/></mime-type>
+  <mime-type type="application/x-zstd-compressed-tar"><icon name="win11-archive"/></mime-type>
+  <mime-type type="application/x-lzma-compressed-tar"><icon name="win11-archive"/></mime-type>
+  <mime-type type="application/x-lz4-compressed-tar"><icon name="win11-archive"/></mime-type>
+  <mime-type type="application/x-lzip-compressed-tar"><icon name="win11-archive"/></mime-type>
+  <mime-type type="application/x-lrzip-compressed-tar"><icon name="win11-archive"/></mime-type>
+  <mime-type type="application/x-tzo"><icon name="win11-archive"/></mime-type>
+  <mime-type type="application/x-tarz"><icon name="win11-archive"/></mime-type>
+  <mime-type type="application/gzip"><icon name="win11-archive"/></mime-type>
+  <mime-type type="application/x-bzip2"><icon name="win11-archive"/></mime-type>
+  <mime-type type="application/x-bzip3"><icon name="win11-archive"/></mime-type>
+  <mime-type type="application/x-xz"><icon name="win11-archive"/></mime-type>
+  <mime-type type="application/zstd"><icon name="win11-archive"/></mime-type>
+  <mime-type type="application/x-lzma"><icon name="win11-archive"/></mime-type>
+  <mime-type type="application/x-lz4"><icon name="win11-archive"/></mime-type>
+  <mime-type type="application/x-lzip"><icon name="win11-archive"/></mime-type>
+  <mime-type type="application/x-lrzip"><icon name="win11-archive"/></mime-type>
+  <mime-type type="application/x-lzop"><icon name="win11-archive"/></mime-type>
+  <mime-type type="application/x-compress"><icon name="win11-archive"/></mime-type>
+  <mime-type type="application/x-cpio"><icon name="win11-archive"/></mime-type>
+  <mime-type type="application/x-cpio-compressed"><icon name="win11-archive"/></mime-type>
+  <mime-type type="application/x-arj"><icon name="win11-archive"/></mime-type>
+  <mime-type type="application/x-lha"><icon name="win11-archive"/></mime-type>
+  <mime-type type="application/vnd.ms-cab-compressed"><icon name="win11-archive"/></mime-type>
+  <mime-type type="application/x-ace"><icon name="win11-archive"/></mime-type>
+  <mime-type type="application/x-alz"><icon name="win11-archive"/></mime-type>
+  <mime-type type="application/x-stuffit"><icon name="win11-archive"/></mime-type>
+  <mime-type type="application/x-zoo"><icon name="win11-archive"/></mime-type>
+</mime-info>

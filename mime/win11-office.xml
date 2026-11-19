@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Word, Excel and PowerPoint files (and the OpenDocument ones) with Windows 11 style
+     icons: win11-doc-word / -excel / -powerpoint (tools/make-icons.py).
+     Installed by install.sh into ~/.local/share/mime/packages. -->
+<mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
+  <mime-type type="application/msword"><icon name="win11-doc-word"/></mime-type>
+  <mime-type type="application/vnd.openxmlformats-officedocument.wordprocessingml.document"><icon name="win11-doc-word"/></mime-type>
+  <mime-type type="application/vnd.openxmlformats-officedocument.wordprocessingml.template"><icon name="win11-doc-word"/></mime-type>
+  <mime-type type="application/vnd.ms-word.document.macroenabled.12"><icon name="win11-doc-word"/></mime-type>
+  <mime-type type="application/vnd.ms-word.template.macroenabled.12"><icon name="win11-doc-word"/></mime-type>
+  <mime-type type="application/vnd.oasis.opendocument.text"><icon name="win11-doc-word"/></mime-type>
+  <mime-type type="application/vnd.oasis.opendocument.text-template"><icon name="win11-doc-word"/></mime-type>
+  <mime-type type="application/rtf"><icon name="win11-doc-word"/></mime-type>
+  <mime-type type="application/vnd.ms-excel"><icon name="win11-doc-excel"/></mime-type>
+  <mime-type type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"><icon name="win11-doc-excel"/></mime-type>
+  <mime-type type="application/vnd.openxmlformats-officedocument.spreadsheetml.template"><icon name="win11-doc-excel"/></mime-type>
+  <mime-type type="application/vnd.ms-excel.sheet.macroenabled.12"><icon name="win11-doc-excel"/></mime-type>
+  <mime-type type="application/vnd.ms-excel.sheet.binary.macroenabled.12"><icon name="win11-doc-excel"/></mime-type>
+  <mime-type type="application/vnd.oasis.opendocument.spreadsheet"><icon name="win11-doc-excel"/></mime-type>
+  <mime-type type="application/vnd.oasis.opendocument.spreadsheet-template"><icon name="win11-doc-excel"/></mime-type>
+  <mime-type type="application/vnd.ms-powerpoint"><icon name="win11-doc-powerpoint"/></mime-type>
+  <mime-type type="application/vnd.openxmlformats-officedocument.presentationml.presentation"><icon name="win11-doc-powerpoint"/></mime-type>
+  <mime-type type="application/vnd.openxmlformats-officedocument.presentationml.slideshow"><icon name="win11-doc-powerpoint"/></mime-type>
+  <mime-type type="application/vnd.openxmlformats-officedocument.presentationml.template"><icon name="win11-doc-powerpoint"/></mime-type>
+  <mime-type type="application/vnd.ms-powerpoint.presentation.macroenabled.12"><icon name="win11-doc-powerpoint"/></mime-type>
+  <mime-type type="application/vnd.ms-powerpoint.slideshow.macroenabled.12"><icon name="win11-doc-powerpoint"/></mime-type>
+  <mime-type type="application/vnd.oasis.opendocument.presentation"><icon name="win11-doc-powerpoint"/></mime-type>
+  <mime-type type="application/vnd.oasis.opendocument.presentation-template"><icon name="win11-doc-powerpoint"/></mime-type>
+</mime-info>
