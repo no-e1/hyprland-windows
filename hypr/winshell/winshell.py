@@ -456,10 +456,16 @@ APP_ICONS = {"winterm.desktop": "win11-terminal",
              # LibreOffice with Word / Excel / PowerPoint-like icons (make-icons.py)
              "libreoffice-writer.desktop": "win11-app-word",
              "libreoffice-calc.desktop": "win11-app-excel",
-             "libreoffice-impress.desktop": "win11-app-powerpoint"}
-# ... and Windows' names: kitty is "Terminal", Gwenview the "Photos" app
+             "libreoffice-impress.desktop": "win11-app-powerpoint",
+             "io.missioncenter.MissionCenter.desktop": "win11-taskmanager"}
+# ... and Windows' names: kitty is "Terminal", Gwenview the "Photos" app,
+# Mission Center (Flathub) the Task Manager
 APP_NAMES = {"winterm.desktop": "Terminal",
-             "org.kde.gwenview.desktop": "Photos"}
+             "org.kde.gwenview.desktop": "Photos",
+             "io.missioncenter.MissionCenter.desktop": "Task Manager"}
+# Mission Center: performance and apps laid out like Windows' Task Manager;
+# GNOME's System Monitor where it isn't installed (hyprland.lua: Ctrl+Shift+Esc)
+TASK_MANAGER = "flatpak run io.missioncenter.MissionCenter 2>/dev/null || gnome-system-monitor"
 
 
 def app_name(app):
@@ -671,7 +677,8 @@ class AppIcons:
                 "org.kde.gwenview": "win11-photo",
                 "libreoffice-writer": "win11-app-word",
                 "libreoffice-calc": "win11-app-excel",
-                "libreoffice-impress": "win11-app-powerpoint"}
+                "libreoffice-impress": "win11-app-powerpoint",
+                "io.missioncenter.missioncenter": "win11-taskmanager"}
 
     def get(self, cls):
         c = (cls or "").lower()
@@ -692,6 +699,7 @@ class Thumb(Gtk.Picture):
 
 class Switcher:
     W, H = 240, 150
+    PER_LINE = 4                # at most this many cards side by side
 
     def __init__(self, app, icons):
         self.icons = icons
@@ -719,6 +727,10 @@ class Switcher:
         self.scroll = Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.NEVER,
                                          vscrollbar_policy=Gtk.PolicyType.AUTOMATIC,
                                          propagate_natural_width=True, propagate_natural_height=True)
+        # cards keep their size: when windows go while it is open, the rest
+        # must not be stretched over the old (bigger) area
+        self.flow.set_halign(Gtk.Align.CENTER)
+        self.flow.set_valign(Gtk.Align.START)
         self.scroll.set_child(self.flow)
         panel = Gtk.Box()
         panel.add_css_class("switcher")
@@ -886,12 +898,10 @@ class Switcher:
         mon_w, mon_h = self.monitor_size()
         card_w = self.W + 24 + 6                # card padding + border, column spacing
         card_h = self.H + 70
-        fit = max(1, int((mon_w * 0.92 - 28) // card_w))
-        # as many rows as needed anyway, but spread the windows evenly over
-        # them (7 windows with room for 6: 4 + 3, not 6 + 1)
+        fit = max(1, min(self.PER_LINE, int((mon_w * 0.92 - 28) // card_w)))
+        # full rows of up to PER_LINE (9 windows: 4 + 4 + 1)
         n = max(1, len(self.items))
-        rows = -(-n // fit)
-        per_line = max(1, -(-n // rows))
+        per_line = min(n, fit)
         self.per_line = per_line
         self.flow.set_min_children_per_line(per_line)
         self.flow.set_max_children_per_line(per_line)
@@ -900,9 +910,11 @@ class Switcher:
             card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
             card.add_css_class("card")
             card.set_hexpand(False)
+            card.set_halign(Gtk.Align.CENTER)
+            card.set_valign(Gtk.Align.START)
             head = Gtk.Box(spacing=8)
             img = Gtk.Image.new_from_gicon(self.icons.get(c["class"]))
-            img.set_pixel_size(16)
+            img.set_pixel_size(22)
             head.append(img)
             t = label(c["title"] or c["class"], "card-title")
             t.set_hexpand(True)
@@ -912,7 +924,7 @@ class Switcher:
             head.append(t)
             # × top right (on hover and on the selected card): close that window
             # right here, while Alt is still held – the switcher stays open
-            x = Gtk.Button(child=icon("win11-close", 12), valign=Gtk.Align.CENTER)
+            x = Gtk.Button(child=icon("win11-close", 17), valign=Gtk.Align.START)
             x.add_css_class("card-close")
             x.set_focusable(False)
             x.set_tooltip_text("Close window")
@@ -935,11 +947,26 @@ class Switcher:
                 pic.set_paintable(self.thumbs[c["address"]])
                 stack.set_visible_child_name("pic")
 
+            # clicked: the card is pressed in (style.css .card.pressed), and
+            # only once that is seen the switcher goes
             click = Gtk.GestureClick()
-            click.connect("released", lambda *_a, i=i: self.pick(i))
+            click.connect("pressed", lambda *_a, card=card: card.add_css_class("pressed"))
+            click.connect("cancel", lambda *_a, card=card: card.remove_css_class("pressed"))
+            click.connect("released", lambda *_a, i=i, card=card: self.click_card(i, card))
             card.add_controller(click)
             self.flow.append(card)
             self.cards.append(card)
+        # as high as its rows (up to 80 % of the screen, then it scrolls)
+        self.fit_height()
+        self.win.set_default_size(1, 1)
+
+    def fit_height(self):
+        """The scrolled area as high as the rows of cards (up to its max,
+        then it scrolls): it doesn't ask for that height by itself."""
+        self.scroll.set_min_content_height(-1)
+        w = self.flow.measure(Gtk.Orientation.HORIZONTAL, -1)[1]
+        h = self.flow.measure(Gtk.Orientation.VERTICAL, w)[1]
+        self.scroll.set_min_content_height(min(h, self.scroll.get_max_content_height()))
 
     def monitor_size(self):
         disp = Gdk.Display.get_default()
@@ -979,6 +1006,25 @@ class Switcher:
                 adj.set_value(bottom - adj.get_page_size())
         return False
 
+    PICK_MS = 110               # a clicked card shows it is pressed before the switch
+
+    def click_card(self, i, card):
+        if getattr(self, "closing_item", False):
+            card.remove_css_class("pressed")
+            self.closing_item = False           # that click was the ×
+            return
+        self.sel = i
+        self.update_selection()
+        # let go: it springs back out right away (style.css: 90 ms), the
+        # switch comes when that is done – no later than before
+        card.remove_css_class("pressed")
+
+        def go():
+            if self.visible and self.sel == i:
+                self.commit()
+            return False
+        GLib.timeout_add(self.PICK_MS, go)
+
     def pick(self, i):
         if getattr(self, "closing_item", False):
             self.closing_item = False           # that click was the ×
@@ -1002,6 +1048,10 @@ class Switcher:
             self.sel = max(0, self.sel - 1)
         self.build()
         self.update_selection()
+        # fewer cards (maybe a row less): the switcher shrinks to fit them
+        # (fit_height gives the scrolled area its height – without it the
+        # switcher collapsed to a thin line)
+        self.win.queue_resize()
 
     def commit(self):
         if not self.visible:
@@ -1989,7 +2039,7 @@ class QuickSettings:
             w = w.get_parent()
         if w:
             w.add_css_class("pressing")
-            GLib.timeout_add(120, lambda: w.remove_css_class("pressing") and False)
+            GLib.timeout_add(160, lambda: w.remove_css_class("pressing") and False)
 
     def outside_click(self):
         if self.backdrop_for == "rofi":
@@ -4114,7 +4164,9 @@ class StartMenu:
               # Win + W, pavucontrol is "More volume settings" and Settings →
               # Sound – no apps of their own, like on Windows
               "rofi.desktop", "rofi-theme-selector.desktop",
-              "org.pulseaudio.pavucontrol.desktop"}
+              "org.pulseaudio.pavucontrol.desktop",
+              # the Task Manager is Mission Center (APP_NAMES)
+              "org.gnome.SystemMonitor.desktop"}
 
     def load_apps(self):
         apps = [a for a in Gio.AppInfo.get_all()
@@ -4682,7 +4734,7 @@ class TaskView:
     middle, every desktop in a row at the bottom, "+ New desktop" last.
     Pointing at a desktop shows its windows; a click on a window or a desktop
     goes there. Esc, Win + Tab again or a click on the background close it."""
-    CARD_W, CARD_H = 288, 180
+    CARD_W, CARD_H = 240, 150    # like Alt+Tab (was 288 × 180)
     DESK_W, DESK_H = 176, 99
     MAX_DESKTOPS = 6            # as in hyprland.lua: no "New desktop" beyond this
 
@@ -4836,7 +4888,7 @@ class TaskView:
         card.add_css_class("tv-card")
         head = Gtk.Box(spacing=8)
         img = Gtk.Image.new_from_gicon(self.shell.switcher.icons.get(c["class"]))
-        img.set_pixel_size(16)
+        img.set_pixel_size(22)
         head.append(img)
         t = label(c["title"] or c["class"], "card-title")
         t.set_hexpand(True)
@@ -4845,7 +4897,7 @@ class TaskView:
         t.set_width_chars(1)
         t.set_max_width_chars(1)
         head.append(t)
-        x = Gtk.Button(child=icon("win11-close", 12))
+        x = Gtk.Button(child=icon("win11-close", 17), valign=Gtk.Align.START)
         x.add_css_class("tv-close")
         x.set_tooltip_text("Close")
         x.connect("clicked", lambda *_: self.close_window(c))
@@ -6088,7 +6140,7 @@ class SettingsMenu:
             ("win11-ethernet", "Network connections", "Ethernet, VPN, advanced settings",
              lambda: spawn("nm-connection-editor")),
             ("win11-activity", "Task Manager", "Running apps and performance",
-             lambda: spawn("gnome-system-monitor")),
+             lambda: spawn(TASK_MANAGER)),
             ("win11-code", "Edit Hyprland config", "hyprland.lua in your editor",
              lambda: spawn("xdg-open ~/.config/hypr/hyprland.lua")),
         ]
@@ -7139,28 +7191,70 @@ class TaskPreview:
     with several terminals open, pick the one you want instead of clicking
     the button again and again. A click brings that window up, the X (on
     hover) closes it. The pictures are the Alt+Tab ones (Switcher.capture),
-    renewed while the preview is open."""
+    renewed while the preview is open. Clicking an app with several
+    windows opens it right away (Taskbar.on_app_click). At most COLS
+    pictures side by side in one row; with more windows, arrows left and
+    right page through them."""
     W, H = 200, 120
-    SHOW_MS, HIDE_MS = 350, 300
+    COLS = 3
+    SHOW_MS, HIDE_MS = 350, 500
 
     def __init__(self, app, shell):
         self.shell = shell
         # right above the taskbar (its exclusive zone already keeps it clear)
         self.win = layer_window(app, "winshell-preview", LS.Layer.OVERLAY,
                                 anchors=(LS.Edge.BOTTOM, LS.Edge.LEFT), margins={LS.Edge.BOTTOM: 8})
-        self.box = Gtk.Box(spacing=6)
+        self.box = Gtk.Box()
         self.box.add_css_class("tb-preview")
+        self.grid = Gtk.Grid(column_spacing=6, row_spacing=6)
+        # the paging arrows float over the pictures (small round buttons at
+        # the left and right edge), they don't make the preview wider
+        self.over = Gtk.Overlay(child=self.grid)
+        self.box.append(self.over)
         self.win.set_child(self.box)
+        # the pointer on the preview: it stays. GTK may report "left the
+        # taskbar button" only after "entered the preview" (two surfaces) –
+        # the timer that left running closed the preview mid-click.
+        self.inside = False
         m = Gtk.EventControllerMotion()
-        m.connect("enter", lambda *_: self.cancel_hide())
-        m.connect("leave", lambda *_: self.hide_soon())
+        m.connect("enter", lambda *_: self.set_inside(True))
+        m.connect("motion", lambda *_: self.set_inside(True))
+        m.connect("leave", lambda *_: (self.set_inside(False), self.hide_soon()))
         self.win.add_controller(m)
+        press = Gtk.GestureClick(button=0)
+        press.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
+        press.connect("pressed", lambda *_: self.set_inside(True))
+        self.win.add_controller(press)
         self.key = None
         self.show_id = self.hide_id = self.live_id = self.watch_id = 0
         self.mon = None
         self.cards = {}             # address -> card
+        self.clicked = False        # opened by a click (not by resting on the button)
+        self.offset = 0             # the first card shown (more than COLS windows)
+        self.arrows = []
+        for name, step, side in (("win11-chevron-left", -1, Gtk.Align.START),
+                                 ("win11-chevron-right", 1, Gtk.Align.END)):
+            a = Gtk.Button(child=icon(name, 12), halign=side, valign=Gtk.Align.CENTER, visible=False)
+            a.add_css_class("tbp-arrow")
+            a.set_tooltip_text("Previous" if step < 0 else "Next")
+            a.connect("clicked", lambda *_, d=step: self.page(d))
+            self.over.add_overlay(a)
+            self.arrows.append(a)
 
     # ── the pointer on the taskbar ──
+    def toggle(self, key, button, bar):
+        """A click on an app with several windows: show its windows to pick
+        one; clicked again, they go."""
+        self.cancel_hide()
+        if self.show_id:
+            GLib.source_remove(self.show_id)
+            self.show_id = 0
+        if self.win.get_visible() and self.key == key and self.clicked:
+            self.hide()
+            return
+        self.open(key, button, bar)
+        self.clicked = True
+
     def hover(self, key, button, bar):
         self.cancel_hide()
         if self.show_id:
@@ -7178,9 +7272,20 @@ class TaskPreview:
             self.show_id = 0
         self.hide_soon()
 
+    def set_inside(self, inside):
+        self.inside = inside
+        if inside:
+            self.cancel_hide()
+
     def hide_soon(self):
-        if not self.hide_id and self.win.get_visible():
-            self.hide_id = GLib.timeout_add(self.HIDE_MS, self.hide)
+        if not self.hide_id and self.win.get_visible() and not self.inside:
+            self.hide_id = GLib.timeout_add(self.HIDE_MS, self.hide_later)
+
+    def hide_later(self):
+        self.hide_id = 0
+        if self.inside:             # came onto the preview meanwhile
+            return False
+        return self.hide()
 
     def cancel_hide(self):
         if self.hide_id:
@@ -7201,6 +7306,8 @@ class TaskPreview:
         self.box.remove_css_class("shown")
         self.win.set_visible(False)
         self.key = None
+        self.clicked = False
+        self.inside = False
         return False
 
     # ── the preview ──
@@ -7212,12 +7319,17 @@ class TaskPreview:
             self.hide()
             return False
         self.key = key
+        self.clicked = False
+        self.offset = 0
         sw = self.shell.switcher
         active = (hypr_json("activewindow") or {}).get("address")
-        clear(self.box)
+        clear(self.grid)
         self.cards = {}
-        for c in wins:
-            self.box.append(self.card(c, sw, c["address"] == active))
+        # a fixed order: the window opened first on the left (Hyprland
+        # numbers windows as they open), not the most recently used first
+        for c in sorted(wins, key=self.opened):
+            self.card(c, sw, c["address"] == active)
+        self.layout()
         # above the button, on that taskbar's screen
         mon = getattr(bar, "monitor", None) or gdk_monitor(getattr(self.shell, "primary", "") or "")
         if mon:
@@ -7252,6 +7364,7 @@ class TaskPreview:
         g = self.mon.get_geometry()
         top = g.y + g.height - 48 - 8 - self.win.get_height() - 4
         if not (g.x <= x < g.x + g.width and top <= y < g.y + g.height):
+            self.inside = False             # its "leave" may never have come
             self.hide_soon()
         return True
 
@@ -7270,7 +7383,7 @@ class TaskPreview:
         t.set_width_chars(1)
         t.set_max_width_chars(1)
         head.append(t)
-        x = Gtk.Button(child=icon("win11-close", 12))
+        x = Gtk.Button(child=icon("win11-close", 17), valign=Gtk.Align.START)
         x.add_css_class("tbp-close")
         x.set_tooltip_text("Close window")
         x.connect("clicked", lambda *_: self.close_window(addr))
@@ -7292,6 +7405,29 @@ class TaskPreview:
         card.add_controller(g)
         self.cards[addr] = card
         return card
+
+    @staticmethod
+    def opened(c):
+        try:
+            return int(str(c.get("stableId") or ""), 16)
+        except ValueError:
+            return 1 << 62                      # unknown: at the end
+
+    def layout(self):
+        """At most COLS cards side by side; more: arrows to page through
+        them (always COLS shown, so the preview keeps its width)."""
+        clear(self.grid)
+        cards = list(self.cards.values())
+        self.offset = max(0, min(self.offset, len(cards) - self.COLS))
+        left, right = self.arrows
+        left.set_visible(self.offset > 0)                       # only where there is more
+        right.set_visible(self.offset + self.COLS < len(cards))
+        for i, card in enumerate(cards[self.offset:self.offset + self.COLS]):
+            self.grid.attach(card, i, 0, 1, 1)
+
+    def page(self, step):
+        self.offset += step * self.COLS
+        self.layout()
 
     @staticmethod
     def set_pic(card, tex):
@@ -7326,9 +7462,8 @@ class TaskPreview:
 
     def close_window(self, addr):
         dispatch(f'hl.dsp.window.close({{ window = "address:{addr}" }})')
-        card = self.cards.pop(addr, None)
-        if card:
-            self.box.remove(card)
+        if self.cards.pop(addr, None):
+            self.layout()
         if not self.cards:
             self.hide()
 
@@ -7346,6 +7481,10 @@ class Taskbar:
                      "libreoffice-writer.desktop": "win11-app-word",
                      "libreoffice-calc.desktop": "win11-app-excel",
                      "libreoffice-impress.desktop": "win11-app-powerpoint",
+                     "io.missioncenter.MissionCenter.desktop": "win11-taskmanager",
+                     # a Flatpak's menu entry only counts from the next sign-in
+                     # (XDG_DATA_DIRS) – until then the window is just its class
+                     "class:io.missioncenter.MissionCenter": "win11-taskmanager",
                      "class:io.github.noe1.winshell": "win11-settings-app"}
     DEFAULT_PINNED = ["brave-browser.desktop", "winterm.desktop"]
 
@@ -7484,7 +7623,7 @@ class Taskbar:
         b = Gtk.Button(child=over)
         b.add_css_class("tb-app")
         b.key = key
-        b.connect("clicked", lambda *_: self.on_app_click(key))
+        b.connect("clicked", lambda *_: self.on_app_click(key, b))
         # resting on it: its windows as pictures above it (TaskPreview)
         motion = Gtk.EventControllerMotion()
         motion.connect("enter", lambda *_: self.preview_hover(key, b))
@@ -7503,6 +7642,7 @@ class Taskbar:
     # taskbar anyway. While the button is held, all pointer events go to the
     # surface where the drag started, even outside of it.
     DRAG_THRESHOLD = 6
+    PRESS_MIN_MS = 110          # a quick click still shows the full dip
 
     def drag_gesture(self, box, kind):
         g = Gtk.GestureDrag(button=Gdk.BUTTON_PRIMARY)
@@ -7528,7 +7668,8 @@ class Taskbar:
         self.idrag = {"kind": kind, "box": box, "w": w, "sx": x, "sy": y,
                       "grab": (x - px, y - py), "active": False}
         if kind == "app":
-            w.add_css_class("pressing")         # a touch smaller while pressed (style.css)
+            w.add_css_class("pressing")         # clearly smaller while pressed (style.css)
+            self.idrag["t0"] = GLib.get_monotonic_time()
 
     def drag_update(self, g, dx, dy):
         st = getattr(self, "idrag", None)
@@ -7557,8 +7698,16 @@ class Taskbar:
     def drag_finish(self, ok_):
         st, self.idrag = getattr(self, "idrag", None), None
         if st and st["kind"] == "app":          # let go: its normal size again
-            st["w"].remove_css_class("pressing")
-            st["w"].remove_css_class("lifted")
+            w = st["w"]
+            w.remove_css_class("lifted")
+            # a quick click: stay pressed in a moment so the dip is seen
+            # in full before it springs back
+            held = (GLib.get_monotonic_time() - st.get("t0", 0)) // 1000
+            if not st["active"] and held < self.PRESS_MIN_MS:
+                GLib.timeout_add(self.PRESS_MIN_MS - held,
+                                 lambda: w.remove_css_class("pressing") or False)
+            else:
+                w.remove_css_class("pressing")
         if not st or not st["active"]:
             return
         if st["kind"] == "app":
@@ -7586,10 +7735,16 @@ class Taskbar:
         else:
             SHELL.preview.unhover()             # a pinned app that isn't running
 
-    def on_app_click(self, key):
+    def on_app_click(self, key, b=None):
+        wins = self.groups.get(key, [])
+        if SHELL and b and len(wins) > 1:
+            # like Windows: several windows – show them all to pick one
+            root = b.get_root()
+            bar = next((x for x in [self] + list(SHELL.secondaries.values()) if x.win is root), self)
+            SHELL.preview.toggle(key, b, bar)
+            return
         if SHELL:
             SHELL.preview.hide()                # like Windows: the preview goes on a click
-        wins = self.groups.get(key, [])
         if not wins:
             self.launch(key)
             return

@@ -18,18 +18,25 @@ window.winshell {
 .card {
     padding: 8px 10px 10px 10px;
     border-radius: 10px;
-    border: 2px solid transparent;
+    border: 3px solid transparent;
 }
 .card:hover { background: rgba(255, 255, 255, 0.04); }
+/* clicked: the card sinks in a little before the switch (Switcher.click_card) */
+.card { transition: transform 90ms ease-out; }
+.card.pressed { transform: scale(0.95); transition: transform 70ms ease-out; }
+/* selected: blue frame in the accent colour, like Windows 11 */
 .card.selected {
-    border-color: rgba(255, 255, 255, 0.92);
+    border-color: #4cc2ff;
     background: rgba(255, 255, 255, 0.06);
 }
-.card-title { font-size: 12px; }
+.card-title { font-size: 13px; }
 /* × on a card (Alt+Tab): on hover and on the selected one, like Windows */
 button.card-close {
-    min-width: 24px; min-height: 24px; padding: 0; margin: -4px -4px -4px 0;   /* square */
-    border-radius: 4px; border: none; box-shadow: none;
+    /* right into the card's top right corner (over its padding: 8 px top,
+       10 px right), rounded like that corner (10 px less the 3 px frame);
+       -8 px below too, so the header row doesn't grow from it */
+    min-width: 36px; min-height: 36px; padding: 0; margin: -8px -10px -8px 0;
+    border-radius: 0 7px 0 0; border: none; box-shadow: none;
     background: transparent; opacity: 0; transition: opacity 90ms ease-out;
 }
 .card:hover button.card-close, .card.selected button.card-close { opacity: 1; }
@@ -60,12 +67,26 @@ button.card-close:hover { background: #c42b1c; }
 .tbp-card.active { background: rgba(255, 255, 255, 0.04); border-color: rgba(255, 255, 255, 0.10); }
 .tbp-title { font-size: 12px; }
 button.tbp-close {
-    min-width: 24px; min-height: 22px; padding: 0; border-radius: 4px;
+    /* like Alt+Tab's ×: right into the card's top right corner (over its
+       padding: 6 px top, 8 px right), rounded like that corner */
+    min-width: 36px; min-height: 36px; padding: 0; margin: -6px -8px -6px 0;
+    border-radius: 0 5px 0 0;
     background: transparent; border: none; box-shadow: none; opacity: 0;
     transition: opacity 90ms ease-out;
 }
 .tbp-card:hover button.tbp-close { opacity: 1; }
 button.tbp-close:hover { background: #c42b1c; }
+/* more than 3 windows: page through them – small round buttons floating
+   over the pictures at the left and right edge (TaskPreview.layout) */
+button.tbp-arrow {
+    min-width: 28px; min-height: 28px; padding: 0; margin: 0 6px;
+    border-radius: 999px;
+    background: rgba(44, 44, 44, 0.92);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.45);
+}
+button.tbp-arrow:hover { background: rgba(64, 64, 64, 0.96); }
+button.tbp-arrow:active image { transform: scale(0.85); }
 
 /* ── Task view (Win + Tab) ───────────────────────────────────────── */
 /* the whole screen only dimmed (not blurred), the window cards blurred:
@@ -78,17 +99,20 @@ button.tbp-close:hover { background: #c42b1c; }
 .tv-card {
     padding: 8px 10px 10px 10px;
     border-radius: 8px;
-    border: 2px solid transparent;
+    border: 3px solid transparent;
     background: rgba(44, 44, 44, 0.55);
 }
 .tv-card:hover { background: rgba(60, 60, 60, 0.7); }
-.tv-card.selected { border-color: rgba(255, 255, 255, 0.92); }
+.tv-card.selected { border-color: #4cc2ff; }    /* blue, like Windows 11 */
 /* close (X): only on the card / desktop the mouse is over, like Windows */
 .tv-close {
-    min-width: 24px; min-height: 24px; padding: 0;
+    min-width: 36px; min-height: 36px; padding: 0;
     border-radius: 4px; border: none; box-shadow: none;
     background: transparent; opacity: 0;
 }
+/* on a window card: right into its top right corner, like .card-close */
+.tv-card .tv-close { margin: -8px -10px -8px 0; border-radius: 0 5px 0 0; }
+.tv-desk .tv-close { min-width: 24px; min-height: 24px; }   /* the small desktop pictures keep the small X */
 .tv-card:hover .tv-close, .tv-desk:hover .tv-close { opacity: 1; }
 .tv-close:hover { background: #c42b1c; }
 /* the desktops at the bottom */
@@ -767,10 +791,10 @@ button.tb-app.active:hover { background: rgba(255, 255, 255, 0.10); }
 /* like Windows: pressed a touch smaller, picked up to drag it bigger
    (.pressing: pressed, also through a flyout's catcher; .lifted: dragged –
    winshell.py drag_begin / drag_update) */
-button.tb-app image { transition: transform 120ms ease-out; }
+button.tb-app image { transition: transform 140ms ease-out; }
 button.tb-app:active image,
-button.tb-app.pressing image { transform: scale(0.9); }
-button.tb-app.lifted image { transform: scale(1.18); }
+button.tb-app.pressing image { transform: scale(0.8); transition: transform 70ms ease-out; }
+button.tb-app.lifted image { transform: scale(1.18); transition: transform 140ms ease-out; }
 /* several windows of the app: when the button is lit (in front, hovered) a
    second card peeks out behind it on the right, like Windows 11's stacked
    look (without the button's own background it looked like a loose line) */
