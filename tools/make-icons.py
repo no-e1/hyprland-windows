@@ -716,6 +716,54 @@ def impress_app():
             '</svg>\n')
 
 
+# ── Task Manager (Mission Center): Windows 11's – a dark blue card, two
+# graph areas in front of it. The edges are measured off a 330 px picture
+# every 6 px (its coordinates; the viewBox squares the card) and smoothed –
+# around the dip, where the shadow fooled the measuring, set by eye.
+TM_BACK = [145, 145, 144, 144, 144, 144, 144, 140, 126, 109, 96, 90, 86, 84, 83, 83, 85, 88, 94, 105, 117,
+           123, 124, 123, 126, 133, 146, 158, 165, 165, 165, 156, 136, 114, 98, 89, 85, 83, 82, 82, 84,
+           87, 93, 104, 116, 123, 124, 124, 124, 124, 124, 124, 124, 124, 124, 125]
+TM_FRONT = [206, 206, 206, 206, 206, 206, 206, 206, 206, 198, 182, 166, 150, 140, 139, 141, 151, 163, 176,
+            187, 200, 206, 206, 206, 207, 212, 219, 224, 227, 227, 227, 224, 210, 195, 180, 164, 149, 138,
+            135, 137, 144, 153, 162, 171, 180, 185, 186, 186, 186, 186, 186, 186, 186, 186, 186, 187]
+
+
+def smooth_area(ys, step=6, bottom=300):
+    """The area under a measured edge: Catmull-Rom through the points."""
+    pts = [(min(i * step, 330), y) for i, y in enumerate(ys)]
+    pts = [(-6, pts[0][1])] + pts + [(336, pts[-1][1])]
+    d = f"M-6 {bottom}V{pts[0][1]}"
+    for i in range(len(pts) - 1):
+        p0, p1, p2 = pts[max(i - 1, 0)], pts[i], pts[i + 1]
+        p3 = pts[min(i + 2, len(pts) - 1)]
+        c1 = (p1[0] + (p2[0] - p0[0]) / 6, p1[1] + (p2[1] - p0[1]) / 6)
+        c2 = (p2[0] - (p3[0] - p1[0]) / 6, p2[1] - (p3[1] - p1[1]) / 6)
+        d += f"C{c1[0]:.1f} {c1[1]:.1f} {c2[0]:.1f} {c2[1]:.1f} {p2[0]:.1f} {p2[1]:.1f}"
+    return d + f"V{bottom}Z"
+
+
+def task_manager():
+    card = rrect(0, 41, 330, 289, 18, 18, 18, 18)
+    back, front = smooth_area(TM_BACK), smooth_area(TM_FRONT)
+    shade = lambda d, o: f'<path d="{d}" fill="#000" fill-opacity="{o}" filter="url(#tb)"/>'
+    return (svg_open("0 0 330 330") +
+            '<defs><filter id="tb" x="-20%" y="-20%" width="140%" height="140%">'
+            '<feGaussianBlur stdDeviation="7"/></filter>'
+            f'<clipPath id="tc"><path d="{card}"/></clipPath>'
+            + lin("tm", 0, 0, 330, 0, (0, "#1fa6e8"), (1, "#1697e0"))
+            + lin("tf", 0, 82, 0, 289, (0, "#c6f1ff"), (1, "#7cd1fe")) + '</defs>'
+            '<g clip-path="url(#tc)">'
+            f'<path d="{card}" fill="#0767b9"/>'
+            # each area lays a soft shadow on what is behind it
+            + shade(back, ".3") + f'<path d="{back}" fill="url(#tm)"/>'
+            + shade(front, ".3") + f'<path d="{front}" fill="url(#tf)"/>'
+            '</g></svg>\n')
+
+
+with open(os.path.join(OUT, "win11-taskmanager.svg"), "w") as f:
+    f.write(task_manager())
+
+
 for _k, _fn in (("word", word), ("excel", excel), ("powerpoint", powerpoint)):
     with open(os.path.join(OUT, f"win11-doc-{_k}.svg"), "w") as f:
         f.write(_fn())

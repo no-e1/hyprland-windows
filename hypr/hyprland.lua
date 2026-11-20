@@ -909,7 +909,9 @@ hl.bind(win .. " + V", hl.dsp.exec_cmd(winshell .. " clipboard"))           -- c
 hl.bind(win .. " + W", hl.dsp.exec_cmd(scripts .. "/wallpaper.sh pick"))     -- pick background
 hl.bind(win .. " + T", hl.dsp.exec_cmd(terminal))                            -- terminal
 hl.bind(win .. " + B", hl.dsp.exec_cmd(browser))                             -- browser
-hl.bind("CTRL + SHIFT + Escape", hl.dsp.exec_cmd("gnome-system-monitor"))    -- Task Manager
+-- Task Manager: Mission Center (Flathub), laid out like Windows'; GNOME's
+-- System Monitor where it isn't installed
+hl.bind("CTRL + SHIFT + Escape", hl.dsp.exec_cmd("flatpak run io.missioncenter.MissionCenter || gnome-system-monitor"))
 
 
 -- Talk to winshell directly through its pipe, so commands arrive in the
